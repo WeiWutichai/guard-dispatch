@@ -1,0 +1,67 @@
+version: "3.9"
+
+# =============================================================================
+# Security Guard Dispatch System — Production Overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# =============================================================================
+# NOTE: Production uses Cloudflare R2 instead of MinIO.
+#       Set S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY in CI/CD secrets.
+# =============================================================================
+
+services:
+
+  nginx-gateway:
+    restart: always
+    # In production, SSL certs should be mounted via volume or secret
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/nginx/ssl:ro  # Let's Encrypt certs
+
+  rust-auth:
+    restart: always
+    # No build in prod — pull from registry
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-your-org/guard-dispatch}/auth:${IMAGE_TAG:-latest}
+    build: !reset null
+
+  rust-booking:
+    restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-your-org/guard-dispatch}/booking:${IMAGE_TAG:-latest}
+    build: !reset null
+
+  rust-tracking:
+    restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-your-org/guard-dispatch}/tracking:${IMAGE_TAG:-latest}
+    build: !reset null
+
+  rust-notification:
+    restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-your-org/guard-dispatch}/notification:${IMAGE_TAG:-latest}
+    build: !reset null
+
+  mediasoup-server:
+    restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-your-org/guard-dispatch}/mediasoup:${IMAGE_TAG:-latest}
+    build: !reset null
+
+  rust-chat:
+    restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-your-org/guard-dispatch}/chat:${IMAGE_TAG:-latest}
+    build: !reset null
+
+  postgres-db:
+    restart: always
+    # Do NOT expose port in production
+    ports: !reset []
+
+  redis-cache:
+    restart: always
+    ports: !reset []
+
+  redis-pubsub:
+    restart: always
+    ports: !reset []
+
+  # MinIO is NOT used in production — disable it
+  minio:
+    profiles:
+      - dev-only   # Will not start unless explicitly activated

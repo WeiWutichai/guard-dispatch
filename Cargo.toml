@@ -5,11 +5,12 @@ members = [
     "services/booking",
     "services/tracking",
     "services/notification",
+    "services/chat",
 ]
 
 # Workspace-wide dependency versions (shared across all members)
 [workspace.dependencies]
-axum            = { version = "0.8", features = ["ws"] }
+axum            = { version = "0.8", features = ["ws", "multipart"] }
 tokio           = { version = "1", features = ["full"] }
 sqlx            = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 redis           = { version = "0.27", features = ["tokio-comp"] }
@@ -25,3 +26,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror       = "2"
 anyhow          = "1"
 dotenvy         = "0.15"
+# Chat service — S3/MinIO object storage
+aws-sdk-s3      = "1"
+bytes           = "1"
+# HTTP client (notification FCM + chat signed URL)
+reqwest         = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
