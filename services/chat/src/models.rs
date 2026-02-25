@@ -1,0 +1,167 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "message_type", rename_all = "lowercase")]
+pub enum MessageType {
+    Text,
+    Image,
+    System,
+}
+
+// =============================================================================
+// WebSocket Messages
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct IncomingChatMessage {
+    pub conversation_id: Uuid,
+    pub content: Option<String>,
+    pub message_type: Option<MessageType>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct OutgoingChatMessage {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub sender_id: Uuid,
+    pub content: Option<String>,
+    pub message_type: MessageType,
+    pub created_at: DateTime<Utc>,
+}
+
+// =============================================================================
+// Request DTOs
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateConversationRequest {
+    pub request_id: Uuid,
+    pub participant_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListMessagesQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+// =============================================================================
+// Response DTOs
+// =============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct ConversationResponse {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MessageResponse {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub sender_id: Uuid,
+    pub content: Option<String>,
+    pub message_type: MessageType,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttachmentResponse {
+    pub id: Uuid,
+    pub message_id: Uuid,
+    pub file_key: String,
+    pub file_url: String,
+    pub file_size: Option<i32>,
+    pub mime_type: String,
+    pub created_at: DateTime<Utc>,
+}
+
+// =============================================================================
+// Database row types
+// =============================================================================
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct ConversationRow {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<ConversationRow> for ConversationResponse {
+    fn from(row: ConversationRow) -> Self {
+        Self {
+            id: row.id,
+            request_id: row.request_id,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct MessageRow {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub sender_id: Uuid,
+    pub content: Option<String>,
+    pub message_type: MessageType,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<MessageRow> for MessageResponse {
+    fn from(row: MessageRow) -> Self {
+        Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            sender_id: row.sender_id,
+            content: row.content,
+            message_type: row.message_type,
+            created_at: row.created_at,
+        }
+    }
+}
+
+impl From<MessageRow> for OutgoingChatMessage {
+    fn from(row: MessageRow) -> Self {
+        Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            sender_id: row.sender_id,
+            content: row.content,
+            message_type: row.message_type,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct AttachmentRow {
+    pub id: Uuid,
+    pub message_id: Uuid,
+    pub uploader_id: Uuid,
+    pub file_key: String,
+    pub file_url: String,
+    pub file_size: Option<i32>,
+    pub mime_type: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<AttachmentRow> for AttachmentResponse {
+    fn from(row: AttachmentRow) -> Self {
+        Self {
+            id: row.id,
+            message_id: row.message_id,
+            file_key: row.file_key,
+            file_url: row.file_url,
+            file_size: row.file_size,
+            mime_type: row.mime_type,
+            created_at: row.created_at,
+        }
+    }
+}
