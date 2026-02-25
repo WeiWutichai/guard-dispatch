@@ -1,0 +1,117 @@
+# =============================================================================
+# Security Guard Dispatch System — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Environment & Secrets
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.staging
+*.pem
+*.key
+*.cert
+*.crt
+secrets/
+
+# -----------------------------------------------------------------------------
+# Rust
+# -----------------------------------------------------------------------------
+target/
+**/*.rs.bk
+Cargo.lock
+*.rlib
+*.rmeta
+*.d
+*.pdb
+
+# -----------------------------------------------------------------------------
+# Node.js (mediasoup-server)
+# -----------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+dist/
+build/
+.cache/
+*.tsbuildinfo
+
+# -----------------------------------------------------------------------------
+# React + TypeScript + Vite (frontend/web)
+# -----------------------------------------------------------------------------
+frontend/web/dist/
+frontend/web/build/
+frontend/web/.vite/
+frontend/web/node_modules/
+frontend/web/coverage/
+frontend/web/.eslintcache
+
+# -----------------------------------------------------------------------------
+# Flutter (frontend/mobile)
+# -----------------------------------------------------------------------------
+frontend/mobile/.dart_tool/
+frontend/mobile/.flutter-plugins
+frontend/mobile/.flutter-plugins-dependencies
+frontend/mobile/.packages
+frontend/mobile/.pub-cache/
+frontend/mobile/.pub/
+frontend/mobile/build/
+frontend/mobile/ios/Pods/
+frontend/mobile/ios/.symlinks/
+frontend/mobile/android/.gradle/
+frontend/mobile/android/local.properties
+frontend/mobile/android/captures/
+frontend/mobile/android/key.properties
+frontend/mobile/*.g.dart
+frontend/mobile/*.freezed.dart
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+docker-compose.override.yml
+
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
+*.sql.bak
+pgdata/
+redisdata/
+
+# -----------------------------------------------------------------------------
+# Nginx
+# -----------------------------------------------------------------------------
+nginx/ssl/
+nginx/logs/
+
+# -----------------------------------------------------------------------------
+# IDE & Editors
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.direnv/
+
+# -----------------------------------------------------------------------------
+# Logs
+# -----------------------------------------------------------------------------
+*.log
+logs/
+
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Desktop.ini
+$RECYCLE.BIN/
