@@ -45,7 +45,7 @@ async fn cache_user(
     user: &UserResponse,
 ) -> Result<(), AppError> {
     let mut conn = redis
-        .get_multiplexed_async_connection()
+        .get_multiplexed_tokio_connection()
         .await
         .map_err(AppError::Redis)?;
     let json = serde_json::to_string(user)
@@ -62,7 +62,7 @@ async fn get_cached_user(
     user_id: &Uuid,
 ) -> Result<Option<UserResponse>, AppError> {
     let mut conn = redis
-        .get_multiplexed_async_connection()
+        .get_multiplexed_tokio_connection()
         .await
         .map_err(AppError::Redis)?;
     let key = user_cache_key(user_id);
@@ -82,7 +82,7 @@ async fn invalidate_user_cache(
     user_id: &Uuid,
 ) -> Result<(), AppError> {
     let mut conn = redis
-        .get_multiplexed_async_connection()
+        .get_multiplexed_tokio_connection()
         .await
         .map_err(AppError::Redis)?;
     let key = user_cache_key(user_id);

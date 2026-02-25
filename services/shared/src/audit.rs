@@ -1,10 +1,7 @@
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
-use sqlx::PgPool;
-use std::net::SocketAddr;
 use uuid::Uuid;
 
 /// Audit logging middleware that captures requests to the audit.audit_logs table.
@@ -16,7 +13,7 @@ use uuid::Uuid;
 ///
 /// let app = Router::new()
 ///     .route("/health", get(health_check))
-///     .layer(middleware::from_fn_with_state(pool.clone(), audit_middleware));
+///     .layer(middleware::from_fn(audit_middleware));
 /// ```
 pub async fn audit_middleware(
     request: Request<Body>,

@@ -89,7 +89,7 @@ pub async fn send_message(
     msg: IncomingChatMessage,
 ) -> Result<OutgoingChatMessage, AppError> {
     // Verify sender is participant
-    let is_participant: bool = sqlx::query_scalar(
+    let is_participant: Option<bool> = sqlx::query_scalar(
         r#"
         SELECT EXISTS(
             SELECT 1 FROM chat.conversation_participants
@@ -102,7 +102,7 @@ pub async fn send_message(
     .fetch_one(db)
     .await?;
 
-    if !is_participant {
+    if !is_participant.unwrap_or(false) {
         return Err(AppError::Forbidden(
             "Not a participant of this conversation".to_string(),
         ));
@@ -136,7 +136,7 @@ pub async fn send_message(
     let payload = serde_json::to_string(&outgoing)
         .map_err(|e| AppError::Internal(format!("Failed to serialize message: {e}")))?;
 
-    if let Ok(mut conn) = redis_pubsub.get_multiplexed_async_connection().await {
+    if let Ok(mut conn) = redis_pubsub.get_multiplexed_tokio_connection().await {
         let _ = conn.publish::<_, _, ()>(&channel, &payload).await;
     }
 
@@ -154,7 +154,7 @@ pub async fn list_messages(
     query: ListMessagesQuery,
 ) -> Result<Vec<MessageResponse>, AppError> {
     // Verify user is participant
-    let is_participant: bool = sqlx::query_scalar(
+    let is_participant: Option<bool> = sqlx::query_scalar(
         r#"
         SELECT EXISTS(
             SELECT 1 FROM chat.conversation_participants
@@ -167,7 +167,7 @@ pub async fn list_messages(
     .fetch_one(db)
     .await?;
 
-    if !is_participant {
+    if !is_participant.unwrap_or(false) {
         return Err(AppError::Forbidden(
             "Not a participant of this conversation".to_string(),
         ));

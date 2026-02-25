@@ -7,6 +7,7 @@ use uuid::Uuid;
 // =============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "notification_type", rename_all = "snake_case")]
 pub enum NotificationType {
     BookingCreated,

@@ -7,6 +7,7 @@ use uuid::Uuid;
 // =============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "request_status", rename_all = "snake_case")]
 pub enum RequestStatus {
     Pending,
@@ -17,6 +18,7 @@ pub enum RequestStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "urgency_level", rename_all = "lowercase")]
 pub enum UrgencyLevel {
     Low,
@@ -26,6 +28,7 @@ pub enum UrgencyLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "assignment_status", rename_all = "snake_case")]
 pub enum AssignmentStatus {
     Assigned,

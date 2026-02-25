@@ -162,7 +162,7 @@ pub async fn get_request(
 }
 
 // =============================================================================
-// Cancel Guard Request
+// Cancel Guard Request (with transaction)
 // =============================================================================
 
 pub async fn cancel_request(
@@ -170,15 +170,18 @@ pub async fn cancel_request(
     request_id: Uuid,
     user_id: Uuid,
 ) -> Result<GuardRequestResponse, AppError> {
+    let mut tx = db.begin().await?;
+
     let existing = sqlx::query_as::<_, GuardRequestRow>(
         r#"
         SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
+        FOR UPDATE
         "#,
     )
     .bind(request_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::NotFound("Guard request not found".to_string()))?;
 
@@ -197,13 +200,13 @@ pub async fn cancel_request(
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
         UPDATE booking.guard_requests
-        SET status = 'cancelled'::request_status
+        SET status = 'cancelled'::request_status, updated_at = NOW()
         WHERE id = $1
         RETURNING id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
         "#,
     )
     .bind(request_id)
-    .fetch_one(db)
+    .fetch_one(&mut *tx)
     .await?;
 
     // Also cancel any active assignments
@@ -215,14 +218,16 @@ pub async fn cancel_request(
         "#,
     )
     .bind(request_id)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(GuardRequestResponse::from(row))
 }
 
 // =============================================================================
-// Assign Guard
+// Assign Guard (with transaction)
 // =============================================================================
 
 pub async fn assign_guard(
@@ -230,16 +235,19 @@ pub async fn assign_guard(
     request_id: Uuid,
     req: AssignGuardDto,
 ) -> Result<AssignmentResponse, AppError> {
-    // Verify request exists and is pending
+    let mut tx = db.begin().await?;
+
+    // Verify request exists and is pending (lock row)
     let request = sqlx::query_as::<_, GuardRequestRow>(
         r#"
         SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
+        FOR UPDATE
         "#,
     )
     .bind(request_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::NotFound("Guard request not found".to_string()))?;
 
@@ -254,15 +262,13 @@ pub async fn assign_guard(
         "SELECT role::text FROM auth.users WHERE id = $1 AND is_active = true",
     )
     .bind(req.guard_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?;
 
     match guard_role {
         None => return Err(AppError::NotFound("Guard not found".to_string())),
         Some(role) if role != "guard" => {
-            return Err(AppError::BadRequest(
-                "User is not a guard".to_string(),
-            ))
+            return Err(AppError::BadRequest("User is not a guard".to_string()))
         }
         _ => {}
     }
@@ -277,22 +283,24 @@ pub async fn assign_guard(
     )
     .bind(request_id)
     .bind(req.guard_id)
-    .fetch_one(db)
+    .fetch_one(&mut *tx)
     .await?;
 
     // Update request status to assigned
     sqlx::query(
-        "UPDATE booking.guard_requests SET status = 'assigned'::request_status WHERE id = $1",
+        "UPDATE booking.guard_requests SET status = 'assigned'::request_status, updated_at = NOW() WHERE id = $1",
     )
     .bind(request_id)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(AssignmentResponse::from(assignment))
 }
 
 // =============================================================================
-// Update Assignment Status
+// Update Assignment Status (with transaction)
 // =============================================================================
 
 pub async fn update_assignment_status(
@@ -301,15 +309,18 @@ pub async fn update_assignment_status(
     guard_id: Uuid,
     req: UpdateAssignmentStatusDto,
 ) -> Result<AssignmentResponse, AppError> {
+    let mut tx = db.begin().await?;
+
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at
         FROM booking.assignments
         WHERE id = $1
+        FOR UPDATE
         "#,
     )
     .bind(assignment_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
 
@@ -366,7 +377,7 @@ pub async fn update_assignment_status(
     .bind(&status_str)
     .bind(arrived_at)
     .bind(completed_at)
-    .fetch_one(db)
+    .fetch_one(&mut *tx)
     .await?;
 
     // Update the guard_request status accordingly
@@ -378,12 +389,14 @@ pub async fn update_assignment_status(
     };
 
     sqlx::query(
-        "UPDATE booking.guard_requests SET status = $2::request_status WHERE id = $1",
+        "UPDATE booking.guard_requests SET status = $2::request_status, updated_at = NOW() WHERE id = $1",
     )
     .bind(existing.request_id)
     .bind(request_status)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(AssignmentResponse::from(row))
 }

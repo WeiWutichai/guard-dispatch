@@ -186,7 +186,7 @@ pub async fn send_notification(
         {
             tracing::warn!(
                 "Failed to send FCM push to token {}: {e}",
-                &token_row.token[..20.min(token_row.token.len())]
+                token_row.token.get(..20).unwrap_or(&token_row.token)
             );
         }
     }

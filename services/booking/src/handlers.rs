@@ -36,6 +36,7 @@ pub async fn list_requests(
 /// GET /requests/{id} — Get a specific guard request
 pub async fn get_request(
     State(state): State<Arc<AppState>>,
+    _user: AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<GuardRequestResponse>>, AppError> {
     let request = crate::service::get_request(&state.db, id).await?;
@@ -83,6 +84,7 @@ pub async fn update_assignment_status(
 /// GET /requests/{id}/assignments — Get assignments for a request
 pub async fn get_assignments(
     State(state): State<Arc<AppState>>,
+    _user: AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<Vec<AssignmentResponse>>>, AppError> {
     let assignments = crate::service::get_assignments(&state.db, id).await?;

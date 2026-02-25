@@ -78,7 +78,7 @@ pub async fn publish_gps_event(
     event: &GpsEvent,
 ) -> Result<(), AppError> {
     let mut conn = redis
-        .get_multiplexed_async_connection()
+        .get_multiplexed_tokio_connection()
         .await
         .map_err(AppError::Redis)?;
 
