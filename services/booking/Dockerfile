@@ -2,7 +2,7 @@
 # Booking Service — Multi-stage Dockerfile
 # =============================================================================
 
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN cargo build --release -p booking-service 2>/dev/null; true
 COPY services/shared/src services/shared/src
 COPY services/booking/src services/booking/src
 
-RUN touch services/booking/src/main.rs && cargo build --release -p booking-service
+RUN find services/shared/src services/booking/src -name '*.rs' | xargs touch && cargo build --release -p booking-service
 
 FROM debian:bookworm-slim AS runtime
 

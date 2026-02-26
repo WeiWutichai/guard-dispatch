@@ -47,7 +47,7 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": format!("Invalid message: {e}")}).to_string(),
+                        serde_json::json!({"error": format!("Invalid message: {e}")}).to_string().into(),
                     ))
                     .await;
                 continue;
@@ -59,12 +59,12 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
         {
             Ok(outgoing) => {
                 let json = serde_json::to_string(&outgoing).unwrap_or_default();
-                let _ = socket.send(Message::Text(json)).await;
+                let _ = socket.send(Message::Text(json.into())).await;
             }
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": e.to_string()}).to_string(),
+                        serde_json::json!({"error": e.to_string()}).to_string().into(),
                     ))
                     .await;
             }
@@ -158,8 +158,8 @@ pub async fn upload_attachment(
         file_data.ok_or_else(|| AppError::BadRequest("file is required".to_string()))?;
     let mime = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Validate file per CLAUDE.md rules
-    crate::s3::validate_upload(&mime, data.len())?;
+    // Validate file per CLAUDE.md rules (checks MIME + magic bytes + size)
+    crate::s3::validate_upload(&mime, data.len(), &data)?;
 
     let ext = crate::s3::mime_to_extension(&mime);
 
@@ -167,8 +167,10 @@ pub async fn upload_attachment(
     let file_uuid = Uuid::new_v4();
     let file_key = format!("chat/{conversation_id}/{file_uuid}.{ext}");
 
-    // Upload to S3/MinIO
-    crate::s3::upload_file(&state.s3_client, &state.s3_bucket, &file_key, data.clone(), &mime)
+    let data_len = data.len();
+
+    // Upload to S3/MinIO (consumes data, no clone needed)
+    crate::s3::upload_file(&state.s3_client, &state.s3_bucket, &file_key, data, &mime)
         .await?;
 
     // Generate signed URL
@@ -191,7 +193,7 @@ pub async fn upload_attachment(
         user.user_id,
         &file_key,
         &file_url,
-        Some(data.len() as i32),
+        Some(data_len as i32),
         &mime,
     )
     .await?;
@@ -202,10 +204,24 @@ pub async fn upload_attachment(
 /// GET /attachments/{id} — Get signed URL for an attachment
 pub async fn get_signed_url(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<AttachmentResponse>>, AppError> {
     let attachment = crate::service::get_attachment(&state.db, id).await?;
+
+    // Authorization: only the uploader or a conversation participant can access
+    let is_participant = crate::service::is_conversation_participant(
+        &state.db,
+        attachment.message_id,
+        user.user_id,
+    )
+    .await?;
+
+    if !is_participant && user.role != "admin" {
+        return Err(AppError::Forbidden(
+            "You do not have access to this attachment".to_string(),
+        ));
+    }
 
     // Regenerate signed URL (previous one may have expired)
     let fresh_url =

@@ -29,3 +29,6 @@ reqwest         = { workspace = true }
 # MinIO / S3 compatible storage
 aws-sdk-s3      = { workspace = true }
 bytes           = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

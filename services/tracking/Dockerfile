@@ -2,7 +2,7 @@
 # Tracking Service — Multi-stage Dockerfile (WebSocket)
 # =============================================================================
 
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN cargo build --release -p tracking-service 2>/dev/null; true
 COPY services/shared/src services/shared/src
 COPY services/tracking/src services/tracking/src
 
-RUN touch services/tracking/src/main.rs && cargo build --release -p tracking-service
+RUN find services/shared/src services/tracking/src -name '*.rs' | xargs touch && cargo build --release -p tracking-service
 
 FROM debian:bookworm-slim AS runtime
 

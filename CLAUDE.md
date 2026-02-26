@@ -18,7 +18,9 @@
 ## Tech Stack
 
 ### Frontend
-- **Web Admin:** Next.js 16 + TypeScript (App Router, basePath `/pguard-app`)
+- **Web Admin:** Next.js 16 + TypeScript (App Router)
+  - Dev: `localhost:3000` ตรง (ไม่มี basePath)
+  - Production (Docker/Nginx): basePath `/pguard-app` (ตั้งผ่าน `NEXT_PUBLIC_BASE_PATH`)
 - **Mobile App:** Flutter (iOS + Android) — อยู่ใน Monorepo เดียวกัน
 
 ### Backend (Rust ทั้งหมด)
@@ -128,16 +130,24 @@ CREATE TABLE chat.attachments (
 ### File Upload
 - ขนาดไฟล์สูงสุด: **10MB ต่อไฟล์**
 - Format ที่รับ: **JPEG, PNG, WEBP เท่านั้น**
-- ต้อง validate mime_type ก่อน upload เสมอ
+- ต้อง validate ทั้ง **declared MIME type** และ **magic bytes** ก่อน upload เสมอ
+  - JPEG: `FF D8 FF`
+  - PNG: `89 50 4E 47 0D 0A 1A 0A`
+  - WEBP: `RIFF....WEBP` (bytes 0-3 = `RIFF`, bytes 8-11 = `WEBP`)
+- ห้ามเชื่อ Content-Type จาก client เพียงอย่างเดียว — ต้องตรวจ magic bytes ด้วยเสมอ
 - ใช้ **Signed URL** เสมอ ห้าม expose bucket โดยตรง
 - file_key format: `chat/{chat_id}/{uuid}.{ext}`
 - URL หมดอายุ: **1 ชั่วโมง**
 
-### Database
+### Database & Cache
 - ห้าม query ตรงไปที่ PostgreSQL โดยไม่ผ่าน **Connection Pool**
 - Connection Pool size: max 20 per service
 - ทุก query ที่อ่านบ่อยต้องผ่าน **Redis Cache** ก่อน
 - Migration ใช้ `sqlx migrate` เท่านั้น
+- **Redis Connection Pattern:** เก็บ `redis::aio::MultiplexedConnection` ใน AppState — ห้ามเรียก `get_multiplexed_tokio_connection()` ทุกครั้งที่ใช้
+  - Clone `MultiplexedConnection` สำหรับแต่ละ operation (cheap — shares underlying connection)
+- **Cache Update:** ใช้ `SET_EX` (atomic overwrite) แทนการทำ `DEL` แล้ว `SET_EX` แยก
+- **Concurrent I/O:** ใช้ `tokio::join!` สำหรับ independent DB/Redis operations (เช่น GPS handler: upsert + history + publish)
 
 ### Security
 - ทุก API ต้องมี **JWT validation** ยกเว้น `/auth/login` และ `/auth/register`
@@ -155,6 +165,17 @@ CREATE TABLE chat.attachments (
 - **Network Isolation:** เฉพาะ Nginx expose port 80/443 — ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host
 - **Nginx Security Headers:** X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
 - **WebSocket Auth:** ใช้ cookie (ส่งอัตโนมัติตอน upgrade) — ห้ามส่ง token ใน URL query params
+- **WebSocket Data:** ห้ามส่ง conversation_id หรือ sensitive data ใน URL query params — ส่งเป็น message หลัง connection open
+- **Audit Middleware:** ต้อง validate JWT signature ด้วย real secret ก่อน trust user_id — ห้ามใช้ `insecure_disable_signature_validation()`
+  - ใช้ `middleware::from_fn_with_state(state, audit_middleware)` (ต้อง pass state ที่ implement `HasJwtSecret`)
+- **Password Hashing:** Argon2 ต้อง run ใน `tokio::task::spawn_blocking()` เสมอ — ห้าม block async runtime
+- **Login Error Messages:** ห้ามส่ง error ที่เปิดเผยว่า email มีอยู่ในระบบหรือไม่ — ใช้ message เดียวกันสำหรับ wrong password, inactive account, not found
+- **Refresh Token Rotation:** ต้องเป็น **atomic** (single `UPDATE ... WHERE refresh_token = $1 RETURNING ...`) — ห้ามทำ SELECT แล้ว UPDATE แยก
+- **Session Limit:** จำกัด max **5 sessions ต่อ user** — evict oldest sessions เมื่อเกิน
+- **Authorization (IDOR Prevention):**
+  - Tracking endpoints: Guards เข้าถึงได้เฉพาะ location ตัวเอง — admins/customers เข้าถึงได้ทุก guard
+  - Chat attachment endpoints: ต้องตรวจว่า user เป็น participant ของ conversation หรือเป็น admin
+  - ห้ามใช้ `_user: AuthUser` (ignore user) ใน endpoint ที่ต้องการ authorization check
 
 ### Performance Target
 - Push notification: **< 1 วินาที**
@@ -328,3 +349,13 @@ RUST_LOG=info
 - ❌ ห้ามส่ง JWT token ใน WebSocket URL query params — ใช้ cookie auth
 - ❌ ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host — เฉพาะ Nginx 80/443
 - ❌ ห้ามเชื่อมต่อ Redis โดยไม่มี password
+- ❌ ห้าม validate file upload ด้วย MIME type อย่างเดียว — ต้องตรวจ **magic bytes** ด้วยเสมอ
+- ❌ ห้ามใช้ `insecure_disable_signature_validation()` — audit middleware ต้อง validate JWT ด้วย real secret
+- ❌ ห้าม block async runtime ด้วย Argon2 — ต้องใช้ `spawn_blocking()`
+- ❌ ห้ามส่ง error message ที่เปิดเผย email existence (เช่น "Account is deactivated")
+- ❌ ห้ามทำ refresh token rotation แบบ SELECT → UPDATE แยก — ต้อง atomic single query
+- ❌ ห้ามใช้ `_user: AuthUser` (ignore user) ใน endpoint ที่ต้อง authorization check — ต้องตรวจสิทธิ์เสมอ
+- ❌ ห้ามส่ง sensitive IDs (conversation_id) ใน WebSocket URL query params — ส่งเป็น message หลัง connect
+- ❌ ห้ามเรียก `get_multiplexed_tokio_connection()` ทุก request — เก็บ connection ใน AppState
+- ❌ ห้ามทำ `DEL` + `SET_EX` แยก เมื่อ update cache — ใช้ `SET_EX` ตรง (atomic overwrite)
+- ❌ ห้าม `.clone()` file data ก้อนใหญ่โดยไม่จำเป็น — capture size ก่อนแล้ว move ownership

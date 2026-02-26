@@ -76,3 +76,82 @@ impl IntoResponse for AppError {
         (status, axum::Json(body)).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn bad_request_returns_400() {
+        let err = AppError::BadRequest("missing field".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn unauthorized_returns_401() {
+        let err = AppError::Unauthorized("invalid token".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn forbidden_returns_403() {
+        let err = AppError::Forbidden("access denied".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn not_found_returns_404() {
+        let err = AppError::NotFound("no such user".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn conflict_returns_409() {
+        let err = AppError::Conflict("email already exists".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn internal_returns_500() {
+        let err = AppError::Internal("something broke".into());
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn error_response_body_is_json_with_code_and_message() {
+        let err = AppError::BadRequest("name is required".into());
+        let response = err.into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "BAD_REQUEST");
+        assert_eq!(json["error"]["message"], "name is required");
+    }
+
+    #[tokio::test]
+    async fn database_error_hides_internal_details() {
+        // Database errors should show a generic message, not the real DB error
+        let err = AppError::Database(sqlx::Error::PoolTimedOut);
+        let response = err.into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "DATABASE_ERROR");
+        assert_eq!(json["error"]["message"], "An internal error occurred");
+    }
+
+    #[test]
+    fn display_trait_shows_message() {
+        let err = AppError::BadRequest("test message".into());
+        assert_eq!(err.to_string(), "test message");
+    }
+}

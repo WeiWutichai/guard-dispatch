@@ -17,6 +17,8 @@ COPY . .
 
 # Build-time env vars
 ENV NEXT_TELEMETRY_DISABLED=1
+# Production uses basePath /pguard-app (served behind Nginx)
+ENV NEXT_PUBLIC_BASE_PATH=/pguard-app
 
 RUN npm run build
 

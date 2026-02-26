@@ -2,7 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  basePath: "/pguard-app",
+  // basePath ใช้เฉพาะ production (ผ่าน Nginx) — dev เข้า localhost:3000 ตรงได้เลย
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
   async rewrites() {
     // In development, proxy API calls to the backend Nginx gateway
     // In production (Docker), the Nginx gateway handles routing

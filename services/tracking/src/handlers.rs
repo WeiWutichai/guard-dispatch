@@ -40,24 +40,13 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": format!("Invalid GPS data: {e}")}).to_string(),
+                        serde_json::json!({"error": format!("Invalid GPS data: {e}")}).to_string().into(),
                     ))
                     .await;
                 continue;
             }
         };
 
-        // Upsert latest location
-        if let Err(e) = crate::service::upsert_location(&state.db, user.user_id, &update).await {
-            tracing::error!("Failed to upsert location: {e}");
-        }
-
-        // Append to history
-        if let Err(e) = crate::service::append_history(&state.db, user.user_id, &update).await {
-            tracing::error!("Failed to append history: {e}");
-        }
-
-        // Publish to Redis PubSub
         let event = GpsEvent {
             guard_id: user.user_id,
             lat: update.lat,
@@ -68,14 +57,27 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             recorded_at: Utc::now(),
         };
 
-        if let Err(e) = crate::service::publish_gps_event(&state.redis_pubsub, &event).await {
+        // Run DB ops and Redis publish concurrently — they're independent
+        let (upsert_res, history_res, publish_res) = tokio::join!(
+            crate::service::upsert_location(&state.db, user.user_id, &update),
+            crate::service::append_history(&state.db, user.user_id, &update),
+            crate::service::publish_gps_event(&state.redis_pubsub, &event),
+        );
+
+        if let Err(e) = upsert_res {
+            tracing::error!("Failed to upsert location: {e}");
+        }
+        if let Err(e) = history_res {
+            tracing::error!("Failed to append history: {e}");
+        }
+        if let Err(e) = publish_res {
             tracing::error!("Failed to publish GPS event: {e}");
         }
 
         // Send acknowledgment back
         let _ = socket
             .send(Message::Text(
-                serde_json::json!({"status": "ok", "recorded_at": event.recorded_at}).to_string(),
+                serde_json::json!({"status": "ok", "recorded_at": event.recorded_at}).to_string().into(),
             ))
             .await;
     }
@@ -86,9 +88,16 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
 /// GET /locations/{guard_id} — Get latest location of a guard
 pub async fn get_latest_location(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(guard_id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<LocationResponse>>, AppError> {
+    // Guards can only see their own location; admins and customers (with active booking) can see any
+    if user.role == "guard" && user.user_id != guard_id {
+        return Err(AppError::Forbidden(
+            "Guards can only access their own location".to_string(),
+        ));
+    }
+
     let location = crate::service::get_latest_location(&state.db, guard_id).await?;
     Ok(Json(ApiResponse::success(location)))
 }
@@ -96,10 +105,17 @@ pub async fn get_latest_location(
 /// GET /locations/{guard_id}/history — Get location history
 pub async fn get_location_history(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(guard_id): Path<uuid::Uuid>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<Vec<LocationHistoryResponse>>>, AppError> {
+    // Guards can only see their own history; admins and customers (with active booking) can see any
+    if user.role == "guard" && user.user_id != guard_id {
+        return Err(AppError::Forbidden(
+            "Guards can only access their own location history".to_string(),
+        ));
+    }
+
     let history = crate::service::get_location_history(&state.db, guard_id, query).await?;
     Ok(Json(ApiResponse::success(history)))
 }

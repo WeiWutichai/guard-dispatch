@@ -2,7 +2,7 @@
 # Notification Service — Multi-stage Dockerfile (FCM)
 # =============================================================================
 
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN cargo build --release -p notification-service 2>/dev/null; true
 COPY services/shared/src services/shared/src
 COPY services/notification/src services/notification/src
 
-RUN touch services/notification/src/main.rs && cargo build --release -p notification-service
+RUN find services/shared/src services/notification/src -name '*.rs' | xargs touch && cargo build --release -p notification-service
 
 FROM debian:bookworm-slim AS runtime
 

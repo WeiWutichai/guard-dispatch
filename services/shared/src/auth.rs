@@ -67,7 +67,7 @@ pub const ACCESS_TOKEN_COOKIE: &str = "access_token";
 pub const REFRESH_TOKEN_COOKIE: &str = "refresh_token";
 
 /// Extract a named cookie value from a Cookie header string.
-fn extract_cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
+pub fn extract_cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
     cookie_header
         .split(';')
         .map(|s| s.trim())
@@ -141,5 +141,258 @@ pub trait HasJwtSecret {
 impl<T: HasJwtSecret> HasJwtSecret for std::sync::Arc<T> {
     fn jwt_secret(&self) -> &str {
         T::jwt_secret(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{header, Request};
+    use std::sync::Arc;
+
+    const TEST_SECRET: &str = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+
+    // =========================================================================
+    // JWT encode/decode
+    // =========================================================================
+
+    #[test]
+    fn encode_then_decode_roundtrip() {
+        let user_id = Uuid::new_v4();
+        let token = encode_jwt(user_id, "admin", TEST_SECRET, 24).unwrap();
+        let claims = decode_jwt(&token, TEST_SECRET).unwrap();
+        assert_eq!(claims.sub, user_id);
+        assert_eq!(claims.role, "admin");
+    }
+
+    #[test]
+    fn decode_with_wrong_secret_fails() {
+        let token = encode_jwt(Uuid::new_v4(), "guard", TEST_SECRET, 24).unwrap();
+        let result = decode_jwt(&token, "wrong-secret");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_garbage_token_fails() {
+        let result = decode_jwt("not.a.jwt", TEST_SECRET);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn jwt_claims_contain_correct_role() {
+        let user_id = Uuid::new_v4();
+        let token = encode_jwt(user_id, "customer", TEST_SECRET, 1).unwrap();
+        let claims = decode_jwt(&token, TEST_SECRET).unwrap();
+        assert_eq!(claims.role, "customer");
+    }
+
+    #[test]
+    fn jwt_expiry_is_set_correctly() {
+        let user_id = Uuid::new_v4();
+        let token = encode_jwt(user_id, "guard", TEST_SECRET, 24).unwrap();
+        let claims = decode_jwt(&token, TEST_SECRET).unwrap();
+        // exp should be roughly 24 hours from iat
+        let diff = claims.exp - claims.iat;
+        assert_eq!(diff, 24 * 3600);
+    }
+
+    #[test]
+    fn jwt_iat_is_current_time() {
+        let before = Utc::now().timestamp();
+        let token = encode_jwt(Uuid::new_v4(), "admin", TEST_SECRET, 1).unwrap();
+        let after = Utc::now().timestamp();
+        let claims = decode_jwt(&token, TEST_SECRET).unwrap();
+        assert!(claims.iat >= before && claims.iat <= after);
+    }
+
+    // =========================================================================
+    // Cookie building
+    // =========================================================================
+
+    #[test]
+    fn build_cookie_contains_required_attributes() {
+        let cookie = build_cookie("access_token", "abc123", 3600, "/");
+        assert!(cookie.contains("access_token=abc123"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Secure"));
+        assert!(cookie.contains("SameSite=Lax"));
+        assert!(cookie.contains("Path=/"));
+        assert!(cookie.contains("Max-Age=3600"));
+    }
+
+    #[test]
+    fn build_cookie_uses_custom_path() {
+        let cookie = build_cookie("refresh_token", "xyz", 86400, "/auth");
+        assert!(cookie.contains("Path=/auth"));
+    }
+
+    #[test]
+    fn build_clear_cookie_sets_max_age_zero() {
+        let cookie = build_clear_cookie("access_token", "/");
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Secure"));
+    }
+
+    // =========================================================================
+    // Cookie extraction
+    // =========================================================================
+
+    #[test]
+    fn extract_cookie_value_finds_named_cookie() {
+        let header = "access_token=abc123; other=xyz";
+        assert_eq!(extract_cookie_value(header, "access_token"), Some("abc123"));
+    }
+
+    #[test]
+    fn extract_cookie_value_returns_none_for_missing() {
+        let header = "other=xyz; another=123";
+        assert_eq!(extract_cookie_value(header, "access_token"), None);
+    }
+
+    #[test]
+    fn extract_cookie_value_handles_single_cookie() {
+        let header = "access_token=mytoken";
+        assert_eq!(extract_cookie_value(header, "access_token"), Some("mytoken"));
+    }
+
+    #[test]
+    fn extract_cookie_value_handles_spaces() {
+        let header = "  access_token = mytoken ; other = val  ";
+        assert_eq!(extract_cookie_value(header, "access_token"), Some("mytoken"));
+    }
+
+    // =========================================================================
+    // AuthUser extractor
+    // =========================================================================
+
+    struct TestState {
+        jwt_secret: String,
+    }
+
+    impl HasJwtSecret for TestState {
+        fn jwt_secret(&self) -> &str {
+            &self.jwt_secret
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_user_extracts_from_bearer_header() {
+        let state = Arc::new(TestState {
+            jwt_secret: TEST_SECRET.to_string(),
+        });
+        let user_id = Uuid::new_v4();
+        let token = encode_jwt(user_id, "guard", TEST_SECRET, 24).unwrap();
+
+        let mut request = Request::builder()
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(())
+            .unwrap();
+
+        let result =
+            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let auth_user = result.unwrap();
+        assert_eq!(auth_user.user_id, user_id);
+        assert_eq!(auth_user.role, "guard");
+    }
+
+    #[tokio::test]
+    async fn auth_user_extracts_from_cookie() {
+        let state = Arc::new(TestState {
+            jwt_secret: TEST_SECRET.to_string(),
+        });
+        let user_id = Uuid::new_v4();
+        let token = encode_jwt(user_id, "admin", TEST_SECRET, 24).unwrap();
+
+        let mut request = Request::builder()
+            .header(header::COOKIE, format!("access_token={token}; other=val"))
+            .body(())
+            .unwrap();
+
+        let result =
+            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let auth_user = result.unwrap();
+        assert_eq!(auth_user.user_id, user_id);
+        assert_eq!(auth_user.role, "admin");
+    }
+
+    #[tokio::test]
+    async fn auth_user_prefers_bearer_over_cookie() {
+        let state = Arc::new(TestState {
+            jwt_secret: TEST_SECRET.to_string(),
+        });
+        let bearer_id = Uuid::new_v4();
+        let cookie_id = Uuid::new_v4();
+        let bearer_token = encode_jwt(bearer_id, "guard", TEST_SECRET, 24).unwrap();
+        let cookie_token = encode_jwt(cookie_id, "admin", TEST_SECRET, 24).unwrap();
+
+        let mut request = Request::builder()
+            .header(header::AUTHORIZATION, format!("Bearer {bearer_token}"))
+            .header(
+                header::COOKIE,
+                format!("access_token={cookie_token}"),
+            )
+            .body(())
+            .unwrap();
+
+        let result =
+            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let auth_user = result.unwrap();
+        assert_eq!(auth_user.user_id, bearer_id);
+        assert_eq!(auth_user.role, "guard");
+    }
+
+    #[tokio::test]
+    async fn auth_user_fails_with_no_token() {
+        let state = Arc::new(TestState {
+            jwt_secret: TEST_SECRET.to_string(),
+        });
+
+        let mut request = Request::builder().body(()).unwrap();
+
+        let result =
+            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auth_user_fails_with_invalid_bearer() {
+        let state = Arc::new(TestState {
+            jwt_secret: TEST_SECRET.to_string(),
+        });
+
+        let mut request = Request::builder()
+            .header(header::AUTHORIZATION, "Bearer garbage.token.here")
+            .body(())
+            .unwrap();
+
+        let result =
+            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn auth_user_fails_with_wrong_secret_cookie() {
+        let state = Arc::new(TestState {
+            jwt_secret: TEST_SECRET.to_string(),
+        });
+        let token = encode_jwt(Uuid::new_v4(), "admin", "different-secret-key!!", 24).unwrap();
+
+        let mut request = Request::builder()
+            .header(header::COOKIE, format!("access_token={token}"))
+            .body(())
+            .unwrap();
+
+        let result =
+            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn has_jwt_secret_works_through_arc() {
+        let state = Arc::new(TestState {
+            jwt_secret: "my-secret".to_string(),
+        });
+        assert_eq!(state.jwt_secret(), "my-secret");
     }
 }

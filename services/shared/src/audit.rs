@@ -1,21 +1,26 @@
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
-use uuid::Uuid;
+
+use crate::auth::{decode_jwt, extract_cookie_value, HasJwtSecret, ACCESS_TOKEN_COOKIE};
 
 /// Audit logging middleware that captures requests to the audit.audit_logs table.
 ///
-/// Usage in a service:
+/// Properly validates JWT signature before trusting the user_id claim.
+///
+/// Usage in a service (requires state that implements HasJwtSecret):
 /// ```rust
 /// use axum::middleware;
 /// use shared::audit::audit_middleware;
 ///
 /// let app = Router::new()
 ///     .route("/health", get(health_check))
-///     .layer(middleware::from_fn(audit_middleware));
+///     .layer(middleware::from_fn_with_state(state.clone(), audit_middleware));
 /// ```
-pub async fn audit_middleware(
+pub async fn audit_middleware<S: HasJwtSecret + Clone + Send + Sync + 'static>(
+    State(state): State<S>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
@@ -33,32 +38,27 @@ pub async fn audit_middleware(
         })
         .map(|s| s.to_string());
 
-    // Extract user_id from Authorization header if present
-    let user_id = request
+    // Extract token from Bearer header or cookie, then validate with real secret
+    let token = request
         .headers()
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .and_then(|token| {
-            // Try to decode JWT claims to get user_id — best effort
-            jsonwebtoken::decode::<serde_json::Value>(
-                token,
-                &jsonwebtoken::DecodingKey::from_secret(b""), // Dummy key — we just need the claims
-                &{
-                    let mut v = jsonwebtoken::Validation::default();
-                    v.insecure_disable_signature_validation();
-                    v.validate_exp = false;
-                    v
-                },
-            )
-            .ok()
-            .and_then(|data| {
-                data.claims
-                    .get("sub")
-                    .and_then(|s| s.as_str())
-                    .and_then(|s| Uuid::parse_str(s).ok())
-            })
+        .map(|t| t.to_string())
+        .or_else(|| {
+            request
+                .headers()
+                .get("Cookie")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|cookies| extract_cookie_value(cookies, ACCESS_TOKEN_COOKIE))
+                .map(|t| t.to_string())
         });
+
+    let user_id = token.and_then(|t| {
+        decode_jwt(&t, state.jwt_secret())
+            .ok()
+            .map(|claims| claims.sub)
+    });
 
     let response = next.run(request).await;
 

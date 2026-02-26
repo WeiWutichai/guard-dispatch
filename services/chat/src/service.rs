@@ -227,6 +227,32 @@ pub async fn save_attachment(
 }
 
 // =============================================================================
+// Check conversation participant (by message_id for attachment authz)
+// =============================================================================
+
+pub async fn is_conversation_participant(
+    db: &PgPool,
+    message_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, AppError> {
+    let result: Option<bool> = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM chat.conversation_participants cp
+            INNER JOIN chat.messages m ON m.conversation_id = cp.conversation_id
+            WHERE m.id = $1 AND cp.user_id = $2
+        )
+        "#,
+    )
+    .bind(message_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(result.unwrap_or(false))
+}
+
+// =============================================================================
 // Get Attachment (for signed URL generation)
 // =============================================================================
 

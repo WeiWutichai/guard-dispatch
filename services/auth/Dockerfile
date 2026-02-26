@@ -3,7 +3,7 @@
 # =============================================================================
 
 # Stage 1: Builder
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 WORKDIR /app
 
@@ -21,11 +21,11 @@ COPY services/chat/Cargo.toml          services/chat/Cargo.toml
 
 # Create dummy source files to allow dependency caching
 RUN mkdir -p services/shared/src services/auth/src services/booking/src \
-             services/tracking/src services/notification/src services/chat/src \
-    && echo '' > services/shared/src/lib.rs \
-    && for s in auth booking tracking notification chat; do \
-         echo 'fn main() {}' > services/$s/src/main.rs; \
-       done
+  services/tracking/src services/notification/src services/chat/src \
+  && echo '' > services/shared/src/lib.rs \
+  && for s in auth booking tracking notification chat; do \
+  echo 'fn main() {}' > services/$s/src/main.rs; \
+  done
 
 # Build dependencies only (cached layer)
 RUN cargo build --release -p auth-service 2>/dev/null; true
@@ -35,7 +35,7 @@ COPY services/shared/src services/shared/src
 COPY services/auth/src services/auth/src
 
 # Build the actual binary
-RUN touch services/auth/src/main.rs && cargo build --release -p auth-service
+RUN find services/shared/src services/auth/src -name '*.rs' | xargs touch && cargo build --release -p auth-service
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim AS runtime

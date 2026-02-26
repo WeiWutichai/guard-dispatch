@@ -49,3 +49,74 @@ impl<T: Serialize> ApiResponse<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // UserRole
+    // =========================================================================
+
+    #[test]
+    fn user_role_display_lowercase() {
+        assert_eq!(UserRole::Admin.to_string(), "admin");
+        assert_eq!(UserRole::Customer.to_string(), "customer");
+        assert_eq!(UserRole::Guard.to_string(), "guard");
+    }
+
+    #[test]
+    fn user_role_from_str_case_insensitive() {
+        assert_eq!("Admin".parse::<UserRole>().unwrap(), UserRole::Admin);
+        assert_eq!("CUSTOMER".parse::<UserRole>().unwrap(), UserRole::Customer);
+        assert_eq!("guard".parse::<UserRole>().unwrap(), UserRole::Guard);
+    }
+
+    #[test]
+    fn user_role_from_str_rejects_unknown() {
+        assert!("manager".parse::<UserRole>().is_err());
+        assert!("".parse::<UserRole>().is_err());
+    }
+
+    #[test]
+    fn user_role_roundtrip_display_parse() {
+        for role in [UserRole::Admin, UserRole::Customer, UserRole::Guard] {
+            let s = role.to_string();
+            let parsed: UserRole = s.parse().unwrap();
+            assert_eq!(parsed, role);
+        }
+    }
+
+    // =========================================================================
+    // ApiResponse
+    // =========================================================================
+
+    #[test]
+    fn api_response_success_has_correct_fields() {
+        let resp = ApiResponse::success("hello");
+        assert!(resp.success);
+        assert_eq!(resp.data, Some("hello"));
+        assert!(resp.error.is_none());
+    }
+
+    #[test]
+    fn api_response_success_serializes_without_error_field() {
+        let resp = ApiResponse::success(42);
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"], 42);
+        assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn api_response_with_none_data_omits_data_field() {
+        let resp: ApiResponse<String> = ApiResponse {
+            success: false,
+            data: None,
+            error: Some("something failed".into()),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json.get("data").is_none());
+        assert_eq!(json["error"], "something failed");
+    }
+}

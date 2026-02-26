@@ -94,3 +94,181 @@ impl AppConfig {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Env var tests must run sequentially since they modify process state.
+    // We use a static mutex to serialize them.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_env_vars<F: FnOnce()>(vars: &[(&str, &str)], f: F) {
+        let _lock = ENV_LOCK.lock().unwrap();
+        // Save previous values
+        let previous: Vec<_> = vars
+            .iter()
+            .map(|(k, _)| (*k, std::env::var(k).ok()))
+            .collect();
+        // Set test values
+        for (k, v) in vars {
+            std::env::set_var(k, v);
+        }
+        f();
+        // Restore
+        for (k, prev) in &previous {
+            match prev {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+    }
+
+    fn clear_env_vars(keys: &[&str]) {
+        for k in keys {
+            std::env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn database_config_reads_from_env() {
+        with_env_vars(
+            &[("DATABASE_URL", "postgres://localhost/test")],
+            || {
+                let cfg = DatabaseConfig::from_env().unwrap();
+                assert_eq!(cfg.url, "postgres://localhost/test");
+                assert_eq!(cfg.max_connections, 20); // default
+            },
+        );
+    }
+
+    #[test]
+    fn database_config_custom_max_connections() {
+        with_env_vars(
+            &[
+                ("DATABASE_URL", "postgres://localhost/test"),
+                ("DATABASE_MAX_CONNECTIONS", "10"),
+            ],
+            || {
+                let cfg = DatabaseConfig::from_env().unwrap();
+                assert_eq!(cfg.max_connections, 10);
+            },
+        );
+    }
+
+    #[test]
+    fn database_config_fails_without_url() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env_vars(&["DATABASE_URL"]);
+        let result = DatabaseConfig::from_env();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn jwt_config_reads_from_env() {
+        with_env_vars(
+            &[("JWT_SECRET", "super-secret-key")],
+            || {
+                let cfg = JwtConfig::from_env().unwrap();
+                assert_eq!(cfg.secret, "super-secret-key");
+                assert_eq!(cfg.expiry_hours, 24); // default
+            },
+        );
+    }
+
+    #[test]
+    fn jwt_config_custom_expiry() {
+        with_env_vars(
+            &[
+                ("JWT_SECRET", "key"),
+                ("JWT_EXPIRY_HOURS", "48"),
+            ],
+            || {
+                let cfg = JwtConfig::from_env().unwrap();
+                assert_eq!(cfg.expiry_hours, 48);
+            },
+        );
+    }
+
+    #[test]
+    fn jwt_config_fails_without_secret() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env_vars(&["JWT_SECRET"]);
+        let result = JwtConfig::from_env();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn redis_config_reads_from_env() {
+        with_env_vars(
+            &[("REDIS_CACHE_URL", "redis://:pass@localhost:6379")],
+            || {
+                let cfg = RedisConfig::from_env().unwrap();
+                assert_eq!(cfg.cache_url, "redis://:pass@localhost:6379");
+                assert!(cfg.pubsub_url.is_none());
+            },
+        );
+    }
+
+    #[test]
+    fn redis_config_with_pubsub() {
+        with_env_vars(
+            &[
+                ("REDIS_CACHE_URL", "redis://cache"),
+                ("REDIS_PUBSUB_URL", "redis://pubsub"),
+            ],
+            || {
+                let cfg = RedisConfig::from_env().unwrap();
+                assert_eq!(cfg.pubsub_url, Some("redis://pubsub".to_string()));
+            },
+        );
+    }
+
+    #[test]
+    fn s3_config_reads_all_fields() {
+        with_env_vars(
+            &[
+                ("S3_ENDPOINT", "http://minio:9000"),
+                ("S3_ACCESS_KEY", "mykey"),
+                ("S3_SECRET_KEY", "mysecret"),
+                ("S3_BUCKET", "guard-dispatch-files"),
+            ],
+            || {
+                let cfg = S3Config::from_env().unwrap();
+                assert_eq!(cfg.endpoint, "http://minio:9000");
+                assert_eq!(cfg.bucket, "guard-dispatch-files");
+            },
+        );
+    }
+
+    #[test]
+    fn s3_config_fails_if_any_field_missing() {
+        with_env_vars(
+            &[
+                ("S3_ENDPOINT", "http://minio:9000"),
+                // Missing S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET
+            ],
+            || {
+                clear_env_vars(&["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_BUCKET"]);
+                let result = S3Config::from_env();
+                assert!(result.is_err());
+            },
+        );
+    }
+
+    #[test]
+    fn require_env_returns_error_for_missing_var() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env_vars(&["DOES_NOT_EXIST_XYZ"]);
+        let result = require_env("DOES_NOT_EXIST_XYZ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn optional_env_returns_none_for_missing_var() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env_vars(&["DOES_NOT_EXIST_XYZ"]);
+        assert_eq!(optional_env("DOES_NOT_EXIST_XYZ"), None);
+    }
+}

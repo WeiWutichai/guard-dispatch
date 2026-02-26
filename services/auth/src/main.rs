@@ -31,7 +31,11 @@ async fn main() -> anyhow::Result<()> {
     let jwt_config = JwtConfig::from_env()?;
 
     let db = create_pool(&db_config).await?;
-    let redis = create_redis_client(&redis_config.cache_url)?;
+    let redis_client = create_redis_client(&redis_config.cache_url)?;
+    let redis = redis_client
+        .get_multiplexed_tokio_connection()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {e}"))?;
 
     let state = Arc::new(AppState {
         db,

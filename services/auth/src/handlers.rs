@@ -166,3 +166,105 @@ pub async fn logout(
 
     Ok((headers, Json(ApiResponse::success(()))))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_auth_response() -> AuthResponse {
+        AuthResponse {
+            access_token: "access-jwt-token".to_string(),
+            refresh_token: "refresh-uuid-token".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 86400, // 24 hours
+        }
+    }
+
+    #[test]
+    fn auth_cookie_headers_sets_three_cookies() {
+        let auth = sample_auth_response();
+        let headers = auth_cookie_headers(&auth);
+        let cookies: Vec<_> = headers.get_all(SET_COOKIE).iter().collect();
+        assert_eq!(cookies.len(), 3);
+    }
+
+    #[test]
+    fn auth_cookie_headers_access_token_is_httponly() {
+        let auth = sample_auth_response();
+        let headers = auth_cookie_headers(&auth);
+        let cookies: Vec<_> = headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+
+        let access = cookies.iter().find(|c| c.starts_with("access_token=")).unwrap();
+        assert!(access.contains("HttpOnly"), "access_token must be HttpOnly");
+        assert!(access.contains("Secure"), "access_token must be Secure");
+        assert!(access.contains("SameSite=Lax"), "access_token must be SameSite=Lax");
+        assert!(access.contains("Path=/"), "access_token must have Path=/");
+    }
+
+    #[test]
+    fn auth_cookie_headers_refresh_token_restricted_to_auth_path() {
+        let auth = sample_auth_response();
+        let headers = auth_cookie_headers(&auth);
+        let cookies: Vec<_> = headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+
+        let refresh = cookies.iter().find(|c| c.starts_with("refresh_token=")).unwrap();
+        assert!(refresh.contains("Path=/auth"), "refresh_token must have Path=/auth");
+        assert!(refresh.contains("HttpOnly"));
+        assert!(refresh.contains("Secure"));
+    }
+
+    #[test]
+    fn auth_cookie_headers_logged_in_marker_is_not_httponly() {
+        let auth = sample_auth_response();
+        let headers = auth_cookie_headers(&auth);
+        let cookies: Vec<_> = headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+
+        let marker = cookies.iter().find(|c| c.starts_with("logged_in=")).unwrap();
+        assert!(!marker.contains("HttpOnly"), "logged_in must NOT be HttpOnly");
+        assert!(marker.contains("logged_in=1"), "logged_in value must be '1'");
+    }
+
+    #[test]
+    fn auth_cookie_headers_access_token_contains_jwt() {
+        let auth = sample_auth_response();
+        let headers = auth_cookie_headers(&auth);
+        let cookies: Vec<_> = headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+
+        let access = cookies.iter().find(|c| c.starts_with("access_token=")).unwrap();
+        assert!(access.contains("access-jwt-token"));
+    }
+
+    #[test]
+    fn auth_cookie_headers_refresh_token_has_30_day_max_age() {
+        let auth = sample_auth_response();
+        let headers = auth_cookie_headers(&auth);
+        let cookies: Vec<_> = headers
+            .get_all(SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+
+        let refresh = cookies.iter().find(|c| c.starts_with("refresh_token=")).unwrap();
+        let expected_max_age = 30 * 24 * 3600;
+        assert!(
+            refresh.contains(&format!("Max-Age={expected_max_age}")),
+            "refresh_token must have 30-day Max-Age"
+        );
+    }
+}

@@ -6,7 +6,7 @@
 // The frontend never reads/writes JWT tokens directly.
 // =============================================================================
 
-const BASE_PATH = "/pguard-app";
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
 // ---------------------------------------------------------------------------
 // Types matching the Rust backend responses
@@ -469,12 +469,18 @@ export const chatApi = {
     );
   },
 
-  // WebSocket for real-time chat — cookies sent automatically on WS upgrade
+  // WebSocket for real-time chat — cookies sent automatically on WS upgrade.
+  // conversation_id is sent as the first message after connection (not in URL query params)
+  // to avoid leaking it in server logs and proxy access logs.
   connectChatWebSocket: (conversationId: string): WebSocket => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return new WebSocket(
-      `${protocol}//${window.location.host}/ws/chat?conversation_id=${conversationId}`
+    const ws = new WebSocket(
+      `${protocol}//${window.location.host}/ws/chat`
     );
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({ type: "join", conversation_id: conversationId }));
+    });
+    return ws;
   },
 
   uploadAttachment: async (conversationId: string, file: File) => {

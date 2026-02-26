@@ -5,7 +5,7 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
-    pub redis: redis::Client,
+    pub redis: redis::aio::MultiplexedConnection,
     pub jwt_config: JwtConfig,
 }
 

@@ -2,7 +2,7 @@
 # Chat Service — Multi-stage Dockerfile (WebSocket + MinIO)
 # =============================================================================
 
-FROM rust:1.83-slim AS builder
+FROM rust:1-slim AS builder
 
 WORKDIR /app
 
@@ -30,10 +30,10 @@ RUN cargo build --release -p chat-service 2>/dev/null; true
 COPY services/shared/src services/shared/src
 COPY services/chat/src services/chat/src
 
-RUN touch services/chat/src/main.rs && cargo build --release -p chat-service
+RUN find services/shared/src services/chat/src -name '*.rs' | xargs touch && cargo build --release -p chat-service
 
 # Runtime
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
