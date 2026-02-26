@@ -61,6 +61,34 @@ jobs:
         run: npm ci
 
   # ---------------------------------------------------------------------------
+  # Admin Portal (Next.js)
+  # ---------------------------------------------------------------------------
+  web-admin-check:
+    name: Admin Portal — Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend/web
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend/web
+        run: npm run lint
+
+      - name: Build
+        working-directory: frontend/web
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
   # Docker Compose Validation
   # ---------------------------------------------------------------------------
   docker-validate:

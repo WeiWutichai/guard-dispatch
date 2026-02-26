@@ -43,14 +43,17 @@ build/
 *.tsbuildinfo
 
 # -----------------------------------------------------------------------------
-# React + TypeScript + Vite (frontend/web)
+# Next.js / React (frontend/web)
 # -----------------------------------------------------------------------------
+frontend/web/.next/
+frontend/web/out/
 frontend/web/dist/
 frontend/web/build/
 frontend/web/.vite/
 frontend/web/node_modules/
 frontend/web/coverage/
 frontend/web/.eslintcache
+frontend/web/next-env.d.ts
 
 # -----------------------------------------------------------------------------
 # Flutter (frontend/mobile)
