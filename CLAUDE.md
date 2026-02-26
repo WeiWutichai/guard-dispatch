@@ -272,3 +272,4 @@ RUST_LOG=info
 - ❌ ห้าม store binary/image ใน PostgreSQL
 - ❌ ห้าม expose MinIO/R2 bucket โดยตรง
 - ❌ ห้าม accept ไฟล์ที่ไม่ใช่ image/jpeg, image/png, image/webp
+- ❌ ห้ามเรียก fetch ตรงใน Frontend — ใช้ lib/api.ts เท่านั้น
