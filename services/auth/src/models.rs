@@ -29,6 +29,7 @@ pub struct LoginRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct RefreshRequest {
+    #[serde(default)]
     pub refresh_token: String,
 }
 

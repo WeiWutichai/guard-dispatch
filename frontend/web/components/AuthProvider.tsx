@@ -11,8 +11,6 @@ import {
 import { useRouter, usePathname } from "next/navigation";
 import {
   authApi,
-  getAccessToken,
-  clearTokens,
   type UserResponse,
 } from "@/lib/api";
 
@@ -35,23 +33,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAuthenticated = !!user;
 
-  // Load user profile on mount if token exists
+  // Load user profile on mount — cookies are sent automatically
   useEffect(() => {
-    const token = getAccessToken();
-    if (token) {
-      authApi
-        .getProfile()
-        .then((profile) => {
-          setUser(profile);
-        })
-        .catch(() => {
-          clearTokens();
-          setUser(null);
-        })
-        .finally(() => setIsLoading(false));
-    } else {
-      queueMicrotask(() => setIsLoading(false));
-    }
+    authApi
+      .getProfile()
+      .then((profile) => {
+        setUser(profile);
+      })
+      .catch(() => {
+        setUser(null);
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
   // Redirect to login if not authenticated (except on login page)
@@ -75,8 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await authApi.logout();
     } catch {
-      // Even if API call fails, clear local state
-      clearTokens();
+      // Even if API call fails, cookies are cleared by backend
     }
     setUser(null);
     router.push("/login");

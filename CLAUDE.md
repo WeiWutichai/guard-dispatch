@@ -18,7 +18,7 @@
 ## Tech Stack
 
 ### Frontend
-- **Web Admin:** React + TypeScript + Vite
+- **Web Admin:** Next.js 16 + TypeScript (App Router, basePath `/pguard-app`)
 - **Mobile App:** Flutter (iOS + Android) — อยู่ใน Monorepo เดียวกัน
 
 ### Backend (Rust ทั้งหมด)
@@ -30,7 +30,7 @@
 
 ### Database & Cache
 - **Primary DB:** PostgreSQL (1 instance ใช้ร่วมกัน)
-- **Cache:** Redis (2 instances — หนึ่งสำหรับ Cache, หนึ่งสำหรับ Pub/Sub GPS)
+- **Cache:** Redis (2 instances — หนึ่งสำหรับ Cache, หนึ่งสำหรับ Pub/Sub GPS) — **password-protected**
 
 ### File Storage
 - **Development:** MinIO (self-hosted, Docker container)
@@ -52,32 +52,37 @@
 ## Architecture — Microservices
 
 ```
-nginx-gateway
-├── rust-auth-service          (Port 3001)
-├── rust-booking-service       (Port 3002)
-├── rust-tracking-service      (Port 3003) ← WebSocket GPS
-├── rust-notification-service  (Port 3004)
-├── mediasoup-server           (Port 3005) ← Node.js Video/Audio
-└── rust-chat-service          (Port 3006) ← WebSocket Chat + รูปภาพ
+nginx-gateway (port 80/443 — จุดเข้าเดียว)
+├── web-admin                  (Next.js 16, /pguard-app)
+├── rust-auth-service          (Port 3001, /auth/*)
+├── rust-booking-service       (Port 3002, /booking/*)
+├── rust-tracking-service      (Port 3003, /ws/track + /tracking/*)
+├── rust-notification-service  (Port 3004, /notification/*)
+├── mediasoup-server           (Port 3005, /call/*) ← Node.js Video/Audio
+└── rust-chat-service          (Port 3006, /ws/chat + /chat/*)
 ```
 
 ---
 
-## Container List (11 Containers)
+## Container List (12 Containers)
 
-| Container | Technology | Port |
-|---|---|---|
-| nginx-gateway | Nginx | 80 / 443 |
-| rust-auth | Rust + Axum | 3001 |
-| rust-booking | Rust + Axum | 3002 |
-| rust-tracking | Rust + Axum + WebSocket | 3003 |
-| rust-notification | Rust + Axum + FCM | 3004 |
-| mediasoup-server | Node.js | 3005 |
-| rust-chat | Rust + Axum + WebSocket | 3006 |
-| postgres-db | PostgreSQL | 5432 |
-| redis-cache | Redis | 6379 |
-| redis-pubsub | Redis | 6380 |
-| minio | MinIO (Object Storage) | 9000/9001 |
+> **Security:** เฉพาะ Nginx เท่านั้นที่ expose port ไปยัง host (80/443)
+> Service อื่นทั้งหมดเข้าถึงได้เฉพาะผ่าน Docker internal network
+
+| Container | Technology | Internal Port | Exposed to Host |
+|---|---|---|---|
+| nginx-gateway | Nginx | 80 / 443 | ✅ 80/443 |
+| web-admin | Next.js 16 | 3000 | ❌ |
+| rust-auth | Rust + Axum | 3001 | ❌ |
+| rust-booking | Rust + Axum | 3002 | ❌ |
+| rust-tracking | Rust + Axum + WebSocket | 3003 | ❌ |
+| rust-notification | Rust + Axum + FCM | 3004 | ❌ |
+| mediasoup-server | Node.js | 3005 | ❌ (UDP 40000-49999 only) |
+| rust-chat | Rust + Axum + WebSocket | 3006 | ❌ |
+| postgres-db | PostgreSQL | 5432 | ❌ |
+| redis-cache | Redis (password-protected) | 6379 | ❌ |
+| redis-pubsub | Redis (password-protected) | 6379 | ❌ |
+| minio | MinIO (Object Storage) | 9000/9001 | ❌ |
 
 ---
 
@@ -136,8 +141,20 @@ CREATE TABLE chat.attachments (
 
 ### Security
 - ทุก API ต้องมี **JWT validation** ยกเว้น `/auth/login` และ `/auth/register`
-- Rate limiting ที่ Nginx layer
+- Rate limiting ที่ Nginx layer (auth: 5r/s, API: 30r/s, WS: 5r/s)
 - ทุก request log เก็บใน `audit` schema
+- **JWT Storage:**
+  - Web: httpOnly + Secure + SameSite=Lax **cookies** (ห้ามใช้ localStorage เด็ดขาด)
+  - Mobile (Flutter): Bearer token ใน Authorization header
+  - AuthUser extractor อ่านจาก Authorization header ก่อน → fallback ไป cookie
+- **Cookie Architecture:**
+  - `access_token` → httpOnly, Secure, SameSite=Lax, Path=/
+  - `refresh_token` → httpOnly, Secure, SameSite=Lax, Path=/auth
+  - `logged_in` → non-httpOnly marker (ค่า "1") สำหรับ frontend ตรวจสอบ auth state
+- **Redis:** ต้องใช้ password authentication (`--requirepass`) ทั้ง cache และ pubsub
+- **Network Isolation:** เฉพาะ Nginx expose port 80/443 — ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host
+- **Nginx Security Headers:** X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
+- **WebSocket Auth:** ใช้ cookie (ส่งอัตโนมัติตอน upgrade) — ห้ามส่ง token ใน URL query params
 
 ### Performance Target
 - Push notification: **< 1 วินาที**
@@ -152,26 +169,40 @@ CREATE TABLE chat.attachments (
 ```
 guard-dispatch/                 ← Monorepo (1 Repo)
 ├── CLAUDE.md                   ← ไฟล์นี้ (AI อ่านก่อนเสมอ)
+├── Cargo.toml                  ← Workspace root (6 members)
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
+├── .env.example
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml
 │       └── deploy.yml
+├── .claude/
+│   ├── settings.json           ← Claude Code hooks config
+│   ├── hooks/
+│   │   ├── pre-tool.sh         ← Block destructive commands
+│   │   └── post-edit.sh        ← Auto fmt + clippy + unwrap check
+│   └── skills/
+│       ├── pr-review.md        ← PR review checklist
+│       ├── websocket.md        ← WebSocket patterns
+│       └── ...
 ├── nginx/
-│   └── nginx.conf
+│   └── nginx.conf              ← Security headers + rate limiting
 ├── services/
-│   ├── auth/                   ← Rust
+│   ├── shared/                 ← Shared library crate (auth, config, error, models)
+│   ├── auth/                   ← Rust (JWT + cookies + argon2)
 │   ├── booking/                ← Rust
-│   ├── tracking/               ← Rust + WebSocket
+│   ├── tracking/               ← Rust + WebSocket GPS
 │   ├── notification/           ← Rust + FCM
 │   ├── chat/                   ← Rust + WebSocket + MinIO
 │   └── mediasoup/              ← Node.js
 ├── frontend/
-│   ├── web/                    ← React + TypeScript
+│   ├── web/                    ← Next.js 16 + TypeScript (App Router)
+│   │   ├── lib/api.ts          ← Centralized API client (cookie-based auth)
+│   │   └── components/AuthProvider.tsx
 │   └── mobile/                 ← Flutter
 └── database/
-    └── migrations/
+    └── migrations/             ← SQL files (auto-run by PostgreSQL on init)
 ```
 
 ---
@@ -223,26 +254,41 @@ MCP Store → ค้นหาและติดตั้ง:
 
 ---
 
-## Cargo.toml Dependencies Template
+## Cargo.toml — Workspace Dependencies
+
+ใช้ `[workspace.dependencies]` ใน root `Cargo.toml` แล้ว inherit ในแต่ละ service:
 
 ```toml
-[dependencies]
-axum = { version = "0.8", features = ["ws", "multipart"] }
-tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
-redis = { version = "0.27", features = ["tokio-comp"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-jsonwebtoken = "9"
-uuid = { version = "1", features = ["v4"] }
-chrono = { version = "0.4", features = ["serde"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-aws-sdk-s3 = "1"
-bytes = "1"
+# Root Cargo.toml
+[workspace]
+members = ["services/shared", "services/auth", "services/booking",
+           "services/tracking", "services/notification", "services/chat"]
+
+[workspace.dependencies]
+axum            = { version = "0.8", features = ["ws", "multipart"] }
+tokio           = { version = "1", features = ["full"] }
+sqlx            = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+redis           = { version = "0.27", features = ["tokio-comp"] }
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+jsonwebtoken    = "9"
+uuid            = { version = "1", features = ["v4"] }
+chrono          = { version = "0.4", features = ["serde"] }
+tower           = "0.5"
+tower-http      = { version = "0.6", features = ["cors", "trace"] }
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror       = "2"
+anyhow          = "1"
+dotenvy         = "0.15"
+aws-sdk-s3      = "1"
+bytes           = "1"
+reqwest         = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+argon2          = "0.5"
+shared          = { path = "services/shared" }
 ```
+
+แต่ละ service ใช้: `axum = { workspace = true }`
 
 ---
 
@@ -250,16 +296,21 @@ bytes = "1"
 
 ```env
 DATABASE_URL=postgresql://user:pass@postgres-db:5432/guard_dispatch_db
-REDIS_CACHE_URL=redis://redis-cache:6379
-REDIS_PUBSUB_URL=redis://redis-pubsub:6380
-JWT_SECRET=<strong-secret>
+REDIS_PASSWORD=<strong-redis-password>
+REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6379
+REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6379
+JWT_SECRET=<strong-secret-at-least-64-chars>
+JWT_EXPIRY_HOURS=24
 FCM_SERVER_KEY=<firebase-key>
+FCM_PROJECT_ID=<firebase-project-id>
 S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=<access-key>
 S3_SECRET_KEY=<secret-key>
 S3_BUCKET=guard-dispatch-files
 RUST_LOG=info
 ```
+
+> **Note:** Redis ทั้งสอง instance ใช้ internal port 6379 (ไม่ใช่ 6380 สำหรับ pubsub อีกแล้ว)
 
 ---
 
@@ -272,4 +323,8 @@ RUST_LOG=info
 - ❌ ห้าม store binary/image ใน PostgreSQL
 - ❌ ห้าม expose MinIO/R2 bucket โดยตรง
 - ❌ ห้าม accept ไฟล์ที่ไม่ใช่ image/jpeg, image/png, image/webp
-- ❌ ห้ามเรียก fetch ตรงใน Frontend — ใช้ lib/api.ts เท่านั้น
+- ❌ ห้ามเรียก fetch ตรงใน Frontend — ใช้ `lib/api.ts` เท่านั้น
+- ❌ ห้ามเก็บ JWT ใน localStorage/sessionStorage — ใช้ httpOnly cookie เท่านั้น
+- ❌ ห้ามส่ง JWT token ใน WebSocket URL query params — ใช้ cookie auth
+- ❌ ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host — เฉพาะ Nginx 80/443
+- ❌ ห้ามเชื่อมต่อ Redis โดยไม่มี password

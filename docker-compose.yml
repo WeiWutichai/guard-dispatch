@@ -31,8 +31,9 @@ services:
     build:
       context: frontend/web
       dockerfile: Dockerfile
-    ports:
-      - "${WEB_ADMIN_PORT:-3000}:3000"
+    # No host ports — accessible only via nginx-gateway
+    expose:
+      - "3000"
     environment:
       - NODE_ENV=${NODE_ENV:-production}
     networks:
@@ -72,8 +73,9 @@ services:
     build:
       context: .
       dockerfile: services/auth/Dockerfile
-    ports:
-      - "${AUTH_SERVICE_PORT:-3001}:3001"
+    # No host ports — accessible only via nginx-gateway
+    expose:
+      - "3001"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL}
@@ -90,8 +92,9 @@ services:
     build:
       context: .
       dockerfile: services/booking/Dockerfile
-    ports:
-      - "${BOOKING_SERVICE_PORT:-3002}:3002"
+    # No host ports — accessible only via nginx-gateway
+    expose:
+      - "3002"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL}
@@ -107,8 +110,9 @@ services:
     build:
       context: .
       dockerfile: services/tracking/Dockerfile
-    ports:
-      - "${TRACKING_SERVICE_PORT:-3003}:3003"
+    # No host ports — accessible only via nginx-gateway
+    expose:
+      - "3003"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL}
@@ -125,8 +129,9 @@ services:
     build:
       context: .
       dockerfile: services/notification/Dockerfile
-    ports:
-      - "${NOTIFICATION_SERVICE_PORT:-3004}:3004"
+    # No host ports — accessible only via nginx-gateway
+    expose:
+      - "3004"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL}
@@ -145,8 +150,10 @@ services:
     build:
       context: services/mediasoup
       dockerfile: Dockerfile
+    # Signaling goes through nginx; RTC UDP ports must be exposed for WebRTC media
+    expose:
+      - "3005"
     ports:
-      - "${MEDIASOUP_PORT:-3005}:3005"
       - "${MEDIASOUP_RTC_MIN_PORT:-40000}-${MEDIASOUP_RTC_MAX_PORT:-49999}:40000-49999/udp"
     environment:
       - NODE_ENV=${NODE_ENV:-development}
@@ -167,8 +174,9 @@ services:
     build:
       context: .
       dockerfile: services/chat/Dockerfile
-    ports:
-      - "${CHAT_SERVICE_PORT:-3006}:3006"
+    # No host ports — accessible only via nginx-gateway
+    expose:
+      - "3006"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL}
@@ -196,8 +204,9 @@ services:
     image: postgres:16-alpine
     container_name: postgres-db
     restart: unless-stopped
-    ports:
-      - "5432:5432"
+    # No host ports — only backend network services can connect
+    expose:
+      - "5432"
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-guard_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-guard_pass}
@@ -221,13 +230,14 @@ services:
     image: redis:7-alpine
     container_name: redis-cache
     restart: unless-stopped
-    ports:
-      - "6379:6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    # No host ports — only backend network services can connect
+    expose:
+      - "6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-redis_secret_pass}
     volumes:
       - redis_cache_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret_pass}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -241,13 +251,14 @@ services:
     image: redis:7-alpine
     container_name: redis-pubsub
     restart: unless-stopped
-    ports:
-      - "6380:6379"
-    command: redis-server --maxmemory 128mb --maxmemory-policy noeviction
+    # No host ports — only backend network services can connect
+    expose:
+      - "6379"
+    command: redis-server --maxmemory 128mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:-redis_secret_pass}
     volumes:
       - redis_pubsub_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret_pass}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -261,9 +272,10 @@ services:
     image: minio/minio:latest
     container_name: minio
     restart: unless-stopped
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web Console
+    # No host ports — only backend network services can connect
+    expose:
+      - "9000"
+      - "9001"
     command: server /data --console-address ":9001"
     environment:
       - MINIO_ROOT_USER=${S3_ACCESS_KEY:-minioadmin}

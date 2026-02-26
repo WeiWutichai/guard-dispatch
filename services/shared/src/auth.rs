@@ -48,8 +48,42 @@ pub fn decode_jwt(token: &str, secret: &str) -> Result<JwtClaims, AppError> {
     Ok(token_data.claims)
 }
 
-/// Axum extractor that validates JWT from the Authorization header.
-/// Usage: `async fn handler(user: AuthUser) -> ... { ... }`
+/// Build a Set-Cookie header value for an httpOnly, Secure, SameSite=Lax cookie.
+pub fn build_cookie(name: &str, value: &str, max_age_secs: i64, path: &str) -> String {
+    format!(
+        "{name}={value}; HttpOnly; Secure; SameSite=Lax; Path={path}; Max-Age={max_age_secs}"
+    )
+}
+
+/// Build a Set-Cookie header to clear/expire a cookie.
+pub fn build_clear_cookie(name: &str, path: &str) -> String {
+    format!(
+        "{name}=; HttpOnly; Secure; SameSite=Lax; Path={path}; Max-Age=0"
+    )
+}
+
+/// Cookie names used for auth tokens.
+pub const ACCESS_TOKEN_COOKIE: &str = "access_token";
+pub const REFRESH_TOKEN_COOKIE: &str = "refresh_token";
+
+/// Extract a named cookie value from a Cookie header string.
+fn extract_cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
+    cookie_header
+        .split(';')
+        .map(|s| s.trim())
+        .find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            if key.trim() == name {
+                Some(value.trim())
+            } else {
+                None
+            }
+        })
+}
+
+/// Axum extractor that validates JWT from:
+/// 1. Authorization: Bearer <token> header (for mobile/API clients)
+/// 2. access_token cookie (for web browser clients)
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: Uuid,
@@ -63,17 +97,34 @@ where
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let auth_header = parts
+        // Strategy 1: Authorization: Bearer <token> header
+        let token = if let Some(auth_header) = parts
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?;
+        {
+            auth_header
+                .strip_prefix("Bearer ")
+                .map(|t| t.to_string())
+        } else {
+            None
+        };
 
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::Unauthorized("Invalid Authorization format".to_string()))?;
+        // Strategy 2: access_token cookie
+        let token = token.or_else(|| {
+            parts
+                .headers
+                .get("Cookie")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|cookies| extract_cookie_value(cookies, ACCESS_TOKEN_COOKIE))
+                .map(|t| t.to_string())
+        });
 
-        let claims = decode_jwt(token, state.jwt_secret())?;
+        let token = token.ok_or_else(|| {
+            AppError::Unauthorized("Missing authentication token".to_string())
+        })?;
+
+        let claims = decode_jwt(&token, state.jwt_secret())?;
 
         Ok(AuthUser {
             user_id: claims.sub,

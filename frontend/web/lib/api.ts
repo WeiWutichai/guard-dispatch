@@ -1,6 +1,9 @@
 // =============================================================================
 // API Client — Guard Dispatch Admin Portal
 // Connects to Rust backend services via Nginx gateway
+//
+// SECURITY: Auth tokens are stored in httpOnly Secure cookies (set by backend).
+// The frontend never reads/writes JWT tokens directly.
 // =============================================================================
 
 const BASE_PATH = "/pguard-app";
@@ -114,30 +117,40 @@ export interface ChatMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Token management
+// Auth state helpers
+// ---------------------------------------------------------------------------
+// Tokens are httpOnly cookies — JS cannot read them directly.
+// The backend sets a non-httpOnly "logged_in=1" marker cookie so the
+// frontend can check auth state without exposing the actual token.
 // ---------------------------------------------------------------------------
 
-const TOKEN_KEY = "guard_dispatch_access_token";
-const REFRESH_TOKEN_KEY = "guard_dispatch_refresh_token";
-
+/** Check if the user likely has an active session (cookie-based). */
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  if (
+    document.cookie
+      .split(";")
+      .some((c) => c.trim().startsWith("logged_in="))
+  ) {
+    return "cookie-auth";
+  }
+  return null;
 }
 
 export function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
+  // Refresh token is in an httpOnly cookie — not accessible from JS
+  return null;
 }
 
-export function setTokens(accessToken: string, refreshToken: string): void {
-  localStorage.setItem(TOKEN_KEY, accessToken);
-  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+export function setTokens(
+  _accessToken: string,
+  _refreshToken: string
+): void {
+  // No-op: tokens are set via Set-Cookie headers from the backend
 }
 
 export function clearTokens(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  // No-op: tokens are cleared via Set-Cookie headers from the backend logout
 }
 
 // ---------------------------------------------------------------------------
@@ -159,37 +172,38 @@ async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getAccessToken();
-
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
   const url = `${BASE_PATH}/api${path}`;
   const response = await fetch(url, {
     ...options,
     headers,
+    credentials: "same-origin", // Send cookies automatically
   });
 
-  // Handle 401 — try token refresh
-  if (response.status === 401 && token) {
+  // Handle 401 — try cookie-based token refresh
+  if (response.status === 401) {
     const refreshed = await tryRefreshToken();
     if (refreshed) {
-      headers["Authorization"] = `Bearer ${getAccessToken()}`;
-      const retryResponse = await fetch(url, { ...options, headers });
+      const retryResponse = await fetch(url, {
+        ...options,
+        headers,
+        credentials: "same-origin",
+      });
       if (retryResponse.ok) {
         const data: ApiResponse<T> = await retryResponse.json();
         if (data.success && data.data !== undefined) return data.data;
-        throw new ApiError(retryResponse.status, data.error?.code || "unknown", data.error?.message || "Unknown error");
+        throw new ApiError(
+          retryResponse.status,
+          data.error?.code || "unknown",
+          data.error?.message || "Unknown error"
+        );
       }
     }
     // Refresh failed — redirect to login
-    clearTokens();
     if (typeof window !== "undefined") {
       window.location.href = `${BASE_PATH}/login`;
     }
@@ -215,28 +229,27 @@ async function apiFetch<T>(
     return data.data;
   }
 
-  throw new ApiError(200, data.error?.code || "unknown", data.error?.message || "Unexpected response");
+  throw new ApiError(
+    200,
+    data.error?.code || "unknown",
+    data.error?.message || "Unexpected response"
+  );
 }
 
 async function tryRefreshToken(): Promise<boolean> {
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) return false;
-
   try {
+    // The refresh_token cookie is sent automatically
     const response = await fetch(`${BASE_PATH}/api/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify({ refresh_token: "" }), // Backend reads from cookie
+      credentials: "same-origin",
     });
 
     if (!response.ok) return false;
 
     const data: ApiResponse<AuthResponse> = await response.json();
-    if (data.success && data.data) {
-      setTokens(data.data.access_token, data.data.refresh_token);
-      return true;
-    }
-    return false;
+    return data.success && !!data.data;
   } catch {
     return false;
   }
@@ -252,10 +265,11 @@ export const authApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
+      credentials: "same-origin", // Receive Set-Cookie from backend
     });
     const data: ApiResponse<AuthResponse> = await response.json();
     if (data.success && data.data) {
-      setTokens(data.data.access_token, data.data.refresh_token);
+      // Tokens are now in httpOnly cookies — no localStorage needed
       return data.data;
     }
     throw new ApiError(
@@ -276,6 +290,7 @@ export const authApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params),
+      credentials: "same-origin",
     });
     const data: ApiResponse<UserResponse> = await response.json();
     if (data.success && data.data) return data.data;
@@ -301,8 +316,8 @@ export const authApi = {
   logout: async (): Promise<void> => {
     try {
       await apiFetch<null>("/auth/logout", { method: "POST" });
-    } finally {
-      clearTokens();
+    } catch {
+      // Even if API call fails, cookies are cleared by the backend
     }
   },
 };
@@ -312,13 +327,19 @@ export const authApi = {
 // ---------------------------------------------------------------------------
 
 export const bookingApi = {
-  listRequests: (params?: { status?: string; limit?: number; offset?: number }) => {
+  listRequests: (params?: {
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
     const query = new URLSearchParams();
     if (params?.status) query.set("status", params.status);
     if (params?.limit) query.set("limit", String(params.limit));
     if (params?.offset) query.set("offset", String(params.offset));
     const qs = query.toString();
-    return apiFetch<GuardRequest[]>(`/booking/requests${qs ? `?${qs}` : ""}`);
+    return apiFetch<GuardRequest[]>(
+      `/booking/requests${qs ? `?${qs}` : ""}`
+    );
   },
 
   getRequest: (id: string) =>
@@ -368,11 +389,14 @@ export const trackingApi = {
   getLatestLocation: (guardId: string) =>
     apiFetch<GuardLocation>(`/tracking/locations/${guardId}`),
 
-  getLocationHistory: (guardId: string, params?: {
-    from?: string;
-    to?: string;
-    limit?: number;
-  }) => {
+  getLocationHistory: (
+    guardId: string,
+    params?: {
+      from?: string;
+      to?: string;
+      limit?: number;
+    }
+  ) => {
     const query = new URLSearchParams();
     if (params?.from) query.set("from", params.from);
     if (params?.to) query.set("to", params.to);
@@ -383,12 +407,11 @@ export const trackingApi = {
     );
   },
 
-  // WebSocket connection for real-time GPS
+  // WebSocket for real-time GPS — cookies are sent automatically on WS upgrade
   connectGpsWebSocket: (): WebSocket => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = getAccessToken();
     return new WebSocket(
-      `${protocol}//${window.location.host}/ws/track?token=${token}`
+      `${protocol}//${window.location.host}/ws/track`
     );
   },
 };
@@ -398,7 +421,11 @@ export const trackingApi = {
 // ---------------------------------------------------------------------------
 
 export const notificationApi = {
-  list: (params?: { limit?: number; offset?: number; unread_only?: boolean }) => {
+  list: (params?: {
+    limit?: number;
+    offset?: number;
+    unread_only?: boolean;
+  }) => {
     const query = new URLSearchParams();
     if (params?.limit) query.set("limit", String(params.limit));
     if (params?.offset) query.set("offset", String(params.offset));
@@ -429,7 +456,10 @@ export const chatApi = {
   listConversations: () =>
     apiFetch<Conversation[]>("/chat/conversations"),
 
-  getMessages: (conversationId: string, params?: { limit?: number; before?: string }) => {
+  getMessages: (
+    conversationId: string,
+    params?: { limit?: number; before?: string }
+  ) => {
     const query = new URLSearchParams();
     if (params?.limit) query.set("limit", String(params.limit));
     if (params?.before) query.set("before", params.before);
@@ -439,17 +469,15 @@ export const chatApi = {
     );
   },
 
-  // WebSocket connection for real-time chat
+  // WebSocket for real-time chat — cookies sent automatically on WS upgrade
   connectChatWebSocket: (conversationId: string): WebSocket => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = getAccessToken();
     return new WebSocket(
-      `${protocol}//${window.location.host}/ws/chat?token=${token}&conversation_id=${conversationId}`
+      `${protocol}//${window.location.host}/ws/chat?conversation_id=${conversationId}`
     );
   },
 
   uploadAttachment: async (conversationId: string, file: File) => {
-    const token = getAccessToken();
     const formData = new FormData();
     formData.append("file", file);
 
@@ -457,14 +485,18 @@ export const chatApi = {
       `${BASE_PATH}/api/chat/conversations/${conversationId}/attachments`,
       {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
+        credentials: "same-origin", // Send cookies for auth
       }
     );
 
     const data = await response.json();
     if (data.success && data.data) return data.data;
-    throw new ApiError(response.status, data.error?.code || "upload_failed", data.error?.message || "Upload failed");
+    throw new ApiError(
+      response.status,
+      data.error?.code || "upload_failed",
+      data.error?.message || "Upload failed"
+    );
   },
 };
 
