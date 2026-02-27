@@ -40,11 +40,16 @@ RUN find services/shared/src services/auth/src -name '*.rs' | xargs touch && car
 # Stage 2: Runtime
 FROM debian:bookworm-slim AS runtime
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
 
 WORKDIR /app
 
 COPY --from=builder /app/target/release/auth-service /app/auth-service
+
+RUN strip /app/auth-service
+
+USER appuser
 
 EXPOSE 3001
 

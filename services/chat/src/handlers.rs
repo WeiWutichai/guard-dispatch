@@ -154,6 +154,22 @@ pub async fn upload_attachment(
 
     let conversation_id =
         conversation_id.ok_or_else(|| AppError::BadRequest("conversation_id is required".to_string()))?;
+
+    // Authorization: verify uploader is a participant in this conversation or admin
+    if user.role != "admin" {
+        let is_participant = crate::service::is_conversation_participant_by_conversation(
+            &state.db,
+            conversation_id,
+            user.user_id,
+        )
+        .await?;
+        if !is_participant {
+            return Err(AppError::Forbidden(
+                "You are not a participant in this conversation".to_string(),
+            ));
+        }
+    }
+
     let data =
         file_data.ok_or_else(|| AppError::BadRequest("file is required".to_string()))?;
     let mime = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());

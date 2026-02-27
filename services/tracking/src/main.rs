@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use axum::routing::get;
 use axum::Router;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -56,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
             "/locations/{guard_id}/history",
             get(handlers::get_location_history),
         )
-        .layer(CorsLayer::permissive())
+        .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

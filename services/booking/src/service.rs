@@ -423,3 +423,26 @@ pub async fn get_assignments(
 
     Ok(rows.into_iter().map(AssignmentResponse::from).collect())
 }
+
+// =============================================================================
+// Authorization Helper — Check if guard is assigned to a request
+// =============================================================================
+
+pub async fn is_guard_assigned(
+    db: &PgPool,
+    request_id: Uuid,
+    guard_id: Uuid,
+) -> Result<bool, AppError> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM booking.assignments
+        WHERE request_id = $1 AND guard_id = $2
+        "#,
+    )
+    .bind(request_id)
+    .bind(guard_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(count > 0)
+}

@@ -33,13 +33,25 @@ pub async fn list_requests(
     Ok(Json(ApiResponse::success(requests)))
 }
 
-/// GET /requests/{id} — Get a specific guard request
+/// GET /requests/{id} — Get a specific guard request (IDOR-safe)
 pub async fn get_request(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<GuardRequestResponse>>, AppError> {
     let request = crate::service::get_request(&state.db, id).await?;
+
+    // Authorization: only the owning customer, an assigned guard, or admin
+    if user.role != "admin" {
+        let is_owner = request.customer_id == user.user_id;
+        let is_assigned = crate::service::is_guard_assigned(&state.db, id, user.user_id).await?;
+        if !is_owner && !is_assigned {
+            return Err(AppError::Forbidden(
+                "You do not have access to this request".to_string(),
+            ));
+        }
+    }
+
     Ok(Json(ApiResponse::success(request)))
 }
 
@@ -81,12 +93,24 @@ pub async fn update_assignment_status(
     Ok(Json(ApiResponse::success(assignment)))
 }
 
-/// GET /requests/{id}/assignments — Get assignments for a request
+/// GET /requests/{id}/assignments — Get assignments for a request (IDOR-safe)
 pub async fn get_assignments(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<Vec<AssignmentResponse>>>, AppError> {
+    // Authorization: only the request owner, an assigned guard, or admin
+    if user.role != "admin" {
+        let request = crate::service::get_request(&state.db, id).await?;
+        let is_owner = request.customer_id == user.user_id;
+        let is_assigned = crate::service::is_guard_assigned(&state.db, id, user.user_id).await?;
+        if !is_owner && !is_assigned {
+            return Err(AppError::Forbidden(
+                "You do not have access to this request's assignments".to_string(),
+            ));
+        }
+    }
+
     let assignments = crate::service::get_assignments(&state.db, id).await?;
     Ok(Json(ApiResponse::success(assignments)))
 }

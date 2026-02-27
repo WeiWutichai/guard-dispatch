@@ -7,7 +7,7 @@ use redis::AsyncCommands;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use shared::auth::encode_jwt;
+use shared::auth::encode_jwt_with_key;
 use shared::config::JwtConfig;
 use shared::error::AppError;
 
@@ -168,10 +168,10 @@ pub async fn login(
         return Err(AppError::Unauthorized("Invalid email or password".to_string()));
     }
 
-    let access_token = encode_jwt(
+    let access_token = encode_jwt_with_key(
         user.id,
         &user.role.to_string(),
-        &jwt_config.secret,
+        &jwt_config.encoding_key,
         jwt_config.expiry_hours,
     )?;
 
@@ -267,10 +267,10 @@ pub async fn refresh_token(
         return Err(AppError::Unauthorized("Invalid email or password".to_string()));
     }
 
-    let access_token = encode_jwt(
+    let access_token = encode_jwt_with_key(
         user.id,
         &user.role.to_string(),
-        &jwt_config.secret,
+        &jwt_config.encoding_key,
         jwt_config.expiry_hours,
     )?;
 

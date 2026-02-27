@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use axum::routing::{delete, get, post, put};
 use axum::Router;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -62,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
             put(handlers::mark_as_read),
         )
         .route("/notifications/send", post(handlers::send_notification))
-        .layer(CorsLayer::permissive())
+        .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

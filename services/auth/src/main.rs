@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use axum::routing::{get, post};
 use axum::Router;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -45,15 +44,15 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health_check))
-        .route("/auth/register", post(handlers::register))
-        .route("/auth/login", post(handlers::login))
-        .route("/auth/refresh", post(handlers::refresh_token))
+        .route("/register", post(handlers::register))
+        .route("/login", post(handlers::login))
+        .route("/refresh", post(handlers::refresh_token))
         .route(
-            "/auth/me",
+            "/me",
             get(handlers::get_profile).put(handlers::update_profile),
         )
-        .route("/auth/logout", post(handlers::logout))
-        .layer(CorsLayer::permissive())
+        .route("/logout", post(handlers::logout))
+        .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

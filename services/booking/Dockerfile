@@ -32,11 +32,16 @@ RUN find services/shared/src services/booking/src -name '*.rs' | xargs touch && 
 
 FROM debian:bookworm-slim AS runtime
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
 
 WORKDIR /app
 
 COPY --from=builder /app/target/release/booking-service /app/booking-service
+
+RUN strip /app/booking-service
+
+USER appuser
 
 EXPOSE 3002
 

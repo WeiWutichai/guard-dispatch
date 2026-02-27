@@ -21,6 +21,18 @@ pub fn encode_jwt(
     secret: &str,
     expiry_hours: i64,
 ) -> Result<String, AppError> {
+    let key = EncodingKey::from_secret(secret.as_bytes());
+    encode_jwt_with_key(user_id, role, &key, expiry_hours)
+}
+
+/// Encode JWT using a pre-computed `EncodingKey` (cached in `JwtConfig`).
+/// Avoids re-deriving the key on every call.
+pub fn encode_jwt_with_key(
+    user_id: Uuid,
+    role: &str,
+    key: &EncodingKey,
+    expiry_hours: i64,
+) -> Result<String, AppError> {
     let now = Utc::now();
     let claims = JwtClaims {
         sub: user_id,
@@ -29,21 +41,20 @@ pub fn encode_jwt(
         iat: now.timestamp(),
     };
 
-    jsonwebtoken::encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-    .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))
+    jsonwebtoken::encode(&Header::default(), &claims, key)
+        .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))
 }
 
 pub fn decode_jwt(token: &str, secret: &str) -> Result<JwtClaims, AppError> {
-    let token_data = jsonwebtoken::decode::<JwtClaims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
-    )
-    .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
+    let key = DecodingKey::from_secret(secret.as_bytes());
+    decode_jwt_with_key(token, &key)
+}
+
+/// Decode JWT using a pre-computed `DecodingKey` (cached in `JwtConfig`).
+/// Avoids re-deriving the key on every call.
+pub fn decode_jwt_with_key(token: &str, key: &DecodingKey) -> Result<JwtClaims, AppError> {
+    let token_data = jsonwebtoken::decode::<JwtClaims>(token, key, &Validation::default())
+        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
     Ok(token_data.claims)
 }
@@ -124,7 +135,7 @@ where
             AppError::Unauthorized("Missing authentication token".to_string())
         })?;
 
-        let claims = decode_jwt(&token, state.jwt_secret())?;
+        let claims = decode_jwt_with_key(&token, &state.decoding_key())?;
 
         Ok(AuthUser {
             user_id: claims.sub,
@@ -136,11 +147,20 @@ where
 /// Trait that AppState must implement to provide JWT secret for the AuthUser extractor.
 pub trait HasJwtSecret {
     fn jwt_secret(&self) -> &str;
+
+    /// Return a pre-computed `DecodingKey` if available, or build one on-the-fly.
+    fn decoding_key(&self) -> DecodingKey {
+        DecodingKey::from_secret(self.jwt_secret().as_bytes())
+    }
 }
 
 impl<T: HasJwtSecret> HasJwtSecret for std::sync::Arc<T> {
     fn jwt_secret(&self) -> &str {
         T::jwt_secret(self)
+    }
+
+    fn decoding_key(&self) -> DecodingKey {
+        T::decoding_key(self)
     }
 }
 

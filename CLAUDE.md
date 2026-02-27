@@ -22,6 +22,10 @@
   - Dev: `localhost:3000` ตรง (ไม่มี basePath)
   - Production (Docker/Nginx): basePath `/pguard-app` (ตั้งผ่าน `NEXT_PUBLIC_BASE_PATH`)
 - **Mobile App:** Flutter (iOS + Android) — อยู่ใน Monorepo เดียวกัน
+  - **State Management:** Provider (`ChangeNotifierProvider`)
+  - **HTTP Client:** Dio (with JWT interceptor via `ApiClient`)
+  - **Secure Storage:** FlutterSecureStorage (Keychain on iOS, EncryptedSharedPreferences on Android)
+  - **Auth Provider:** `AuthProvider` (centralized auth state via Provider)
 
 ### Backend (Rust ทั้งหมด)
 - **Framework:** Axum 0.8 (ใช้ route syntax `/{id}` ไม่ใช่ `:id`)
@@ -155,27 +159,56 @@ CREATE TABLE chat.attachments (
 - ทุก request log เก็บใน `audit` schema
 - **JWT Storage:**
   - Web: httpOnly + Secure + SameSite=Lax **cookies** (ห้ามใช้ localStorage เด็ดขาด)
-  - Mobile (Flutter): Bearer token ใน Authorization header
+  - Mobile (Flutter): Bearer token ใน Authorization header — เก็บใน `FlutterSecureStorage` เท่านั้น
   - AuthUser extractor อ่านจาก Authorization header ก่อน → fallback ไป cookie
+- **JWT Key Caching:** `JwtConfig` เก็บ pre-computed `encoding_key` และ `decoding_key` — ใช้ `encode_jwt_with_key()` / `decode_jwt_with_key()` แทน `encode_jwt()` / `decode_jwt()` ใน production code
+  - `HasJwtSecret` trait มี default `decoding_key()` method — override ใน AppState ด้วย cached key จาก `JwtConfig`
 - **Cookie Architecture:**
   - `access_token` → httpOnly, Secure, SameSite=Lax, Path=/
   - `refresh_token` → httpOnly, Secure, SameSite=Lax, Path=/auth
   - `logged_in` → non-httpOnly marker (ค่า "1") สำหรับ frontend ตรวจสอบ auth state
+- **CORS:** ใช้ `shared::config::build_cors_layer()` เท่านั้น — อ่าน origins จาก `CORS_ALLOWED_ORIGINS` env var (comma-separated)
+  - ห้ามใช้ `CorsLayer::permissive()` เด็ดขาด
+  - Default (dev): `http://localhost:3000`
+  - Production ต้องตั้ง `CORS_ALLOWED_ORIGINS` ให้ตรงกับ domain จริง
 - **Redis:** ต้องใช้ password authentication (`--requirepass`) ทั้ง cache และ pubsub
 - **Network Isolation:** เฉพาะ Nginx expose port 80/443 — ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host
+  - Docker Compose: ใช้ `expose` ไม่ใช่ `ports` สำหรับ internal services (PostgreSQL, Redis, MinIO)
 - **Nginx Security Headers:** X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
 - **WebSocket Auth:** ใช้ cookie (ส่งอัตโนมัติตอน upgrade) — ห้ามส่ง token ใน URL query params
 - **WebSocket Data:** ห้ามส่ง conversation_id หรือ sensitive data ใน URL query params — ส่งเป็น message หลัง connection open
 - **Audit Middleware:** ต้อง validate JWT signature ด้วย real secret ก่อน trust user_id — ห้ามใช้ `insecure_disable_signature_validation()`
-  - ใช้ `middleware::from_fn_with_state(state, audit_middleware)` (ต้อง pass state ที่ implement `HasJwtSecret`)
+  - ใช้ `middleware::from_fn_with_state(state, audit_middleware)` (ต้อง pass state ที่ implement `HasJwtSecret + HasDbPool`)
+  - Audit log persist แบบ **fire-and-forget** ผ่าน `tokio::spawn` — ห้าม block response
+  - IP address: ใช้ `X-Real-IP` ก่อน → fallback `X-Forwarded-For` rightmost entry
 - **Password Hashing:** Argon2 ต้อง run ใน `tokio::task::spawn_blocking()` เสมอ — ห้าม block async runtime
 - **Login Error Messages:** ห้ามส่ง error ที่เปิดเผยว่า email มีอยู่ในระบบหรือไม่ — ใช้ message เดียวกันสำหรับ wrong password, inactive account, not found
 - **Refresh Token Rotation:** ต้องเป็น **atomic** (single `UPDATE ... WHERE refresh_token = $1 RETURNING ...`) — ห้ามทำ SELECT แล้ว UPDATE แยก
 - **Session Limit:** จำกัด max **5 sessions ต่อ user** — evict oldest sessions เมื่อเกิน
 - **Authorization (IDOR Prevention):**
   - Tracking endpoints: Guards เข้าถึงได้เฉพาะ location ตัวเอง — admins/customers เข้าถึงได้ทุก guard
-  - Chat attachment endpoints: ต้องตรวจว่า user เป็น participant ของ conversation หรือเป็น admin
+  - Booking endpoints: `get_request` / `get_assignments` ต้องตรวจว่า user เป็น owner, assigned guard, หรือ admin — ใช้ `is_guard_assigned()` helper
+  - Chat attachment endpoints: `upload_attachment` / `get_signed_url` ต้องตรวจว่า user เป็น participant ของ conversation หรือเป็น admin — ใช้ `is_conversation_participant_by_conversation()`
   - ห้ามใช้ `_user: AuthUser` (ignore user) ใน endpoint ที่ต้องการ authorization check
+- **Docker Security:**
+  - ทุก Dockerfile runtime stage ต้องมี non-root user (`appuser`) — ห้าม run container เป็น root
+  - ต้อง `strip` binary ใน runtime stage เพื่อลดขนาด image
+  - MinIO credentials ต้องตั้งผ่าน env var — ห้ามใช้ default `minioadmin`
+  - Docker Compose ใช้ `${VAR:?error}` syntax เพื่อ require env vars
+
+### Flutter Mobile
+- **Secure Storage:** ข้อมูล sensitive (JWT tokens, PIN hash) ต้องเก็บใน `FlutterSecureStorage` เท่านั้น — ห้ามใช้ `SharedPreferences` สำหรับ tokens
+  - `SharedPreferences` ใช้ได้เฉพาะ non-sensitive data (language pref, registration flags)
+- **PIN Security:** Hash PIN ด้วย SHA-256 ก่อนเก็บ — ห้ามเก็บ plaintext PIN
+- **API Client:** ใช้ `ApiClient` (Dio-based) ที่มี JWT interceptor อัตโนมัติ — ห้ามเรียก API ตรงโดยไม่ผ่าน interceptor
+  - Interceptor ใส่ Bearer token จาก `FlutterSecureStorage` อัตโนมัติ
+  - 401 response → auto-refresh token แล้ว retry
+  - Skip auth สำหรับ public endpoints (`/auth/login`, `/auth/register`, etc.)
+- **State Management:** ใช้ Provider pattern (`ChangeNotifierProvider`) — `AuthProvider` เป็น centralized auth state
+  - `main.dart` wrap app ด้วย `MultiProvider`
+  - ห้ามเช็ค auth state แยกในแต่ละ screen — ใช้ `context.read<AuthProvider>()` / `context.watch<AuthProvider>()`
+- **OTP:** ห้าม hardcode OTP ในโค้ด — ต้องส่งผ่าน API (`AuthService.verifyOtp()`)
+- **Bank Account Input:** ใช้ `FilteringTextInputFormatter.digitsOnly`, `maxLength: 15`, ปิด `autocorrect` + `enableSuggestions`
 
 ### Performance Target
 - Push notification: **< 1 วินาที**
@@ -222,6 +255,19 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │   │   ├── lib/api.ts          ← Centralized API client (cookie-based auth)
 │   │   └── components/AuthProvider.tsx
 │   └── mobile/                 ← Flutter
+│       ├── lib/
+│       │   ├── main.dart               ← Entry point (MultiProvider wrap)
+│       │   ├── providers/
+│       │   │   └── auth_provider.dart   ← Centralized auth state (Provider)
+│       │   ├── services/
+│       │   │   ├── api_client.dart      ← Dio HTTP client + JWT interceptor
+│       │   │   ├── auth_service.dart    ← Token storage + login/OTP
+│       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
+│       │   │   └── language_service.dart
+│       │   ├── screens/                ← 31 screens (guard/customer/common)
+│       │   ├── l10n/                   ← Bilingual strings (TH/EN)
+│       │   └── theme/                  ← Colors, styles
+│       └── pubspec.yaml
 └── database/
     └── migrations/             ← SQL files (auto-run by PostgreSQL on init)
 ```
@@ -328,6 +374,7 @@ S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=<access-key>
 S3_SECRET_KEY=<secret-key>
 S3_BUCKET=guard-dispatch-files
+CORS_ALLOWED_ORIGINS=http://localhost:3000
 RUST_LOG=info
 ```
 
@@ -336,6 +383,8 @@ RUST_LOG=info
 ---
 
 ## ข้อห้าม (Do NOT)
+
+### Rust Backend
 - ❌ ห้ามแก้ไข `/database/migrations` โดยไม่สร้าง migration ใหม่
 - ❌ ห้ามใช้ `.unwrap()` ใน production code
 - ❌ ห้าม hardcode credentials ในโค้ด
@@ -344,10 +393,10 @@ RUST_LOG=info
 - ❌ ห้าม store binary/image ใน PostgreSQL
 - ❌ ห้าม expose MinIO/R2 bucket โดยตรง
 - ❌ ห้าม accept ไฟล์ที่ไม่ใช่ image/jpeg, image/png, image/webp
-- ❌ ห้ามเรียก fetch ตรงใน Frontend — ใช้ `lib/api.ts` เท่านั้น
-- ❌ ห้ามเก็บ JWT ใน localStorage/sessionStorage — ใช้ httpOnly cookie เท่านั้น
+- ❌ ห้ามเรียก fetch ตรงใน Frontend — ใช้ `lib/api.ts` (web) หรือ `ApiClient` (mobile) เท่านั้น
+- ❌ ห้ามเก็บ JWT ใน localStorage/sessionStorage — ใช้ httpOnly cookie (web) หรือ FlutterSecureStorage (mobile) เท่านั้น
 - ❌ ห้ามส่ง JWT token ใน WebSocket URL query params — ใช้ cookie auth
-- ❌ ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host — เฉพาะ Nginx 80/443
+- ❌ ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host — เฉพาะ Nginx 80/443 — ใช้ `expose` ไม่ใช่ `ports` ใน docker-compose
 - ❌ ห้ามเชื่อมต่อ Redis โดยไม่มี password
 - ❌ ห้าม validate file upload ด้วย MIME type อย่างเดียว — ต้องตรวจ **magic bytes** ด้วยเสมอ
 - ❌ ห้ามใช้ `insecure_disable_signature_validation()` — audit middleware ต้อง validate JWT ด้วย real secret
@@ -359,3 +408,16 @@ RUST_LOG=info
 - ❌ ห้ามเรียก `get_multiplexed_tokio_connection()` ทุก request — เก็บ connection ใน AppState
 - ❌ ห้ามทำ `DEL` + `SET_EX` แยก เมื่อ update cache — ใช้ `SET_EX` ตรง (atomic overwrite)
 - ❌ ห้าม `.clone()` file data ก้อนใหญ่โดยไม่จำเป็น — capture size ก่อนแล้ว move ownership
+- ❌ ห้ามใช้ `CorsLayer::permissive()` — ใช้ `shared::config::build_cors_layer()` ที่อ่านจาก `CORS_ALLOWED_ORIGINS` env var
+- ❌ ห้ามสร้าง `EncodingKey`/`DecodingKey` ทุก request — ใช้ cached keys จาก `JwtConfig` (`encode_jwt_with_key()` / `decode_jwt_with_key()`)
+- ❌ ห้าม run Docker container เป็น root — ทุก Dockerfile ต้องมี `USER appuser` (non-root)
+- ❌ ห้ามใช้ MinIO default credentials (`minioadmin`) — ต้องตั้ง `S3_ACCESS_KEY` / `S3_SECRET_KEY` ผ่าน env var
+
+### Flutter Mobile
+- ❌ ห้ามเก็บ JWT tokens หรือ PIN ใน `SharedPreferences` — ใช้ `FlutterSecureStorage` เท่านั้น
+- ❌ ห้ามเก็บ plaintext PIN — ต้อง hash ด้วย SHA-256 ก่อน store
+- ❌ ห้าม hardcode OTP ในโค้ด — ต้องส่งผ่าน API (`AuthService.verifyOtp()`)
+- ❌ ห้ามเรียก API ตรงโดยไม่ผ่าน `ApiClient` — ต้องใช้ Dio interceptor ที่ attach Bearer token อัตโนมัติ
+- ❌ ห้ามเช็ค auth state แยกในแต่ละ screen — ใช้ `AuthProvider` ผ่าน Provider
+- ❌ ห้าม navigate ตรงหลัง login โดยไม่ validate credentials กับ backend ก่อน
+- ❌ ห้าม expose bank account number ใน UI ที่ไม่จำเป็น — input ต้อง mask, ปิด autocorrect/suggestions

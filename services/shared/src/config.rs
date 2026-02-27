@@ -1,4 +1,35 @@
+use axum::http::{HeaderValue, Method};
+use tower_http::cors::CorsLayer;
+
 use crate::error::AppError;
+
+/// Build a CORS layer from CORS_ALLOWED_ORIGINS env var.
+///
+/// - If CORS_ALLOWED_ORIGINS is set, parse comma-separated origins.
+/// - If not set, allow only localhost:3000 (safe dev default).
+/// - Production must set CORS_ALLOWED_ORIGINS explicitly.
+pub fn build_cors_layer() -> CorsLayer {
+    let origins_str = std::env::var("CORS_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let origins: Vec<HeaderValue> = origins_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::PATCH,
+            Method::OPTIONS,
+        ])
+        .allow_headers(tower_http::cors::Any)
+        .allow_credentials(true)
+}
 
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
@@ -12,10 +43,23 @@ pub struct RedisConfig {
     pub pubsub_url: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct JwtConfig {
     pub secret: String,
     pub expiry_hours: i64,
+    /// Pre-computed encoding key — avoids re-creating on every `encode_jwt` call.
+    pub encoding_key: jsonwebtoken::EncodingKey,
+    /// Pre-computed decoding key — avoids re-creating on every `decode_jwt` call.
+    pub decoding_key: jsonwebtoken::DecodingKey,
+}
+
+impl std::fmt::Debug for JwtConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JwtConfig")
+            .field("expiry_hours", &self.expiry_hours)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -64,11 +108,16 @@ impl RedisConfig {
 
 impl JwtConfig {
     pub fn from_env() -> Result<Self, AppError> {
+        let secret = require_env("JWT_SECRET")?;
+        let encoding_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let decoding_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
         Ok(Self {
-            secret: require_env("JWT_SECRET")?,
+            secret,
             expiry_hours: optional_env("JWT_EXPIRY_HOURS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(24),
+            encoding_key,
+            decoding_key,
         })
     }
 }

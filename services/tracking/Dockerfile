@@ -32,11 +32,16 @@ RUN find services/shared/src services/tracking/src -name '*.rs' | xargs touch &&
 
 FROM debian:bookworm-slim AS runtime
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
 
 WORKDIR /app
 
 COPY --from=builder /app/target/release/tracking-service /app/tracking-service
+
+RUN strip /app/tracking-service
+
+USER appuser
 
 EXPOSE 3003
 

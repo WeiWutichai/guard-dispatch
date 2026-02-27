@@ -253,6 +253,31 @@ pub async fn is_conversation_participant(
 }
 
 // =============================================================================
+// Check conversation participant (by conversation_id for upload authz)
+// =============================================================================
+
+pub async fn is_conversation_participant_by_conversation(
+    db: &PgPool,
+    conversation_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, AppError> {
+    let result: Option<bool> = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM chat.conversation_participants
+            WHERE conversation_id = $1 AND user_id = $2
+        )
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(result.unwrap_or(false))
+}
+
+// =============================================================================
 // Get Attachment (for signed URL generation)
 // =============================================================================
 

@@ -35,11 +35,16 @@ RUN find services/shared/src services/chat/src -name '*.rs' | xargs touch && car
 # Runtime
 FROM debian:trixie-slim AS runtime
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
 
 WORKDIR /app
 
 COPY --from=builder /app/target/release/chat-service /app/chat-service
+
+RUN strip /app/chat-service
+
+USER appuser
 
 EXPOSE 3006
 

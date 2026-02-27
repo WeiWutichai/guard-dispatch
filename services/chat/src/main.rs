@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use axum::routing::{get, post};
 use axum::Router;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -86,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
         // REST — Attachments (image upload + signed URL)
         .route("/attachments", post(handlers::upload_attachment))
         .route("/attachments/{id}", get(handlers::get_signed_url))
-        .layer(CorsLayer::permissive())
+        .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
