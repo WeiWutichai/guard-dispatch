@@ -9,12 +9,43 @@ use axum::routing::{delete, get, post, put};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
 use shared::db::create_pool;
+use shared::openapi::SecurityAddon;
 use shared::redis_client::create_redis_client;
 
 use crate::state::{AppState, FcmConfig};
+
+#[derive(OpenApi)]
+#[openapi(
+    info(title = "Guard Dispatch - Notification Service", version = "0.1.0"),
+    paths(
+        handlers::register_token,
+        handlers::unregister_token,
+        handlers::list_notifications,
+        handlers::mark_as_read,
+        handlers::send_notification,
+    ),
+    components(schemas(
+        models::NotificationType,
+        models::RegisterTokenRequest,
+        models::SendNotificationRequest,
+        models::NotificationLogResponse,
+        models::FcmTokenResponse,
+        handlers::DeleteTokenRequest,
+        shared::error::ErrorBody,
+        shared::error::ErrorDetail,
+    )),
+    modifiers(&SecurityAddon),
+    tags(
+        (name = "FCM Tokens", description = "Device token management"),
+        (name = "Notifications", description = "Notification management"),
+    ),
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -61,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
             put(handlers::mark_as_read),
         )
         .route("/notifications/send", post(handlers::send_notification))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

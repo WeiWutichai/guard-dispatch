@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 // =============================================================================
@@ -7,7 +8,7 @@ use uuid::Uuid;
 // =============================================================================
 
 /// GPS update received from guard's device via WebSocket
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, ToSchema)]
 pub struct GpsUpdate {
     pub lat: f64,
     pub lng: f64,
@@ -18,7 +19,7 @@ pub struct GpsUpdate {
 }
 
 /// Outgoing WebSocket message to subscribers
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, ToSchema)]
 pub struct GpsEvent {
     pub guard_id: Uuid,
     pub lat: f64,
@@ -33,7 +34,7 @@ pub struct GpsEvent {
 // REST Response DTOs
 // =============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LocationResponse {
     pub guard_id: Uuid,
     pub lat: f64,
@@ -44,7 +45,7 @@ pub struct LocationResponse {
     pub recorded_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LocationHistoryResponse {
     pub id: Uuid,
     pub guard_id: Uuid,
@@ -58,7 +59,7 @@ pub struct LocationHistoryResponse {
 // Query params
 // =============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct HistoryQuery {
     pub assignment_id: Option<Uuid>,
     pub limit: Option<i64>,

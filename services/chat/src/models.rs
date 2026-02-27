@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 // =============================================================================
 // Enums
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type, ToSchema)]
 #[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "message_type", rename_all = "lowercase")]
 pub enum MessageType {
@@ -19,14 +20,14 @@ pub enum MessageType {
 // WebSocket Messages
 // =============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct IncomingChatMessage {
     pub conversation_id: Uuid,
     pub content: Option<String>,
     pub message_type: Option<MessageType>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, ToSchema)]
 pub struct OutgoingChatMessage {
     pub id: Uuid,
     pub conversation_id: Uuid,
@@ -40,13 +41,13 @@ pub struct OutgoingChatMessage {
 // Request DTOs
 // =============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateConversationRequest {
     pub request_id: Uuid,
     pub participant_ids: Vec<Uuid>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ListMessagesQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -56,14 +57,14 @@ pub struct ListMessagesQuery {
 // Response DTOs
 // =============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ConversationResponse {
     pub id: Uuid,
     pub request_id: Uuid,
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub conversation_id: Uuid,
@@ -73,7 +74,7 @@ pub struct MessageResponse {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AttachmentResponse {
     pub id: Uuid,
     pub message_id: Uuid,

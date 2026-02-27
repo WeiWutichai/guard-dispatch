@@ -6,8 +6,19 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use shared::auth::AuthUser;
-use shared::error::AppError;
+use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
+
+/// Schema-only struct for documenting multipart upload in Swagger UI.
+/// Not used in code — Axum uses `Multipart` extractor directly.
+#[derive(utoipa::ToSchema)]
+pub struct AttachmentUploadForm {
+    /// UUID of the conversation
+    pub conversation_id: String,
+    /// Image file (JPEG, PNG, or WEBP, max 10MB)
+    #[schema(format = "binary")]
+    pub file: Vec<u8>,
+}
 
 use crate::models::{
     AttachmentResponse, ConversationResponse, CreateConversationRequest, IncomingChatMessage,
@@ -19,7 +30,16 @@ use crate::state::AppState;
 // WebSocket Chat
 // =============================================================================
 
-/// GET /ws/chat — WebSocket upgrade for real-time chat
+#[utoipa::path(
+    get,
+    path = "/ws/chat",
+    tag = "Chat WebSocket",
+    security(("bearer" = [])),
+    responses(
+        (status = 101, description = "WebSocket upgrade for real-time chat. Send IncomingChatMessage JSON after connection."),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
@@ -78,7 +98,17 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
 // REST Endpoints
 // =============================================================================
 
-/// POST /conversations — Create a new conversation
+#[utoipa::path(
+    post,
+    path = "/conversations",
+    tag = "Conversations",
+    security(("bearer" = [])),
+    request_body = CreateConversationRequest,
+    responses(
+        (status = 200, description = "Conversation created", body = ConversationResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn create_conversation(
     State(state): State<Arc<AppState>>,
     _user: AuthUser,
@@ -88,7 +118,16 @@ pub async fn create_conversation(
     Ok(Json(ApiResponse::success(conversation)))
 }
 
-/// GET /conversations — List user's conversations
+#[utoipa::path(
+    get,
+    path = "/conversations",
+    tag = "Conversations",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "List of conversations", body = Vec<ConversationResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn list_conversations(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -97,7 +136,21 @@ pub async fn list_conversations(
     Ok(Json(ApiResponse::success(conversations)))
 }
 
-/// GET /conversations/{id}/messages — Get message history
+#[utoipa::path(
+    get,
+    path = "/conversations/{id}/messages",
+    tag = "Messages",
+    security(("bearer" = [])),
+    params(
+        ("id" = Uuid, Path, description = "Conversation UUID"),
+        ListMessagesQuery,
+    ),
+    responses(
+        (status = 200, description = "Message history", body = Vec<MessageResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
 pub async fn list_messages(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -108,7 +161,19 @@ pub async fn list_messages(
     Ok(Json(ApiResponse::success(messages)))
 }
 
-/// POST /attachments — Upload image attachment (multipart)
+#[utoipa::path(
+    post,
+    path = "/attachments",
+    tag = "Attachments",
+    security(("bearer" = [])),
+    request_body(content = AttachmentUploadForm, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Attachment uploaded", body = AttachmentResponse),
+        (status = 400, description = "Invalid file or missing fields", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Not a participant", body = ErrorBody),
+    ),
+)]
 pub async fn upload_attachment(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -217,7 +282,19 @@ pub async fn upload_attachment(
     Ok(Json(ApiResponse::success(attachment)))
 }
 
-/// GET /attachments/{id} — Get signed URL for an attachment
+#[utoipa::path(
+    get,
+    path = "/attachments/{id}",
+    tag = "Attachments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Attachment UUID")),
+    responses(
+        (status = 200, description = "Attachment with fresh signed URL", body = AttachmentResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
 pub async fn get_signed_url(
     State(state): State<Arc<AppState>>,
     user: AuthUser,

@@ -6,13 +6,22 @@ use chrono::Utc;
 use std::sync::Arc;
 
 use shared::auth::AuthUser;
-use shared::error::AppError;
+use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{GpsEvent, GpsUpdate, HistoryQuery, LocationHistoryResponse, LocationResponse};
 use crate::state::AppState;
 
-/// GET /ws/track — WebSocket upgrade for GPS tracking
+#[utoipa::path(
+    get,
+    path = "/ws/track",
+    tag = "GPS Tracking",
+    security(("bearer" = [])),
+    responses(
+        (status = 101, description = "WebSocket upgrade for real-time GPS tracking. Send GpsUpdate JSON messages."),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
@@ -85,7 +94,19 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
     tracing::info!("GPS WebSocket disconnected: guard_id={}", user.user_id);
 }
 
-/// GET /locations/{guard_id} — Get latest location of a guard
+#[utoipa::path(
+    get,
+    path = "/locations/{guard_id}",
+    tag = "Locations",
+    security(("bearer" = [])),
+    params(("guard_id" = Uuid, Path, description = "Guard UUID")),
+    responses(
+        (status = 200, description = "Latest guard location", body = LocationResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guards can only see own location", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
 pub async fn get_latest_location(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -102,7 +123,21 @@ pub async fn get_latest_location(
     Ok(Json(ApiResponse::success(location)))
 }
 
-/// GET /locations/{guard_id}/history — Get location history
+#[utoipa::path(
+    get,
+    path = "/locations/{guard_id}/history",
+    tag = "Locations",
+    security(("bearer" = [])),
+    params(
+        ("guard_id" = Uuid, Path, description = "Guard UUID"),
+        HistoryQuery,
+    ),
+    responses(
+        (status = 200, description = "Location history", body = Vec<LocationHistoryResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
 pub async fn get_location_history(
     State(state): State<Arc<AppState>>,
     user: AuthUser,

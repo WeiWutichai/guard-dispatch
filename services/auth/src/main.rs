@@ -14,6 +14,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
 use shared::db::create_pool;
+use shared::openapi::SecurityAddon;
 use shared::redis_client::create_redis_client;
 
 use crate::state::AppState;
@@ -40,7 +41,7 @@ use crate::state::AppState;
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
-    modifiers(&shared::openapi::SecurityAddon),
+    modifiers(&SecurityAddon),
     tags(
         (name = "Auth", description = "Authentication endpoints"),
         (name = "Profile", description = "User profile management"),

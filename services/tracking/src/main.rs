@@ -9,12 +9,39 @@ use axum::routing::get;
 use axum::Router;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
 use shared::db::create_pool;
+use shared::openapi::SecurityAddon;
 use shared::redis_client::create_redis_client;
 
 use crate::state::AppState;
+
+#[derive(OpenApi)]
+#[openapi(
+    info(title = "Guard Dispatch - Tracking Service", version = "0.1.0"),
+    paths(
+        handlers::ws_handler,
+        handlers::get_latest_location,
+        handlers::get_location_history,
+    ),
+    components(schemas(
+        models::GpsUpdate,
+        models::GpsEvent,
+        models::LocationResponse,
+        models::LocationHistoryResponse,
+        shared::error::ErrorBody,
+        shared::error::ErrorDetail,
+    )),
+    modifiers(&SecurityAddon),
+    tags(
+        (name = "GPS Tracking", description = "Real-time GPS WebSocket"),
+        (name = "Locations", description = "Location query endpoints"),
+    ),
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -55,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
             "/locations/{guard_id}/history",
             get(handlers::get_location_history),
         )
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

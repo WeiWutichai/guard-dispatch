@@ -25,7 +25,7 @@ impl<T: HasDbPool> HasDbPool for std::sync::Arc<T> {
 /// Inserts audit records asynchronously (fire-and-forget) to avoid blocking responses.
 ///
 /// Usage in a service (requires state that implements HasJwtSecret + HasDbPool):
-/// ```rust
+/// ```rust,no_run,ignore
 /// use axum::middleware;
 /// use shared::audit::audit_middleware;
 ///

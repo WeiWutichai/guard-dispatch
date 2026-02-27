@@ -10,9 +10,11 @@ impl Modify for SecurityAddon {
         if let Some(components) = openapi.components.as_mut() {
             components.add_security_scheme(
                 "bearer",
-                SecurityScheme::Http(
-                    Http::new(HttpAuthScheme::Bearer).bearer_format("JWT"),
-                ),
+                SecurityScheme::Http({
+                    let mut http = Http::new(HttpAuthScheme::Bearer);
+                    http.bearer_format = Some("JWT".into());
+                    http
+                }),
             );
         }
     }
