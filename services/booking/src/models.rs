@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 // =============================================================================
 // Enums (matching PostgreSQL enums)
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type, ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "request_status", rename_all = "snake_case")]
 pub enum RequestStatus {
@@ -17,7 +18,7 @@ pub enum RequestStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type, ToSchema)]
 #[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "urgency_level", rename_all = "lowercase")]
 pub enum UrgencyLevel {
@@ -27,7 +28,7 @@ pub enum UrgencyLevel {
     Critical,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type, ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "assignment_status", rename_all = "snake_case")]
 pub enum AssignmentStatus {
@@ -42,7 +43,7 @@ pub enum AssignmentStatus {
 // Request DTOs
 // =============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateRequestDto {
     pub location_lat: f64,
     pub location_lng: f64,
@@ -56,17 +57,17 @@ fn default_urgency() -> UrgencyLevel {
     UrgencyLevel::Medium
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct AssignGuardDto {
     pub guard_id: Uuid,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateAssignmentStatusDto {
     pub status: AssignmentStatus,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ListRequestsQuery {
     pub status: Option<RequestStatus>,
     pub limit: Option<i64>,
@@ -77,7 +78,7 @@ pub struct ListRequestsQuery {
 // Response DTOs
 // =============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct GuardRequestResponse {
     pub id: Uuid,
     pub customer_id: Uuid,
@@ -91,7 +92,7 @@ pub struct GuardRequestResponse {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AssignmentResponse {
     pub id: Uuid,
     pub request_id: Uuid,

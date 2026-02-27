@@ -9,12 +9,46 @@ use axum::routing::{get, post, put};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
 use shared::db::create_pool;
 use shared::redis_client::create_redis_client;
 
 use crate::state::AppState;
+
+#[derive(OpenApi)]
+#[openapi(
+    info(title = "Guard Dispatch - Booking Service", version = "0.1.0"),
+    paths(
+        handlers::create_request,
+        handlers::list_requests,
+        handlers::get_request,
+        handlers::cancel_request,
+        handlers::assign_guard,
+        handlers::update_assignment_status,
+        handlers::get_assignments,
+    ),
+    components(schemas(
+        models::RequestStatus,
+        models::UrgencyLevel,
+        models::AssignmentStatus,
+        models::CreateRequestDto,
+        models::AssignGuardDto,
+        models::UpdateAssignmentStatusDto,
+        models::GuardRequestResponse,
+        models::AssignmentResponse,
+        shared::error::ErrorBody,
+        shared::error::ErrorDetail,
+    )),
+    modifiers(&shared::openapi::SecurityAddon),
+    tags(
+        (name = "Requests", description = "Guard request management"),
+        (name = "Assignments", description = "Guard assignment management"),
+    ),
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
             "/assignments/{id}/status",
             put(handlers::update_assignment_status),
         )
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

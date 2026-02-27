@@ -7,7 +7,7 @@ use std::sync::Arc;
 use shared::auth::{
     build_clear_cookie, build_cookie, AuthUser, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE,
 };
-use shared::error::AppError;
+use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
@@ -49,6 +49,17 @@ fn auth_cookie_headers(auth: &AuthResponse) -> HeaderMap {
     headers
 }
 
+#[utoipa::path(
+    post,
+    path = "/register",
+    tag = "Auth",
+    request_body = RegisterRequest,
+    responses(
+        (status = 200, description = "User registered successfully", body = UserResponse),
+        (status = 400, description = "Validation error", body = ErrorBody),
+        (status = 409, description = "Email already exists", body = ErrorBody),
+    ),
+)]
 pub async fn register(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterRequest>,
@@ -57,6 +68,16 @@ pub async fn register(
     Ok(Json(ApiResponse::success(user)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/login",
+    tag = "Auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Login successful, tokens returned", body = AuthResponse),
+        (status = 401, description = "Invalid credentials", body = ErrorBody),
+    ),
+)]
 pub async fn login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -85,6 +106,17 @@ pub async fn login(
     Ok((cookie_headers, Json(ApiResponse::success(auth))))
 }
 
+#[utoipa::path(
+    post,
+    path = "/refresh",
+    tag = "Auth",
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Token refreshed successfully", body = AuthResponse),
+        (status = 400, description = "Missing refresh token", body = ErrorBody),
+        (status = 401, description = "Invalid or expired refresh token", body = ErrorBody),
+    ),
+)]
 pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -130,6 +162,16 @@ pub async fn refresh_token(
     Ok((cookie_headers, Json(ApiResponse::success(auth))))
 }
 
+#[utoipa::path(
+    get,
+    path = "/me",
+    tag = "Profile",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "User profile retrieved", body = UserResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn get_profile(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -138,6 +180,17 @@ pub async fn get_profile(
     Ok(Json(ApiResponse::success(profile)))
 }
 
+#[utoipa::path(
+    put,
+    path = "/me",
+    tag = "Profile",
+    security(("bearer" = [])),
+    request_body = UpdateProfileRequest,
+    responses(
+        (status = 200, description = "Profile updated", body = UserResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn update_profile(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -148,6 +201,16 @@ pub async fn update_profile(
     Ok(Json(ApiResponse::success(profile)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/logout",
+    tag = "Auth",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Logged out, cookies cleared"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn logout(
     State(state): State<Arc<AppState>>,
     user: AuthUser,

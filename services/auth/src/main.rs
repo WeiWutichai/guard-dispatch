@@ -9,12 +9,44 @@ use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
 use shared::db::create_pool;
 use shared::redis_client::create_redis_client;
 
 use crate::state::AppState;
+
+#[derive(OpenApi)]
+#[openapi(
+    info(title = "Guard Dispatch - Auth Service", version = "0.1.0"),
+    paths(
+        handlers::register,
+        handlers::login,
+        handlers::refresh_token,
+        handlers::get_profile,
+        handlers::update_profile,
+        handlers::logout,
+    ),
+    components(schemas(
+        models::RegisterRequest,
+        models::LoginRequest,
+        models::RefreshRequest,
+        models::UpdateProfileRequest,
+        models::AuthResponse,
+        models::UserResponse,
+        shared::models::UserRole,
+        shared::error::ErrorBody,
+        shared::error::ErrorDetail,
+    )),
+    modifiers(&shared::openapi::SecurityAddon),
+    tags(
+        (name = "Auth", description = "Authentication endpoints"),
+        (name = "Profile", description = "User profile management"),
+    ),
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_profile).put(handlers::update_profile),
         )
         .route("/logout", post(handlers::logout))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

@@ -3,7 +3,7 @@ use axum::Json;
 use std::sync::Arc;
 
 use shared::auth::AuthUser;
-use shared::error::AppError;
+use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
@@ -12,7 +12,17 @@ use crate::models::{
 };
 use crate::state::AppState;
 
-/// POST /requests — Create a new guard request (customer)
+#[utoipa::path(
+    post,
+    path = "/requests",
+    tag = "Requests",
+    security(("bearer" = [])),
+    request_body = CreateRequestDto,
+    responses(
+        (status = 200, description = "Request created", body = GuardRequestResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn create_request(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -22,7 +32,17 @@ pub async fn create_request(
     Ok(Json(ApiResponse::success(request)))
 }
 
-/// GET /requests — List guard requests (role-based filtering)
+#[utoipa::path(
+    get,
+    path = "/requests",
+    tag = "Requests",
+    security(("bearer" = [])),
+    params(ListRequestsQuery),
+    responses(
+        (status = 200, description = "List of requests", body = Vec<GuardRequestResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn list_requests(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -33,7 +53,19 @@ pub async fn list_requests(
     Ok(Json(ApiResponse::success(requests)))
 }
 
-/// GET /requests/{id} — Get a specific guard request (IDOR-safe)
+#[utoipa::path(
+    get,
+    path = "/requests/{id}",
+    tag = "Requests",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Request UUID")),
+    responses(
+        (status = 200, description = "Request details", body = GuardRequestResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
 pub async fn get_request(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -55,7 +87,19 @@ pub async fn get_request(
     Ok(Json(ApiResponse::success(request)))
 }
 
-/// PUT /requests/{id}/cancel — Cancel a guard request (customer only)
+#[utoipa::path(
+    put,
+    path = "/requests/{id}/cancel",
+    tag = "Requests",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Request UUID")),
+    responses(
+        (status = 200, description = "Request cancelled", body = GuardRequestResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
 pub async fn cancel_request(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -65,7 +109,19 @@ pub async fn cancel_request(
     Ok(Json(ApiResponse::success(request)))
 }
 
-/// POST /requests/{id}/assign — Assign a guard to a request (admin only)
+#[utoipa::path(
+    post,
+    path = "/requests/{id}/assign",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Request UUID")),
+    request_body = AssignGuardDto,
+    responses(
+        (status = 200, description = "Guard assigned", body = AssignmentResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+    ),
+)]
 pub async fn assign_guard(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -81,7 +137,19 @@ pub async fn assign_guard(
     Ok(Json(ApiResponse::success(assignment)))
 }
 
-/// PUT /assignments/{id}/status — Update assignment status (guard only)
+#[utoipa::path(
+    put,
+    path = "/assignments/{id}/status",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment UUID")),
+    request_body = UpdateAssignmentStatusDto,
+    responses(
+        (status = 200, description = "Status updated", body = AssignmentResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
 pub async fn update_assignment_status(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -93,7 +161,18 @@ pub async fn update_assignment_status(
     Ok(Json(ApiResponse::success(assignment)))
 }
 
-/// GET /requests/{id}/assignments — Get assignments for a request (IDOR-safe)
+#[utoipa::path(
+    get,
+    path = "/requests/{id}/assignments",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Request UUID")),
+    responses(
+        (status = 200, description = "List of assignments", body = Vec<AssignmentResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
 pub async fn get_assignments(
     State(state): State<Arc<AppState>>,
     user: AuthUser,

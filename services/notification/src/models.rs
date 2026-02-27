@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 // =============================================================================
 // Enums
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type, ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "notification_type", rename_all = "snake_case")]
 pub enum NotificationType {
@@ -24,13 +25,13 @@ pub enum NotificationType {
 // Request DTOs
 // =============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterTokenRequest {
     pub token: String,
     pub device_type: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SendNotificationRequest {
     pub user_id: Uuid,
     pub title: String,
@@ -39,7 +40,7 @@ pub struct SendNotificationRequest {
     pub payload: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ListNotificationsQuery {
     pub unread_only: Option<bool>,
     pub limit: Option<i64>,
@@ -50,7 +51,7 @@ pub struct ListNotificationsQuery {
 // Response DTOs
 // =============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct NotificationLogResponse {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -63,7 +64,7 @@ pub struct NotificationLogResponse {
     pub read_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FcmTokenResponse {
     pub id: Uuid,
     pub token: String,

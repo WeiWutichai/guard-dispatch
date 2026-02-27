@@ -3,7 +3,7 @@ use axum::Json;
 use std::sync::Arc;
 
 use shared::auth::AuthUser;
-use shared::error::AppError;
+use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
@@ -12,7 +12,17 @@ use crate::models::{
 };
 use crate::state::AppState;
 
-/// POST /tokens — Register an FCM device token
+#[utoipa::path(
+    post,
+    path = "/tokens",
+    tag = "FCM Tokens",
+    security(("bearer" = [])),
+    request_body = RegisterTokenRequest,
+    responses(
+        (status = 200, description = "Token registered"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn register_token(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -23,11 +33,22 @@ pub async fn register_token(
 }
 
 /// DELETE /tokens — Unregister an FCM device token
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct DeleteTokenRequest {
     pub token: String,
 }
 
+#[utoipa::path(
+    delete,
+    path = "/tokens",
+    tag = "FCM Tokens",
+    security(("bearer" = [])),
+    request_body = DeleteTokenRequest,
+    responses(
+        (status = 200, description = "Token unregistered"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn unregister_token(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -37,7 +58,17 @@ pub async fn unregister_token(
     Ok(Json(ApiResponse::success(())))
 }
 
-/// GET /notifications — List user notifications
+#[utoipa::path(
+    get,
+    path = "/notifications",
+    tag = "Notifications",
+    security(("bearer" = [])),
+    params(ListNotificationsQuery),
+    responses(
+        (status = 200, description = "List of notifications", body = Vec<NotificationLogResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
 pub async fn list_notifications(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -48,7 +79,18 @@ pub async fn list_notifications(
     Ok(Json(ApiResponse::success(notifications)))
 }
 
-/// PUT /notifications/{id}/read — Mark notification as read
+#[utoipa::path(
+    put,
+    path = "/notifications/{id}/read",
+    tag = "Notifications",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Notification UUID")),
+    responses(
+        (status = 200, description = "Notification marked as read", body = NotificationLogResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
 pub async fn mark_as_read(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
@@ -58,7 +100,18 @@ pub async fn mark_as_read(
     Ok(Json(ApiResponse::success(notification)))
 }
 
-/// POST /notifications/send — Send notification (internal/admin)
+#[utoipa::path(
+    post,
+    path = "/notifications/send",
+    tag = "Notifications",
+    security(("bearer" = [])),
+    request_body = SendNotificationRequest,
+    responses(
+        (status = 200, description = "Notification sent", body = NotificationLogResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+    ),
+)]
 pub async fn send_notification(
     State(state): State<Arc<AppState>>,
     user: AuthUser,

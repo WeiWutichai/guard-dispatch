@@ -24,6 +24,8 @@ tracing-subscriber = { workspace = true }
 thiserror       = { workspace = true }
 anyhow          = { workspace = true }
 dotenvy         = { workspace = true }
+utoipa          = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
 shared          = { workspace = true }
 # HTTP client for FCM API
 reqwest         = { workspace = true }

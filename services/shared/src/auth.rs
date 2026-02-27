@@ -3,11 +3,12 @@ use axum::http::request::Parts;
 use chrono::Utc;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct JwtClaims {
     pub sub: Uuid,
     pub role: String,
@@ -95,7 +96,7 @@ pub fn extract_cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'
 /// Axum extractor that validates JWT from:
 /// 1. Authorization: Bearer <token> header (for mobile/API clients)
 /// 2. access_token cookie (for web browser clients)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ToSchema)]
 pub struct AuthUser {
     pub user_id: Uuid,
     pub role: String,

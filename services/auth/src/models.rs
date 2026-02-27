@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared::models::UserRole;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 // =============================================================================
 // Request DTOs
 // =============================================================================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterRequest {
     pub email: String,
     pub phone: String,
@@ -21,19 +22,19 @@ fn default_role() -> UserRole {
     UserRole::Customer
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RefreshRequest {
     #[serde(default)]
     pub refresh_token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateProfileRequest {
     pub full_name: Option<String>,
     pub phone: Option<String>,
@@ -44,7 +45,7 @@ pub struct UpdateProfileRequest {
 // Response DTOs
 // =============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AuthResponse {
     pub access_token: String,
     pub refresh_token: String,
@@ -52,7 +53,7 @@ pub struct AuthResponse {
     pub expires_in: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct UserResponse {
     pub id: Uuid,
     pub email: String,

@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use utoipa::ToSchema;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -29,15 +30,17 @@ pub enum AppError {
     Redis(#[from] redis::RedisError),
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
-    error: ErrorDetail,
+#[derive(Serialize, ToSchema)]
+pub struct ErrorBody {
+    pub error: ErrorDetail,
 }
 
-#[derive(Serialize)]
-struct ErrorDetail {
-    code: String,
-    message: String,
+#[derive(Serialize, ToSchema)]
+pub struct ErrorDetail {
+    /// Error code (e.g., "BAD_REQUEST", "UNAUTHORIZED", "NOT_FOUND")
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
 }
 
 impl IntoResponse for AppError {
