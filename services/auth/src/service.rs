@@ -105,6 +105,21 @@ pub async fn register(
         return Err(AppError::BadRequest("All fields are required".to_string()));
     }
 
+    // Basic email format validation
+    if !req.email.contains('@') || !req.email.contains('.') || req.email.len() < 5 {
+        return Err(AppError::BadRequest(
+            "Invalid email format".to_string(),
+        ));
+    }
+
+    // Thai phone format validation: 0x-xxxx-xxxx (10 digits starting with 0)
+    let phone_digits: String = req.phone.chars().filter(|c| c.is_ascii_digit()).collect();
+    if phone_digits.len() != 10 || !phone_digits.starts_with('0') {
+        return Err(AppError::BadRequest(
+            "Invalid phone format — must be 10 digits starting with 0".to_string(),
+        ));
+    }
+
     if req.password.len() < 8 {
         return Err(AppError::BadRequest(
             "Password must be at least 8 characters".to_string(),
@@ -446,6 +461,15 @@ mod tests {
     fn validate_register_fields(req: &RegisterRequest) -> Result<(), AppError> {
         if req.email.is_empty() || req.password.is_empty() || req.full_name.is_empty() || req.phone.is_empty() {
             return Err(AppError::BadRequest("All fields are required".to_string()));
+        }
+        if !req.email.contains('@') || !req.email.contains('.') || req.email.len() < 5 {
+            return Err(AppError::BadRequest("Invalid email format".to_string()));
+        }
+        let phone_digits: String = req.phone.chars().filter(|c| c.is_ascii_digit()).collect();
+        if phone_digits.len() != 10 || !phone_digits.starts_with('0') {
+            return Err(AppError::BadRequest(
+                "Invalid phone format — must be 10 digits starting with 0".to_string(),
+            ));
         }
         if req.password.len() < 8 {
             return Err(AppError::BadRequest(

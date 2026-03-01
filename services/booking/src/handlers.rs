@@ -105,7 +105,7 @@ pub async fn cancel_request(
     user: AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<GuardRequestResponse>>, AppError> {
-    let request = crate::service::cancel_request(&state.db, id, user.user_id).await?;
+    let request = crate::service::cancel_request(&state.db, id, user.user_id, &user.role).await?;
     Ok(Json(ApiResponse::success(request)))
 }
 
@@ -157,7 +157,7 @@ pub async fn update_assignment_status(
     Json(req): Json<UpdateAssignmentStatusDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
     let assignment =
-        crate::service::update_assignment_status(&state.db, id, user.user_id, req).await?;
+        crate::service::update_assignment_status(&state.db, id, user.user_id, &user.role, req).await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 

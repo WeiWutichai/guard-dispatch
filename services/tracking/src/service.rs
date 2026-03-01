@@ -46,6 +46,9 @@ pub async fn upsert_location(
 
 // =============================================================================
 // Append to Location History
+// NOTE: location_history grows unbounded. In production, set up a scheduled
+// job (pg_cron or external) to DELETE rows older than a retention period
+// (e.g., 90 days) to prevent table bloat.
 // =============================================================================
 
 pub async fn append_history(
@@ -73,14 +76,13 @@ pub async fn append_history(
 // Publish GPS event to Redis PubSub
 // =============================================================================
 
+/// Publish GPS event to Redis PubSub using a pre-established multiplexed connection.
+/// Clone of `MultiplexedConnection` is cheap — shares the underlying connection.
 pub async fn publish_gps_event(
-    redis: &redis::Client,
+    redis: &redis::aio::MultiplexedConnection,
     event: &GpsEvent,
 ) -> Result<(), AppError> {
-    let mut conn = redis
-        .get_multiplexed_tokio_connection()
-        .await
-        .map_err(AppError::Redis)?;
+    let mut conn = redis.clone();
 
     let channel = format!("gps:{}", event.guard_id);
     let payload = serde_json::to_string(event)

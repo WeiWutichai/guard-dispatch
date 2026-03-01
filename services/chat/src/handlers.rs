@@ -111,9 +111,16 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
 )]
 pub async fn create_conversation(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Json(req): Json<CreateConversationRequest>,
 ) -> Result<Json<ApiResponse<ConversationResponse>>, AppError> {
+    // Authorization: caller must be a participant or admin
+    if user.role != "admin" && !req.participant_ids.contains(&user.user_id) {
+        return Err(AppError::Forbidden(
+            "You must be a participant of the conversation".to_string(),
+        ));
+    }
+
     let conversation = crate::service::create_conversation(&state.db, req).await?;
     Ok(Json(ApiResponse::success(conversation)))
 }
@@ -157,7 +164,7 @@ pub async fn list_messages(
     Path(id): Path<Uuid>,
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<ApiResponse<Vec<MessageResponse>>>, AppError> {
-    let messages = crate::service::list_messages(&state.db, id, user.user_id, query).await?;
+    let messages = crate::service::list_messages(&state.db, id, user.user_id, &user.role, query).await?;
     Ok(Json(ApiResponse::success(messages)))
 }
 

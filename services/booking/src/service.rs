@@ -169,6 +169,7 @@ pub async fn cancel_request(
     db: &PgPool,
     request_id: Uuid,
     user_id: Uuid,
+    role: &str,
 ) -> Result<GuardRequestResponse, AppError> {
     let mut tx = db.begin().await?;
 
@@ -185,7 +186,8 @@ pub async fn cancel_request(
     .await?
     .ok_or_else(|| AppError::NotFound("Guard request not found".to_string()))?;
 
-    if existing.customer_id != user_id {
+    // Admin can cancel any request; non-admin can only cancel their own
+    if role != "admin" && existing.customer_id != user_id {
         return Err(AppError::Forbidden(
             "You can only cancel your own requests".to_string(),
         ));
@@ -307,6 +309,7 @@ pub async fn update_assignment_status(
     db: &PgPool,
     assignment_id: Uuid,
     guard_id: Uuid,
+    role: &str,
     req: UpdateAssignmentStatusDto,
 ) -> Result<AssignmentResponse, AppError> {
     let mut tx = db.begin().await?;
@@ -324,7 +327,8 @@ pub async fn update_assignment_status(
     .await?
     .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
 
-    if existing.guard_id != guard_id {
+    // Admin can update any assignment; guards can only update their own
+    if role != "admin" && existing.guard_id != guard_id {
         return Err(AppError::Forbidden(
             "You can only update your own assignments".to_string(),
         ));
@@ -433,10 +437,12 @@ pub async fn is_guard_assigned(
     request_id: Uuid,
     guard_id: Uuid,
 ) -> Result<bool, AppError> {
-    let count: i64 = sqlx::query_scalar(
+    let exists: Option<bool> = sqlx::query_scalar(
         r#"
-        SELECT COUNT(*) FROM booking.assignments
-        WHERE request_id = $1 AND guard_id = $2
+        SELECT EXISTS(
+            SELECT 1 FROM booking.assignments
+            WHERE request_id = $1 AND guard_id = $2
+        )
         "#,
     )
     .bind(request_id)
@@ -444,5 +450,5 @@ pub async fn is_guard_assigned(
     .fetch_one(db)
     .await?;
 
-    Ok(count > 0)
+    Ok(exists.unwrap_or(false))
 }

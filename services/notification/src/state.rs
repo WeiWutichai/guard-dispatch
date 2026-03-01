@@ -11,11 +11,19 @@ pub struct FcmConfig {
 
 impl FcmConfig {
     pub fn from_env() -> Result<Self, shared::error::AppError> {
+        let server_key = std::env::var("FCM_SERVER_KEY").map_err(|_| {
+            shared::error::AppError::Internal(
+                "FCM_SERVER_KEY env var is required but not set".to_string(),
+            )
+        })?;
+        let project_id = std::env::var("FCM_PROJECT_ID").map_err(|_| {
+            shared::error::AppError::Internal(
+                "FCM_PROJECT_ID env var is required but not set".to_string(),
+            )
+        })?;
         Ok(Self {
-            server_key: std::env::var("FCM_SERVER_KEY")
-                .unwrap_or_else(|_| "not-set".to_string()),
-            project_id: std::env::var("FCM_PROJECT_ID")
-                .unwrap_or_else(|_| "not-set".to_string()),
+            server_key,
+            project_id,
         })
     }
 }
@@ -23,6 +31,9 @@ impl FcmConfig {
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    // NOTE: Notification service currently uses redis::Client.
+    // TODO: Convert to redis::aio::MultiplexedConnection per CLAUDE.md pattern
+    // when implementing Redis caching for notification queries.
     pub redis_cache: redis::Client,
     pub redis_pubsub: redis::Client,
     pub jwt_config: JwtConfig,
@@ -35,8 +46,8 @@ impl HasJwtSecret for AppState {
         &self.jwt_config.secret
     }
 
-    fn decoding_key(&self) -> jsonwebtoken::DecodingKey {
-        self.jwt_config.decoding_key.clone()
+    fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
+        &self.jwt_config.decoding_key
     }
 }
 

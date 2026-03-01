@@ -6,6 +6,7 @@ mod state;
 
 use std::sync::Arc;
 
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -15,7 +16,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use shared::config::{DatabaseConfig, JwtConfig, RedisConfig, S3Config};
 use shared::db::create_pool;
-use shared::openapi::SecurityAddon;
+use shared::openapi::{SecurityAddon, ServerPrefixAddon};
 use shared::redis_client::create_redis_client;
 
 use crate::state::AppState;
@@ -43,7 +44,7 @@ use crate::state::AppState;
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
-    modifiers(&SecurityAddon),
+    modifiers(&SecurityAddon, &ServerPrefixAddon),
     tags(
         (name = "Chat WebSocket", description = "Real-time chat WebSocket"),
         (name = "Conversations", description = "Conversation management"),
@@ -69,12 +70,17 @@ async fn main() -> anyhow::Result<()> {
 
     let db = create_pool(&db_config).await?;
     let redis_cache = create_redis_client(&redis_config.cache_url)?;
-    let redis_pubsub = create_redis_client(
+    let redis_pubsub_client = create_redis_client(
         redis_config
             .pubsub_url
             .as_deref()
             .unwrap_or(&redis_config.cache_url),
     )?;
+    let redis_pubsub = redis_pubsub_client
+        .get_multiplexed_tokio_connection()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis PubSub: {e}"))?;
+    tracing::info!("Redis PubSub multiplexed connection established");
 
     // Initialize S3/MinIO client
     let s3_creds = aws_sdk_s3::config::Credentials::new(
@@ -121,7 +127,17 @@ async fn main() -> anyhow::Result<()> {
         // REST — Attachments (image upload + signed URL)
         .route("/attachments", post(handlers::upload_attachment))
         .route("/attachments/{id}", get(handlers::get_signed_url))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge({
+            let swagger = SwaggerUi::new("/swagger-ui")
+                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            match std::env::var("SWAGGER_PATH_PREFIX") {
+                Ok(prefix) => swagger.config(
+                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
+                ),
+                Err(_) => swagger,
+            }
+        })
+        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

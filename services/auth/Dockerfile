@@ -8,7 +8,7 @@ FROM rust:1-slim AS builder
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev curl && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace manifests first (layer cache optimization)
 COPY Cargo.toml Cargo.toml
@@ -41,7 +41,7 @@ RUN find services/shared/src services/auth/src -name '*.rs' | xargs touch && car
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
+  && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
 
 WORKDIR /app
 

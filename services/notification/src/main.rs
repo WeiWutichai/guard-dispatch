@@ -5,6 +5,7 @@ mod state;
 
 use std::sync::Arc;
 
+use axum::middleware;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -14,7 +15,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
 use shared::db::create_pool;
-use shared::openapi::SecurityAddon;
+use shared::openapi::{SecurityAddon, ServerPrefixAddon};
 use shared::redis_client::create_redis_client;
 
 use crate::state::{AppState, FcmConfig};
@@ -39,7 +40,7 @@ use crate::state::{AppState, FcmConfig};
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
-    modifiers(&SecurityAddon),
+    modifiers(&SecurityAddon, &ServerPrefixAddon),
     tags(
         (name = "FCM Tokens", description = "Device token management"),
         (name = "Notifications", description = "Notification management"),
@@ -92,7 +93,17 @@ async fn main() -> anyhow::Result<()> {
             put(handlers::mark_as_read),
         )
         .route("/notifications/send", post(handlers::send_notification))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge({
+            let swagger = SwaggerUi::new("/swagger-ui")
+                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            match std::env::var("SWAGGER_PATH_PREFIX") {
+                Ok(prefix) => swagger.config(
+                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
+                ),
+                Err(_) => swagger,
+            }
+        })
+        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

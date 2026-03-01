@@ -6,7 +6,9 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
-    pub redis: redis::Client,
+    // NOTE: Redis cache not yet implemented for booking service.
+    // When adding caching (e.g., for list_requests), store a
+    // `redis::aio::MultiplexedConnection` here per CLAUDE.md pattern.
     pub jwt_config: JwtConfig,
 }
 
@@ -15,8 +17,8 @@ impl HasJwtSecret for AppState {
         &self.jwt_config.secret
     }
 
-    fn decoding_key(&self) -> jsonwebtoken::DecodingKey {
-        self.jwt_config.decoding_key.clone()
+    fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
+        &self.jwt_config.decoding_key
     }
 }
 

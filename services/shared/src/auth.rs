@@ -54,7 +54,15 @@ pub fn decode_jwt(token: &str, secret: &str) -> Result<JwtClaims, AppError> {
 /// Decode JWT using a pre-computed `DecodingKey` (cached in `JwtConfig`).
 /// Avoids re-deriving the key on every call.
 pub fn decode_jwt_with_key(token: &str, key: &DecodingKey) -> Result<JwtClaims, AppError> {
-    let token_data = jsonwebtoken::decode::<JwtClaims>(token, key, &Validation::default())
+    let mut validation = Validation::default();
+    // Require exp claim (already default), disable iss/aud for now
+    // since we don't include them in the token yet. When adding
+    // iss/aud to JwtClaims + encode, uncomment:
+    // validation.set_issuer(&["guard-dispatch"]);
+    // validation.set_audience(&["guard-dispatch"]);
+    validation.validate_exp = true;
+
+    let token_data = jsonwebtoken::decode::<JwtClaims>(token, key, &validation)
         .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
     Ok(token_data.claims)
@@ -136,7 +144,7 @@ where
             AppError::Unauthorized("Missing authentication token".to_string())
         })?;
 
-        let claims = decode_jwt_with_key(&token, &state.decoding_key())?;
+        let claims = decode_jwt_with_key(&token, state.decoding_key())?;
 
         Ok(AuthUser {
             user_id: claims.sub,
@@ -149,10 +157,9 @@ where
 pub trait HasJwtSecret {
     fn jwt_secret(&self) -> &str;
 
-    /// Return a pre-computed `DecodingKey` if available, or build one on-the-fly.
-    fn decoding_key(&self) -> DecodingKey {
-        DecodingKey::from_secret(self.jwt_secret().as_bytes())
-    }
+    /// Return a reference to a pre-computed `DecodingKey`.
+    /// Implementors should store a cached `DecodingKey` in their state.
+    fn decoding_key(&self) -> &DecodingKey;
 }
 
 impl<T: HasJwtSecret> HasJwtSecret for std::sync::Arc<T> {
@@ -160,7 +167,7 @@ impl<T: HasJwtSecret> HasJwtSecret for std::sync::Arc<T> {
         T::jwt_secret(self)
     }
 
-    fn decoding_key(&self) -> DecodingKey {
+    fn decoding_key(&self) -> &DecodingKey {
         T::decoding_key(self)
     }
 }
@@ -289,19 +296,31 @@ mod tests {
 
     struct TestState {
         jwt_secret: String,
+        decoding_key: DecodingKey,
+    }
+
+    impl TestState {
+        fn new(secret: &str) -> Self {
+            Self {
+                jwt_secret: secret.to_string(),
+                decoding_key: DecodingKey::from_secret(secret.as_bytes()),
+            }
+        }
     }
 
     impl HasJwtSecret for TestState {
         fn jwt_secret(&self) -> &str {
             &self.jwt_secret
         }
+
+        fn decoding_key(&self) -> &DecodingKey {
+            &self.decoding_key
+        }
     }
 
     #[tokio::test]
     async fn auth_user_extracts_from_bearer_header() {
-        let state = Arc::new(TestState {
-            jwt_secret: TEST_SECRET.to_string(),
-        });
+        let state = Arc::new(TestState::new(TEST_SECRET));
         let user_id = Uuid::new_v4();
         let token = encode_jwt(user_id, "guard", TEST_SECRET, 24).unwrap();
 
@@ -319,9 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_extracts_from_cookie() {
-        let state = Arc::new(TestState {
-            jwt_secret: TEST_SECRET.to_string(),
-        });
+        let state = Arc::new(TestState::new(TEST_SECRET));
         let user_id = Uuid::new_v4();
         let token = encode_jwt(user_id, "admin", TEST_SECRET, 24).unwrap();
 
@@ -339,9 +356,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_prefers_bearer_over_cookie() {
-        let state = Arc::new(TestState {
-            jwt_secret: TEST_SECRET.to_string(),
-        });
+        let state = Arc::new(TestState::new(TEST_SECRET));
         let bearer_id = Uuid::new_v4();
         let cookie_id = Uuid::new_v4();
         let bearer_token = encode_jwt(bearer_id, "guard", TEST_SECRET, 24).unwrap();
@@ -365,9 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_fails_with_no_token() {
-        let state = Arc::new(TestState {
-            jwt_secret: TEST_SECRET.to_string(),
-        });
+        let state = Arc::new(TestState::new(TEST_SECRET));
 
         let mut request = Request::builder().body(()).unwrap();
 
@@ -378,9 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_fails_with_invalid_bearer() {
-        let state = Arc::new(TestState {
-            jwt_secret: TEST_SECRET.to_string(),
-        });
+        let state = Arc::new(TestState::new(TEST_SECRET));
 
         let mut request = Request::builder()
             .header(header::AUTHORIZATION, "Bearer garbage.token.here")
@@ -394,9 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_fails_with_wrong_secret_cookie() {
-        let state = Arc::new(TestState {
-            jwt_secret: TEST_SECRET.to_string(),
-        });
+        let state = Arc::new(TestState::new(TEST_SECRET));
         let token = encode_jwt(Uuid::new_v4(), "admin", "different-secret-key!!", 24).unwrap();
 
         let mut request = Request::builder()
@@ -411,9 +420,7 @@ mod tests {
 
     #[test]
     fn has_jwt_secret_works_through_arc() {
-        let state = Arc::new(TestState {
-            jwt_secret: "my-secret".to_string(),
-        });
+        let state = Arc::new(TestState::new("my-secret"));
         assert_eq!(state.jwt_secret(), "my-secret");
     }
 }

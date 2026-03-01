@@ -87,11 +87,21 @@ where
     let status_code = response.status().as_u16();
     let action = format!("{method} {path}");
 
+    // Derive entity_type from URL path (first segment after /)
+    // e.g., "/auth/login" → "auth", "/booking/requests" → "booking"
+    let entity_type = path
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+
     // Structured log for observability
     tracing::info!(
         audit = true,
         user_id = ?user_id,
         action = %action,
+        entity_type = %entity_type,
         status = status_code,
         ip = ?ip_address,
         "audit log"
@@ -100,7 +110,7 @@ where
     // Fire-and-forget async insert to audit.audit_logs — don't block the response
     let pool = state.db_pool().clone();
     tokio::spawn(async move {
-        if let Err(e) = insert_audit_log(&pool, user_id, &action, status_code, ip_address.as_deref()).await {
+        if let Err(e) = insert_audit_log(&pool, user_id, &action, &entity_type, status_code, ip_address.as_deref()).await {
             tracing::warn!(error = %e, "failed to persist audit log");
         }
     });
@@ -112,7 +122,8 @@ async fn insert_audit_log(
     pool: &PgPool,
     user_id: Option<Uuid>,
     action: &str,
-    status_code: u16,
+    entity_type: &str,
+    _status_code: u16,
     ip_address: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -123,7 +134,7 @@ async fn insert_audit_log(
     )
     .bind(user_id)
     .bind(action)
-    .bind(format!("http_{status_code}"))
+    .bind(entity_type)
     .bind(ip_address)
     .execute(pool)
     .await?;

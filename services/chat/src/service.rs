@@ -84,7 +84,7 @@ pub async fn list_conversations(
 
 pub async fn send_message(
     db: &PgPool,
-    redis_pubsub: &redis::Client,
+    redis_pubsub: &redis::aio::MultiplexedConnection,
     sender_id: Uuid,
     msg: IncomingChatMessage,
 ) -> Result<OutgoingChatMessage, AppError> {
@@ -136,9 +136,9 @@ pub async fn send_message(
     let payload = serde_json::to_string(&outgoing)
         .map_err(|e| AppError::Internal(format!("Failed to serialize message: {e}")))?;
 
-    if let Ok(mut conn) = redis_pubsub.get_multiplexed_tokio_connection().await {
-        let _ = conn.publish::<_, _, ()>(&channel, &payload).await;
-    }
+    // Clone is cheap — shares the underlying multiplexed connection
+    let mut conn = redis_pubsub.clone();
+    let _ = conn.publish::<_, _, ()>(&channel, &payload).await;
 
     Ok(outgoing)
 }
@@ -151,26 +151,29 @@ pub async fn list_messages(
     db: &PgPool,
     conversation_id: Uuid,
     user_id: Uuid,
+    user_role: &str,
     query: ListMessagesQuery,
 ) -> Result<Vec<MessageResponse>, AppError> {
-    // Verify user is participant
-    let is_participant: Option<bool> = sqlx::query_scalar(
-        r#"
-        SELECT EXISTS(
-            SELECT 1 FROM chat.conversation_participants
-            WHERE conversation_id = $1 AND user_id = $2
+    // Admin can access any conversation; others must be a participant
+    if user_role != "admin" {
+        let is_participant: Option<bool> = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM chat.conversation_participants
+                WHERE conversation_id = $1 AND user_id = $2
+            )
+            "#,
         )
-        "#,
-    )
-    .bind(conversation_id)
-    .bind(user_id)
-    .fetch_one(db)
-    .await?;
+        .bind(conversation_id)
+        .bind(user_id)
+        .fetch_one(db)
+        .await?;
 
-    if !is_participant.unwrap_or(false) {
-        return Err(AppError::Forbidden(
-            "Not a participant of this conversation".to_string(),
-        ));
+        if !is_participant.unwrap_or(false) {
+            return Err(AppError::Forbidden(
+                "Not a participant of this conversation".to_string(),
+            ));
+        }
     }
 
     let limit = query.limit.unwrap_or(50).min(200);

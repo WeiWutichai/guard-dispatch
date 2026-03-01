@@ -29,8 +29,8 @@ export function Sidebar() {
   const navigation = [
     { name: t.nav.dashboard, href: "/", icon: LayoutDashboard },
     { name: t.nav.liveMap, href: "/map", icon: MapIcon },
-    { name: t.nav.guards, href: "/guards", icon: Users },
     { name: t.nav.applicants, href: "/applicants", icon: UserPlus },
+    { name: t.nav.guards, href: "/guards", icon: Users },
     { name: t.nav.customers, href: "/customers", icon: Users2 },
     { name: t.nav.reviews, href: "/reviews", icon: Star },
     { name: t.nav.wallet, href: "/wallet", icon: Wallet },

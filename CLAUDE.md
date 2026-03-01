@@ -33,6 +33,7 @@
 - **ORM/Query:** SQLx (latest) + compile-time checked macros เท่านั้น
 - **Auth:** JWT (jsonwebtoken crate)
 - **Serialization:** Serde + serde_json
+- **API Docs:** utoipa 5 + utoipa-swagger-ui 9 (Swagger UI ที่ `/docs` ของแต่ละ service)
 
 ### Database & Cache
 - **Primary DB:** PostgreSQL (1 instance ใช้ร่วมกัน)
@@ -152,6 +153,16 @@ CREATE TABLE chat.attachments (
   - Clone `MultiplexedConnection` สำหรับแต่ละ operation (cheap — shares underlying connection)
 - **Cache Update:** ใช้ `SET_EX` (atomic overwrite) แทนการทำ `DEL` แล้ว `SET_EX` แยก
 - **Concurrent I/O:** ใช้ `tokio::join!` สำหรับ independent DB/Redis operations (เช่น GPS handler: upsert + history + publish)
+- **Performance Indexes:**
+  - `booking.guard_requests`: composite `(status, created_at DESC)` สำหรับ list_requests
+  - `booking.assignments`: composite `(request_id, guard_id)` สำหรับ is_guard_assigned
+- **Query Optimization:** ใช้ `SELECT EXISTS(SELECT 1 ...)` แทน `SELECT COUNT(*)` สำหรับ boolean check (เช่น `is_guard_assigned`)
+- **Data Retention:** `tracking.location_history` ต้องมี scheduled cleanup job (pg_cron หรือ external) ลบข้อมูลเก่ากว่า retention period (เช่น 90 วัน)
+
+### Input Validation
+- **Email:** ต้องมี `@`, `.`, ความยาวขั้นต่ำ 5 ตัวอักษร — validate ใน `register()` service
+- **Phone (Thai format):** ต้องเป็นตัวเลข 10 หลัก ขึ้นต้นด้วย `0` — strip non-digit ก่อน validate
+- ทุก input validation ต้อง return `AppError::BadRequest` พร้อมข้อความที่ชัดเจน
 
 ### Security
 - ทุก API ต้องมี **JWT validation** ยกเว้น `/auth/login` และ `/auth/register`
@@ -162,39 +173,60 @@ CREATE TABLE chat.attachments (
   - Mobile (Flutter): Bearer token ใน Authorization header — เก็บใน `FlutterSecureStorage` เท่านั้น
   - AuthUser extractor อ่านจาก Authorization header ก่อน → fallback ไป cookie
 - **JWT Key Caching:** `JwtConfig` เก็บ pre-computed `encoding_key` และ `decoding_key` — ใช้ `encode_jwt_with_key()` / `decode_jwt_with_key()` แทน `encode_jwt()` / `decode_jwt()` ใน production code
-  - `HasJwtSecret` trait มี default `decoding_key()` method — override ใน AppState ด้วย cached key จาก `JwtConfig`
+  - `HasJwtSecret` trait: `decoding_key()` returns `&DecodingKey` (reference, ไม่ clone) — implement ใน AppState ให้ return `&self.jwt_config.decoding_key`
+  - ห้าม return owned `DecodingKey` จาก trait — ต้อง return reference เพื่อ zero-copy performance
+- **JWT Validation:** ใช้ explicit `Validation` struct — `validate_exp = true`, iss/aud prepared สำหรับอนาคต (commented-out)
 - **Cookie Architecture:**
   - `access_token` → httpOnly, Secure, SameSite=Lax, Path=/
   - `refresh_token` → httpOnly, Secure, SameSite=Lax, Path=/auth
-  - `logged_in` → non-httpOnly marker (ค่า "1") สำหรับ frontend ตรวจสอบ auth state
+  - `logged_in` → non-httpOnly, **Secure**, SameSite=Lax, marker (ค่า "1") สำหรับ frontend ตรวจสอบ auth state
 - **CORS:** ใช้ `shared::config::build_cors_layer()` เท่านั้น — อ่าน origins จาก `CORS_ALLOWED_ORIGINS` env var (comma-separated)
   - ห้ามใช้ `CorsLayer::permissive()` เด็ดขาด
   - Default (dev): `http://localhost:3000`
   - Production ต้องตั้ง `CORS_ALLOWED_ORIGINS` ให้ตรงกับ domain จริง
 - **Redis:** ต้องใช้ password authentication (`--requirepass`) ทั้ง cache และ pubsub
+  - **Redis URL Logging:** ห้าม log Redis URL ที่มี password เป็น plaintext — ใช้ `redact_redis_url()` ใน `create_redis_client()` เสมอ
 - **Network Isolation:** เฉพาะ Nginx expose port 80/443 — ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host
   - Docker Compose: ใช้ `expose` ไม่ใช่ `ports` สำหรับ internal services (PostgreSQL, Redis, MinIO)
-- **Nginx Security Headers:** X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
+- **Nginx:**
+  - Security Headers: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
+  - **Global `client_max_body_size 1m;`** ที่ http block — override เฉพาะ endpoint ที่ต้องการ (เช่น chat attachments: 10m)
+  - **Swagger UI rate limiting:** ทุก Swagger location (`/swagger-ui`, `/api-docs`, `/docs`) ต้องมี `limit_req zone=api_limit burst=10 nodelay`
 - **WebSocket Auth:** ใช้ cookie (ส่งอัตโนมัติตอน upgrade) — ห้ามส่ง token ใน URL query params
 - **WebSocket Data:** ห้ามส่ง conversation_id หรือ sensitive data ใน URL query params — ส่งเป็น message หลัง connection open
 - **Audit Middleware:** ต้อง validate JWT signature ด้วย real secret ก่อน trust user_id — ห้ามใช้ `insecure_disable_signature_validation()`
-  - ใช้ `middleware::from_fn_with_state(state, audit_middleware)` (ต้อง pass state ที่ implement `HasJwtSecret + HasDbPool`)
+  - ใช้ `middleware::from_fn_with_state(state.clone(), audit_middleware::<Arc<AppState>>)` — ต้อง turbofish type annotation เพราะ `HasJwtSecret` implement ทั้ง `AppState` และ `Arc<T>`
+  - **ทุก service ต้องมี audit middleware** — ปัจจุบัน 5 services (auth, booking, tracking, notification, chat) ทั้งหมดมีแล้ว
   - Audit log persist แบบ **fire-and-forget** ผ่าน `tokio::spawn` — ห้าม block response
   - IP address: ใช้ `X-Real-IP` ก่อน → fallback `X-Forwarded-For` rightmost entry
+  - **entity_type:** derive จาก URL path segment แรก (เช่น `/auth/login` → `"auth"`, `/booking/requests` → `"booking"`) — ห้ามใช้ HTTP status code เป็น entity_type
 - **Password Hashing:** Argon2 ต้อง run ใน `tokio::task::spawn_blocking()` เสมอ — ห้าม block async runtime
 - **Login Error Messages:** ห้ามส่ง error ที่เปิดเผยว่า email มีอยู่ในระบบหรือไม่ — ใช้ message เดียวกันสำหรับ wrong password, inactive account, not found
 - **Refresh Token Rotation:** ต้องเป็น **atomic** (single `UPDATE ... WHERE refresh_token = $1 RETURNING ...`) — ห้ามทำ SELECT แล้ว UPDATE แยก
 - **Session Limit:** จำกัด max **5 sessions ต่อ user** — evict oldest sessions เมื่อเกิน
 - **Authorization (IDOR Prevention):**
   - Tracking endpoints: Guards เข้าถึงได้เฉพาะ location ตัวเอง — admins/customers เข้าถึงได้ทุก guard
-  - Booking endpoints: `get_request` / `get_assignments` ต้องตรวจว่า user เป็น owner, assigned guard, หรือ admin — ใช้ `is_guard_assigned()` helper
+  - Booking endpoints: `get_request` / `get_assignments` / `cancel_request` / `update_assignment_status` ต้องตรวจว่า user เป็น owner, assigned guard, หรือ admin — ใช้ `is_guard_assigned()` helper (ใช้ `EXISTS` ไม่ใช่ `COUNT(*)`)
+  - Chat endpoints: `list_messages` ต้อง pass `user_role` param — admin bypass participant check, non-admin ต้องเป็น participant
   - Chat attachment endpoints: `upload_attachment` / `get_signed_url` ต้องตรวจว่า user เป็น participant ของ conversation หรือเป็น admin — ใช้ `is_conversation_participant_by_conversation()`
   - ห้ามใช้ `_user: AuthUser` (ignore user) ใน endpoint ที่ต้องการ authorization check
+- **FCM Config:** `FcmConfig::from_env()` ต้อง **fail-fast** ด้วย `AppError` ถ้า env vars ไม่ได้ตั้ง — ห้าม fallback เป็นค่า default เช่น `"not-set"`
 - **Docker Security:**
   - ทุก Dockerfile runtime stage ต้องมี non-root user (`appuser`) — ห้าม run container เป็น root
   - ต้อง `strip` binary ใน runtime stage เพื่อลดขนาด image
   - MinIO credentials ต้องตั้งผ่าน env var — ห้ามใช้ default `minioadmin`
   - Docker Compose ใช้ `${VAR:?error}` syntax เพื่อ require env vars
+
+### Web Admin (Next.js)
+- ทุกหน้าใช้ `useLanguage()` hook — ห้าม hardcode ข้อความภาษาไทย/อังกฤษใน component ตรง
+- Translations อยู่ใน `lib/i18n.ts` — เพิ่ม key ใหม่ทั้ง `th` และ `en` เสมอ
+- ใช้ `cn()` จาก `@/lib/utils` สำหรับ conditional className (clsx + tailwind-merge)
+- ใช้ **lucide-react** สำหรับ icons — ห้ามใช้ icon library อื่น
+- API calls ต้องผ่าน `lib/api.ts` เท่านั้น — ห้ามเรียก `fetch()` ตรง
+- Auth state ใช้ `AuthProvider` (cookie-based) — ห้ามเก็บ JWT ใน localStorage
+- Sidebar navigation defined ใน `components/Sidebar.tsx` — array 14 items
+- Modal pattern: `fixed inset-0 z-50`, `backdrop-blur-sm`, `animate-in fade-in zoom-in`
+- Applicants page ใช้ discriminated union types (`GuardApplicant | CustomerApplicant`) — ห้ามใช้ single generic type
 
 ### Flutter Mobile
 - **Secure Storage:** ข้อมูล sensitive (JWT tokens, PIN hash) ต้องเก็บใน `FlutterSecureStorage` เท่านั้น — ห้ามใช้ `SharedPreferences` สำหรับ tokens
@@ -252,8 +284,32 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │   └── mediasoup/              ← Node.js
 ├── frontend/
 │   ├── web/                    ← Next.js 16 + TypeScript (App Router)
-│   │   ├── lib/api.ts          ← Centralized API client (cookie-based auth)
-│   │   └── components/AuthProvider.tsx
+│   │   ├── lib/
+│   │   │   ├── api.ts          ← Centralized API client (cookie-based auth)
+│   │   │   ├── i18n.ts         ← Bilingual translations (TH/EN) + TranslationStructure type
+│   │   │   └── utils.ts        ← cn() utility (clsx/tailwind-merge)
+│   │   ├── components/
+│   │   │   ├── AuthProvider.tsx ← Auth context + cookie-based session
+│   │   │   ├── LanguageProvider.tsx ← i18n context (useLanguage hook)
+│   │   │   ├── Header.tsx      ← Top bar + search + user menu
+│   │   │   ├── Sidebar.tsx     ← Navigation (14 menu items)
+│   │   │   └── ThemeProvider.tsx
+│   │   └── app/(dashboard)/    ← Dashboard route group (16 pages)
+│   │       ├── page.tsx        ← Dashboard overview
+│   │       ├── applicants/     ← ผู้สมัคร (Guard + Customer tabs)
+│   │       ├── guards/         ← พนักงานรักษาความปลอดภัย (approved guards)
+│   │       ├── customers/      ← ลูกค้า (approved customers)
+│   │       ├── map/            ← แผนที่สด
+│   │       ├── tasks/          ← จัดการงาน
+│   │       ├── recruitment/    ← สรรหาบุคลากร
+│   │       ├── reviews/        ← รีวิว
+│   │       ├── wallet/         ← กระเป๋าเงิน
+│   │       ├── pricing/        ← กำหนดราคา
+│   │       ├── reports/        ← รายงาน
+│   │       ├── automation/     ← กฎอัตโนมัติ
+│   │       ├── activity/       ← Activity Log
+│   │       ├── settings/       ← ตั้งค่า
+│   │       └── profile/        ← โปรไฟล์
 │   └── mobile/                 ← Flutter
 │       ├── lib/
 │       │   ├── main.dart               ← Entry point (MultiProvider wrap)
@@ -271,6 +327,75 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 └── database/
     └── migrations/             ← SQL files (auto-run by PostgreSQL on init)
 ```
+
+---
+
+## Web Admin — Page Architecture & Business Logic
+
+### Applicant Flow (ผู้สมัคร → อนุมัติ → แยกเมนู)
+```
+ผู้ใช้ลงทะเบียน (โทรศัพท์ + OTP)
+    │
+    ▼
+หน้า "ผู้สมัคร" (/applicants)
+    ├── Tab: เจ้าหน้าที่ รปภ. (Guard Applicants)
+    │     ├── แสดง: ประสบการณ์, เงินเดือน, เอกสาร, ใบประกาศ
+    │     └── อนุมัติ → ย้ายไปเมนู "พนักงานรักษาความปลอดภัย" (/guards)
+    │
+    └── Tab: ผู้เรียก รปภ. (Customer Applicants)
+          ├── แสดง: ชื่อบริษัท, วัตถุประสงค์การจอง
+          └── อนุมัติ → ย้ายไปเมนู "ลูกค้า" (/customers)
+```
+
+### Applicants Page Technical Details
+- **Types:** Discriminated union — `GuardApplicant` (type: "guard") | `CustomerApplicant` (type: "customer")
+- **Tabs:** 3 tabs (ทั้งหมด / เจ้าหน้าที่ รปภ. / ผู้เรียก รปภ.)
+- **Dynamic Columns:** Table columns เปลี่ยนตาม active tab
+  - Tab "all": แสดงคอลัมน์ ประเภท + experience + salary
+  - Tab "guard": แสดง experience + salary (ไม่มีคอลัมน์ประเภท)
+  - Tab "customer": แสดง companyName + bookingPurpose
+- **Stats Cards:** Scope ตาม active tab (นับเฉพาะ applicants ในประเภทที่เลือก)
+- **Modal:** Content แตกต่างตามประเภท — Guard แสดงเอกสาร/ใบประกาศ/ประวัติ, Customer แสดงบริษัท/วัตถุประสงค์
+- **Approved Note:** เมื่อสถานะ approved จะแสดงข้อความว่าไปอยู่เมนูไหน
+
+### Sidebar Navigation Order (14 items)
+```
+แดชบอร์ด → แผนที่สด → ผู้สมัคร → พนักงานรักษาความปลอดภัย → ลูกค้า →
+รีวิว → กระเป๋าเงิน → กำหนดราคา → จัดการงาน → สรรหาบุคลากร →
+รายงาน → กฎอัตโนมัติ → Activity Log → ตั้งค่า
+```
+
+### i18n Pattern
+- ทุกหน้าใช้ `useLanguage()` hook จาก `LanguageProvider`
+- `t` object มี nested keys ตาม page (e.g., `t.applicants.tabs.guard`)
+- Translation structure defined ใน `lib/i18n.ts` ด้วย `TranslationStructure` type
+- รองรับ 2 ภาษา: ไทย (th) และ อังกฤษ (en)
+
+### UI Component Patterns
+- **Modal:** `fixed inset-0 z-50`, backdrop-blur-sm, rounded-2xl, animate-in fade-in zoom-in
+- **Stats Cards:** `bg-gradient-to-br`, rounded-2xl, hover:shadow-md
+- **Table:** bg-white rounded-2xl, hover:bg-slate-50/50 on rows
+- **Badge/Pill:** rounded-full, text-xs font-semibold, dot indicator
+- **Status Colors:** pending=amber, approved=emerald, rejected=red
+- **Type Colors:** guard=amber, customer=blue
+
+---
+
+## Swagger UI (API Documentation)
+
+ทุก Rust service มี Swagger UI ที่ `/docs`:
+- **Auth:** `http://localhost:3001/docs`
+- **Booking:** `http://localhost:3002/docs`
+- **Tracking:** `http://localhost:3003/docs`
+- **Notification:** `http://localhost:3004/docs`
+- **Chat:** `http://localhost:3006/docs`
+
+### Implementation
+- ใช้ `utoipa 5` + `utoipa-swagger-ui 9`
+- Security scheme: `SecurityAddon` (Bearer JWT) อยู่ใน `shared::openapi`
+- แต่ละ service ใช้ `#[derive(OpenApi)]` + `modifiers(&SecurityAddon)` ใน `main.rs`
+- Swagger UI mount ด้วย `SwaggerUi::new("/docs").url("/api-docs/openapi.json", ...)`
+- utoipa macro ต้องใช้ `&SimpleIdent` ใน modifiers (ห้ามใช้ path expression เช่น `&shared::openapi::SecurityAddon`)
 
 ---
 
@@ -352,6 +477,8 @@ aws-sdk-s3      = "1"
 bytes           = "1"
 reqwest         = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 argon2          = "0.5"
+utoipa           = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 shared          = { path = "services/shared" }
 ```
 
@@ -400,6 +527,7 @@ RUST_LOG=info
 - ❌ ห้ามเชื่อมต่อ Redis โดยไม่มี password
 - ❌ ห้าม validate file upload ด้วย MIME type อย่างเดียว — ต้องตรวจ **magic bytes** ด้วยเสมอ
 - ❌ ห้ามใช้ `insecure_disable_signature_validation()` — audit middleware ต้อง validate JWT ด้วย real secret
+- ❌ ห้าม log Redis URL ที่มี password เป็น plaintext — ใช้ `redact_redis_url()` redact ก่อน log
 - ❌ ห้าม block async runtime ด้วย Argon2 — ต้องใช้ `spawn_blocking()`
 - ❌ ห้ามส่ง error message ที่เปิดเผย email existence (เช่น "Account is deactivated")
 - ❌ ห้ามทำ refresh token rotation แบบ SELECT → UPDATE แยก — ต้อง atomic single query
@@ -410,8 +538,21 @@ RUST_LOG=info
 - ❌ ห้าม `.clone()` file data ก้อนใหญ่โดยไม่จำเป็น — capture size ก่อนแล้ว move ownership
 - ❌ ห้ามใช้ `CorsLayer::permissive()` — ใช้ `shared::config::build_cors_layer()` ที่อ่านจาก `CORS_ALLOWED_ORIGINS` env var
 - ❌ ห้ามสร้าง `EncodingKey`/`DecodingKey` ทุก request — ใช้ cached keys จาก `JwtConfig` (`encode_jwt_with_key()` / `decode_jwt_with_key()`)
+- ❌ ห้าม return owned `DecodingKey` จาก `HasJwtSecret::decoding_key()` — ต้อง return `&DecodingKey` (reference)
 - ❌ ห้าม run Docker container เป็น root — ทุก Dockerfile ต้องมี `USER appuser` (non-root)
 - ❌ ห้ามใช้ MinIO default credentials (`minioadmin`) — ต้องตั้ง `S3_ACCESS_KEY` / `S3_SECRET_KEY` ผ่าน env var
+- ❌ ห้ามใช้ `audit_middleware` โดยไม่มี turbofish type — ต้องใช้ `audit_middleware::<Arc<AppState>>` เสมอ
+- ❌ ห้ามใช้ HTTP status code เป็น `entity_type` ใน audit log — ต้อง derive จาก URL path segment แรก
+- ❌ ห้ามใช้ `COUNT(*)` สำหรับ boolean existence check — ใช้ `EXISTS(SELECT 1 ...)` แทน
+- ❌ ห้าม FCM config fallback เป็นค่า default (เช่น `"not-set"`) — ต้อง fail-fast ด้วย `AppError`
+- ❌ ห้ามสร้าง service โดยไม่เพิ่ม audit middleware — ทุก service ต้องมี `audit_middleware` layer
+
+### Web Admin (Next.js)
+- ❌ ห้าม hardcode ข้อความภาษาในหน้า — ต้องใช้ `t.xxx` จาก `useLanguage()` เสมอ
+- ❌ ห้ามเพิ่ม translation เฉพาะภาษาเดียว — ต้องเพิ่มทั้ง `th` และ `en` ใน `lib/i18n.ts`
+- ❌ ห้ามใช้ icon library อื่นนอกจาก **lucide-react**
+- ❌ ห้ามสร้างหน้าใหม่โดยไม่เพิ่มใน Sidebar navigation (`components/Sidebar.tsx`)
+- ❌ ห้ามมี `/members` route — ถูกรวมเข้า `/applicants` แล้ว (ใช้ tabs แบ่ง guard/customer)
 
 ### Flutter Mobile
 - ❌ ห้ามเก็บ JWT tokens หรือ PIN ใน `SharedPreferences` — ใช้ `FlutterSecureStorage` เท่านั้น

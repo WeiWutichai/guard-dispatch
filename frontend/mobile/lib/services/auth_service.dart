@@ -29,13 +29,22 @@ class AuthService {
 
   /// Request OTP from server for phone number verification.
   ///
-  /// TODO: Replace with real API call to POST /auth/request-otp
-  /// when backend OTP endpoint is implemented.
+  /// SECURITY WARNING: This is a STUB — does NOT call the backend.
+  /// MUST be replaced with real API call before production deployment.
+  /// See: POST /auth/request-otp
+  // ignore: todo
+  // TODO(CRITICAL-SECURITY): Replace stub with real API call via ApiClient
   static Future<bool> requestOtp(String phone) async {
+    assert(() {
+      // ignore: avoid_print
+      print('[SECURITY] requestOtp is a STUB — not calling backend!');
+      return true;
+    }());
+
     await Future.delayed(const Duration(milliseconds: 500));
 
-    // TODO: Replace with actual API call:
-    // final response = await dio.post('/auth/request-otp', data: {'phone': phone});
+    // STUB: Replace with actual API call:
+    // final response = await apiClient.dio.post('/auth/request-otp', data: {'phone': phone});
     // return response.statusCode == 200;
 
     if (phone.isEmpty) return false;
@@ -44,13 +53,22 @@ class AuthService {
 
   /// Verify OTP code against server.
   ///
-  /// TODO: Replace with real API call to POST /auth/verify-otp
-  /// when backend OTP endpoint is implemented.
+  /// SECURITY WARNING: This is a STUB — accepts ANY 6-digit OTP without
+  /// server verification. MUST be replaced before production deployment.
+  /// See: POST /auth/verify-otp
+  // ignore: todo
+  // TODO(CRITICAL-SECURITY): Replace stub with real API call via ApiClient
   static Future<bool> verifyOtp(String phone, String otp) async {
+    assert(() {
+      // ignore: avoid_print
+      print('[SECURITY] verifyOtp is a STUB — accepts any 6-digit OTP!');
+      return true;
+    }());
+
     await Future.delayed(const Duration(milliseconds: 800));
 
-    // TODO: Replace with actual API call:
-    // final response = await dio.post('/auth/verify-otp', data: {
+    // STUB: Replace with actual API call:
+    // final response = await apiClient.dio.post('/auth/verify-otp', data: {
     //   'phone': phone,
     //   'otp': otp,
     // });
@@ -60,32 +78,40 @@ class AuthService {
     // }
     // return false;
 
-    // Prototype: accept any 6-digit OTP (no hardcoded value in source)
+    // STUB: accept any 6-digit OTP (no hardcoded value in source)
     if (otp.length != 6) return false;
     return true;
   }
 
   /// Authenticate guard with the backend auth service.
   ///
-  /// TODO: Replace with real API call to POST /auth/login when
-  /// dio/http dependency is added. Currently validates non-empty
-  /// credentials and simulates a network call for prototype.
+  /// SECURITY WARNING: This is a STUB — accepts ANY non-empty credentials
+  /// without server verification. MUST be replaced before production.
+  /// See: POST /auth/login
+  // ignore: todo
+  // TODO(CRITICAL-SECURITY): Replace stub with real API call via ApiClient
   static Future<bool> loginGuard(String guardId, String password) async {
+    assert(() {
+      // ignore: avoid_print
+      print('[SECURITY] loginGuard is a STUB — accepts any credentials!');
+      return true;
+    }());
+
     // Simulate network delay
     await Future.delayed(const Duration(milliseconds: 800));
 
-    // TODO: Replace with actual API call:
-    // final response = await dio.post('/auth/login', data: {
+    // STUB: Replace with actual API call:
+    // final response = await apiClient.dio.post('/auth/login', data: {
     //   'guard_id': guardId,
     //   'password': password,
     // });
     // if (response.statusCode == 200) {
-    //   await _storeTokens(response.data['access_token'], response.data['refresh_token']);
+    //   await storeTokens(response.data['access_token'], response.data['refresh_token']);
     //   return true;
     // }
     // return false;
 
-    // Prototype: reject empty credentials, accept any non-empty pair
+    // STUB: reject empty credentials, accept any non-empty pair
     if (guardId.isEmpty || password.isEmpty) return false;
     return true;
   }

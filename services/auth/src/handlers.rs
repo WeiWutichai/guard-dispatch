@@ -40,8 +40,9 @@ fn auth_cookie_headers(auth: &AuthResponse) -> HeaderMap {
 
     // Non-httpOnly marker cookie for the frontend to detect auth state
     // This does NOT contain any sensitive data — just "1"
+    // Must include Secure flag to prevent leaking auth state over plain HTTP
     let marker_cookie = format!(
-        "logged_in=1; SameSite=Lax; Path=/; Max-Age={}",
+        "logged_in=1; Secure; SameSite=Lax; Path=/; Max-Age={}",
         auth.expires_in
     );
     headers.append(SET_COOKIE, marker_cookie.parse().expect("valid cookie"));
@@ -223,8 +224,8 @@ pub async fn logout(
     headers.append(SET_COOKIE, clear_access.parse().expect("valid cookie"));
     let clear_refresh = build_clear_cookie(REFRESH_TOKEN_COOKIE, "/auth");
     headers.append(SET_COOKIE, clear_refresh.parse().expect("valid cookie"));
-    // Clear the logged_in marker cookie
-    let clear_marker = "logged_in=; SameSite=Lax; Path=/; Max-Age=0".to_string();
+    // Clear the logged_in marker cookie (must include Secure to match the set cookie)
+    let clear_marker = "logged_in=; Secure; SameSite=Lax; Path=/; Max-Age=0".to_string();
     headers.append(SET_COOKIE, clear_marker.parse().expect("valid cookie"));
 
     Ok((headers, Json(ApiResponse::success(()))))
@@ -296,6 +297,7 @@ mod tests {
 
         let marker = cookies.iter().find(|c| c.starts_with("logged_in=")).unwrap();
         assert!(!marker.contains("HttpOnly"), "logged_in must NOT be HttpOnly");
+        assert!(marker.contains("Secure"), "logged_in must have Secure flag");
         assert!(marker.contains("logged_in=1"), "logged_in value must be '1'");
     }
 

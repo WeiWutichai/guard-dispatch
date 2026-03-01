@@ -7,6 +7,8 @@ type TranslationStructure = {
   header: Record<string, string>;
   dashboard: Record<string, string>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  applicants: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   guards: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   customers: Record<string, any>;
@@ -83,6 +85,62 @@ export const translations = {
       recentAlerts: "การแจ้งเตือนล่าสุด",
       guardMissingCheckin: "พนักงานไม่เช็คอิน",
       viewAllAlerts: "ดูการแจ้งเตือนทั้งหมด",
+    },
+
+    // Applicants
+    applicants: {
+      title: "จัดการผู้สมัคร",
+      subtitle: "ตรวจสอบและอนุมัติผู้สมัครเข้าใช้งานระบบ",
+      tabs: {
+        all: "ทั้งหมด",
+        guard: "ผู้สมัครเจ้าหน้าที่ รปภ.",
+        customer: "ผู้สมัครผู้เรียก รปภ.",
+      },
+      stats: {
+        total: "ผู้สมัครทั้งหมด",
+        pending: "รอพิจารณา",
+        approved: "อนุมัติแล้ว",
+        rejected: "ปฏิเสธ",
+      },
+      table: {
+        applicant: "ผู้สมัคร",
+        phone: "เบอร์โทร",
+        type: "ประเภท",
+        appliedDate: "วันที่สมัคร",
+        status: "สถานะ",
+        actions: "การดำเนินการ",
+        experience: "ประสบการณ์",
+        expectedSalary: "เงินเดือนที่คาดหวัง",
+        companyName: "ชื่อบริษัท",
+        bookingPurpose: "วัตถุประสงค์",
+      },
+      modal: {
+        reviewTitle: "ตรวจสอบใบสมัคร",
+        contactInfo: "ข้อมูลติดต่อ",
+        documents: "เอกสารยืนยันตัวตน",
+        certificates: "ใบประกาศนียบัตร",
+        background: "ประวัติโดยย่อ",
+        submitted: "ส่งแล้ว",
+        pendingDoc: "รอส่ง",
+        missing: "ยังไม่ส่ง",
+        approve: "อนุมัติ",
+        reject: "ปฏิเสธ",
+        close: "ปิด",
+      },
+      badge: {
+        guard: "เจ้าหน้าที่ รปภ.",
+        customer: "ผู้เรียก รปภ.",
+      },
+      searchPlaceholder: "ค้นหาผู้สมัคร...",
+      noApplicantsFound: "ไม่พบผู้สมัคร",
+      statusAll: "สถานะทั้งหมด",
+      statusPending: "รอพิจารณา",
+      statusApproved: "อนุมัติแล้ว",
+      statusRejected: "ปฏิเสธ",
+      approvedNote: {
+        guard: "ผ่านการอนุมัติ — ดูรายชื่อได้ที่เมนู \"พนักงานรักษาความปลอดภัย\"",
+        customer: "ผ่านการอนุมัติ — ดูรายชื่อได้ที่เมนู \"ลูกค้า\"",
+      },
     },
 
     // Guards
@@ -405,6 +463,62 @@ export const translations = {
       recentAlerts: "Recent Alerts",
       guardMissingCheckin: "Guard Missing Check-in",
       viewAllAlerts: "View All Alerts",
+    },
+
+    // Applicants
+    applicants: {
+      title: "Applicant Management",
+      subtitle: "Review and approve applicants",
+      tabs: {
+        all: "All",
+        guard: "Guard Applicants",
+        customer: "Customer Applicants",
+      },
+      stats: {
+        total: "Total Applicants",
+        pending: "Pending",
+        approved: "Approved",
+        rejected: "Rejected",
+      },
+      table: {
+        applicant: "Applicant",
+        phone: "Phone",
+        type: "Type",
+        appliedDate: "Applied Date",
+        status: "Status",
+        actions: "Actions",
+        experience: "Experience",
+        expectedSalary: "Expected Salary",
+        companyName: "Company Name",
+        bookingPurpose: "Purpose",
+      },
+      modal: {
+        reviewTitle: "Review Application",
+        contactInfo: "Contact Information",
+        documents: "Identity Documents",
+        certificates: "Certificates",
+        background: "Background",
+        submitted: "Submitted",
+        pendingDoc: "Pending",
+        missing: "Missing",
+        approve: "Approve",
+        reject: "Reject",
+        close: "Close",
+      },
+      badge: {
+        guard: "Security Guard",
+        customer: "Customer",
+      },
+      searchPlaceholder: "Search applicants...",
+      noApplicantsFound: "No applicants found",
+      statusAll: "All Status",
+      statusPending: "Pending",
+      statusApproved: "Approved",
+      statusRejected: "Rejected",
+      approvedNote: {
+        guard: "Approved — view in \"Security Guards\" menu",
+        customer: "Approved — view in \"Customers\" menu",
+      },
     },
 
     // Guards

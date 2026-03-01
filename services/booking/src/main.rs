@@ -5,6 +5,7 @@ mod state;
 
 use std::sync::Arc;
 
+use axum::middleware;
 use axum::routing::{get, post, put};
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -12,10 +13,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
+use shared::config::{DatabaseConfig, JwtConfig};
 use shared::db::create_pool;
-use shared::openapi::SecurityAddon;
-use shared::redis_client::create_redis_client;
+use shared::openapi::{SecurityAddon, ServerPrefixAddon};
 
 use crate::state::AppState;
 
@@ -43,7 +43,7 @@ use crate::state::AppState;
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
-    modifiers(&SecurityAddon),
+    modifiers(&SecurityAddon, &ServerPrefixAddon),
     tags(
         (name = "Requests", description = "Guard request management"),
         (name = "Assignments", description = "Guard assignment management"),
@@ -61,15 +61,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let db_config = DatabaseConfig::from_env()?;
-    let redis_config = RedisConfig::from_env()?;
     let jwt_config = JwtConfig::from_env()?;
 
     let db = create_pool(&db_config).await?;
-    let redis = create_redis_client(&redis_config.cache_url)?;
 
     let state = Arc::new(AppState {
         db,
-        redis,
         jwt_config,
     });
 
@@ -87,7 +84,17 @@ async fn main() -> anyhow::Result<()> {
             "/assignments/{id}/status",
             put(handlers::update_assignment_status),
         )
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge({
+            let swagger = SwaggerUi::new("/swagger-ui")
+                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            match std::env::var("SWAGGER_PATH_PREFIX") {
+                Ok(prefix) => swagger.config(
+                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
+                ),
+                Err(_) => swagger,
+            }
+        })
+        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

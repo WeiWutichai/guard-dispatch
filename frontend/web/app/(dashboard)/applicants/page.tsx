@@ -12,35 +12,56 @@ import {
   Eye,
   Check,
   Ban,
-  FileText,
   Calendar,
   ChevronDown,
   MapPin,
+  Building2,
+  UserCheck,
+  Briefcase,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
 
+// --- Types ---
+type ApplicantType = "guard" | "customer";
 type ApplicantStatus = "pending" | "approved" | "rejected";
 
-interface Applicant {
+interface BaseApplicant {
   id: string;
   name: string;
   avatar: string;
   phone: string;
   email: string;
   appliedDate: string;
-  experience: string;
-  expectedSalary: string;
   status: ApplicantStatus;
-  documents: { name: string; status: "submitted" | "pending" | "missing"; url?: string }[];
-  certificates: string[];
-  bio: string;
   location?: string;
 }
 
+interface GuardApplicant extends BaseApplicant {
+  type: "guard";
+  experience: string;
+  expectedSalary: string;
+  documents: { name: string; status: "submitted" | "pending" | "missing"; url?: string }[];
+  certificates: string[];
+  bio: string;
+}
+
+interface CustomerApplicant extends BaseApplicant {
+  type: "customer";
+  companyName?: string;
+  bookingPurpose: string;
+}
+
+type Applicant = GuardApplicant | CustomerApplicant;
+
+type TabType = "all" | "guard" | "customer";
+
+// --- Mock Data ---
 const initialApplicants: Applicant[] = [
+  // Guard applicants
   {
-    id: "A001",
+    id: "GA001",
+    type: "guard",
     name: "สมศักดิ์ มานะ",
     avatar: "สม",
     phone: "089-123-4567",
@@ -60,7 +81,8 @@ const initialApplicants: Applicant[] = [
     bio: "มีประสบการณ์ทำงานรักษาความปลอดภัยหมู่บ้านจัดสรร 3 ปี มีความรับผิดชอบสูง",
   },
   {
-    id: "A002",
+    id: "GA002",
+    type: "guard",
     name: "วิชัย ใจดี",
     avatar: "วช",
     phone: "091-234-5678",
@@ -80,7 +102,8 @@ const initialApplicants: Applicant[] = [
     bio: "อดีตทหาร มีประสบการณ์ด้านรักษาความปลอดภัยห้างสรรพสินค้า 5 ปี",
   },
   {
-    id: "A003",
+    id: "GA003",
+    type: "guard",
     name: "ประเสริฐ ทองดี",
     avatar: "ปส",
     phone: "084-567-8901",
@@ -99,7 +122,8 @@ const initialApplicants: Applicant[] = [
     bio: "เพิ่งเริ่มทำงานด้านรักษาความปลอดภัย มีความกระตือรือร้นในการเรียนรู้",
   },
   {
-    id: "A004",
+    id: "GA004",
+    type: "guard",
     name: "สุรชัย แสนดี",
     avatar: "สร",
     phone: "086-789-0123",
@@ -119,7 +143,8 @@ const initialApplicants: Applicant[] = [
     bio: "มีประสบการณ์รักษาความปลอดภัยโรงงานอุตสาหกรรม 7 ปี เชี่ยวชาญด้านความปลอดภัยในโรงงาน",
   },
   {
-    id: "A005",
+    id: "GA005",
+    type: "guard",
     name: "อนันต์ มั่นคง",
     avatar: "อน",
     phone: "088-901-2345",
@@ -136,12 +161,63 @@ const initialApplicants: Applicant[] = [
     certificates: [],
     bio: "เคยทำงานรักษาความปลอดภัยอาคารสำนักงาน 2 ปี",
   },
+  // Customer applicants
+  {
+    id: "CA001",
+    type: "customer",
+    name: "นภา สุขใจ",
+    avatar: "นภ",
+    phone: "081-111-2222",
+    email: "napa.s@email.com",
+    appliedDate: "2024-01-16",
+    status: "pending",
+    location: "สีลม, กรุงเทพฯ",
+    companyName: "บริษัท สุขใจ จำกัด",
+    bookingPurpose: "รักษาความปลอดภัยอาคารสำนักงาน",
+  },
+  {
+    id: "CA002",
+    type: "customer",
+    name: "พิมพ์ชนก วงศ์สว่าง",
+    avatar: "พช",
+    phone: "082-333-4444",
+    email: "pimchanok.w@email.com",
+    appliedDate: "2024-01-17",
+    status: "pending",
+    location: "ลาดพร้าว, กรุงเทพฯ",
+    bookingPurpose: "รักษาความปลอดภัยงานอีเวนต์",
+  },
+  {
+    id: "CA003",
+    type: "customer",
+    name: "ธนพล เจริญรุ่ง",
+    avatar: "ธน",
+    phone: "083-555-6666",
+    email: "thanapol.c@email.com",
+    appliedDate: "2024-01-12",
+    status: "approved",
+    location: "พระโขนง, กรุงเทพฯ",
+    companyName: "บริษัท เจริญรุ่ง พร็อพเพอร์ตี้ จำกัด",
+    bookingPurpose: "รักษาความปลอดภัยโครงการหมู่บ้านจัดสรร",
+  },
+  {
+    id: "CA004",
+    type: "customer",
+    name: "สุวรรณา ลีลาวดี",
+    avatar: "สว",
+    phone: "085-777-8888",
+    email: "suwanna.l@email.com",
+    appliedDate: "2024-01-09",
+    status: "rejected",
+    location: "รังสิต, ปทุมธานี",
+    bookingPurpose: "รักษาความปลอดภัยส่วนบุคคล",
+  },
 ];
 
-const statusConfig: Record<ApplicantStatus, { label: { th: string; en: string }; color: string; bg: string }> = {
-  pending: { label: { th: "รอพิจารณา", en: "Pending" }, color: "text-amber-700", bg: "bg-amber-100" },
-  approved: { label: { th: "อนุมัติแล้ว", en: "Approved" }, color: "text-emerald-700", bg: "bg-emerald-100" },
-  rejected: { label: { th: "ปฏิเสธ", en: "Rejected" }, color: "text-red-700", bg: "bg-red-100" },
+const statusConfig: Record<ApplicantStatus, { color: string; bg: string; dot: string }> = {
+  pending: { color: "text-amber-700", bg: "bg-amber-100", dot: "bg-amber-500" },
+  approved: { color: "text-emerald-700", bg: "bg-emerald-100", dot: "bg-emerald-500" },
+  rejected: { color: "text-red-700", bg: "bg-red-100", dot: "bg-red-500" },
 };
 
 export default function ApplicantsPage() {
@@ -150,53 +226,108 @@ export default function ApplicantsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ApplicantStatus | "all">("all");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabType>("all");
   const [selectedApplicant, setSelectedApplicant] = useState<Applicant | null>(null);
   const [isApplicantModalOpen, setIsApplicantModalOpen] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<{ name: string; url: string } | null>(null);
 
+  // Filter applicants by tab, search, and status
   const filteredApplicants = applicants.filter((applicant) => {
-    const matchesSearch = applicant.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const matchesTab = activeTab === "all" || applicant.type === activeTab;
+    const matchesSearch =
+      applicant.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       applicant.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
       applicant.phone.includes(searchQuery);
     const matchesStatus = statusFilter === "all" || applicant.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    return matchesTab && matchesSearch && matchesStatus;
   });
 
+  // Stats scoped to active tab
+  const tabApplicants = applicants.filter((a) => activeTab === "all" || a.type === activeTab);
   const stats = {
-    total: applicants.length,
-    pending: applicants.filter(a => a.status === "pending").length,
-    approved: applicants.filter(a => a.status === "approved").length,
-    rejected: applicants.filter(a => a.status === "rejected").length,
+    total: tabApplicants.length,
+    pending: tabApplicants.filter((a) => a.status === "pending").length,
+    approved: tabApplicants.filter((a) => a.status === "approved").length,
+    rejected: tabApplicants.filter((a) => a.status === "rejected").length,
   };
 
   const handleApproveApplicant = (applicantId: string) => {
-    setApplicants(applicants.map(a =>
-      a.id === applicantId ? { ...a, status: "approved" as ApplicantStatus } : a
-    ));
+    setApplicants(
+      applicants.map((a) =>
+        a.id === applicantId ? { ...a, status: "approved" as ApplicantStatus } : a
+      )
+    );
     setIsApplicantModalOpen(false);
     setSelectedApplicant(null);
   };
 
   const handleRejectApplicant = (applicantId: string) => {
-    setApplicants(applicants.map(a =>
-      a.id === applicantId ? { ...a, status: "rejected" as ApplicantStatus } : a
-    ));
+    setApplicants(
+      applicants.map((a) =>
+        a.id === applicantId ? { ...a, status: "rejected" as ApplicantStatus } : a
+      )
+    );
     setIsApplicantModalOpen(false);
     setSelectedApplicant(null);
   };
+
+  const getStatusLabel = (status: ApplicantStatus) => {
+    const labels: Record<ApplicantStatus, { th: string; en: string }> = {
+      pending: { th: t.applicants.stats.pending, en: t.applicants.stats.pending },
+      approved: { th: t.applicants.stats.approved, en: t.applicants.stats.approved },
+      rejected: { th: t.applicants.stats.rejected, en: t.applicants.stats.rejected },
+    };
+    return labels[status];
+  };
+
+  const tabs: { key: TabType; label: string; icon: React.ReactNode }[] = [
+    { key: "all", label: t.applicants.tabs.all, icon: <Users className="h-4 w-4" /> },
+    { key: "guard", label: t.applicants.tabs.guard, icon: <Shield className="h-4 w-4" /> },
+    { key: "customer", label: t.applicants.tabs.customer, icon: <UserCheck className="h-4 w-4" /> },
+  ];
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            {locale === "th" ? "จัดการผู้สมัคร" : "Applicant Management"}
-          </h1>
-          <p className="text-slate-500 mt-1">
-            {locale === "th" ? "ตรวจสอบและอนุมัติผู้สมัครเข้าทำงาน" : "Review and approve job applicants"}
-          </p>
+          <h1 className="text-2xl font-bold text-slate-900">{t.applicants.title}</h1>
+          <p className="text-slate-500 mt-1">{t.applicants.subtitle}</p>
         </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-1.5 shadow-sm inline-flex gap-1">
+        {tabs.map((tab) => {
+          const count = applicants.filter(
+            (a) => tab.key === "all" || a.type === tab.key
+          ).length;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={cn(
+                "flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-all",
+                activeTab === tab.key
+                  ? "bg-primary text-white shadow-md shadow-primary/20"
+                  : "text-slate-600 hover:bg-slate-100"
+              )}
+            >
+              {tab.icon}
+              {tab.label}
+              <span
+                className={cn(
+                  "ml-1 px-2 py-0.5 rounded-full text-xs font-bold",
+                  activeTab === tab.key
+                    ? "bg-white/20 text-white"
+                    : "bg-slate-100 text-slate-500"
+                )}
+              >
+                {count}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Stats Cards */}
@@ -204,7 +335,7 @@ export default function ApplicantsPage() {
         <div className="bg-gradient-to-br from-slate-50 to-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-500">{locale === "th" ? "ผู้สมัครทั้งหมด" : "Total Applicants"}</p>
+              <p className="text-sm font-medium text-slate-500">{t.applicants.stats.total}</p>
               <p className="text-3xl font-bold text-slate-900 mt-1">{stats.total}</p>
             </div>
             <div className="p-3 bg-slate-100 rounded-xl">
@@ -215,7 +346,7 @@ export default function ApplicantsPage() {
         <div className="bg-gradient-to-br from-amber-50 to-white p-5 rounded-2xl border border-amber-100 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-amber-600">{locale === "th" ? "รอพิจารณา" : "Pending"}</p>
+              <p className="text-sm font-medium text-amber-600">{t.applicants.stats.pending}</p>
               <p className="text-3xl font-bold text-amber-700 mt-1">{stats.pending}</p>
             </div>
             <div className="p-3 bg-amber-100 rounded-xl">
@@ -226,7 +357,7 @@ export default function ApplicantsPage() {
         <div className="bg-gradient-to-br from-emerald-50 to-white p-5 rounded-2xl border border-emerald-100 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-emerald-600">{locale === "th" ? "อนุมัติแล้ว" : "Approved"}</p>
+              <p className="text-sm font-medium text-emerald-600">{t.applicants.stats.approved}</p>
               <p className="text-3xl font-bold text-emerald-700 mt-1">{stats.approved}</p>
             </div>
             <div className="p-3 bg-emerald-100 rounded-xl">
@@ -237,7 +368,7 @@ export default function ApplicantsPage() {
         <div className="bg-gradient-to-br from-red-50 to-white p-5 rounded-2xl border border-red-100 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-red-600">{locale === "th" ? "ปฏิเสธ" : "Rejected"}</p>
+              <p className="text-sm font-medium text-red-600">{t.applicants.stats.rejected}</p>
               <p className="text-3xl font-bold text-red-700 mt-1">{stats.rejected}</p>
             </div>
             <div className="p-3 bg-red-100 rounded-xl">
@@ -254,7 +385,7 @@ export default function ApplicantsPage() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
             <input
               type="text"
-              placeholder={locale === "th" ? "ค้นหาผู้สมัคร..." : "Search applicants..."}
+              placeholder={t.applicants.searchPlaceholder}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pl-12 pr-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
@@ -265,30 +396,48 @@ export default function ApplicantsPage() {
               onClick={() => setIsFilterOpen(!isFilterOpen)}
               className="flex items-center gap-3 px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors min-w-[180px] justify-between"
             >
-              <span>{statusFilter === "all" ? (locale === "th" ? "สถานะทั้งหมด" : "All Status") : statusConfig[statusFilter].label[locale]}</span>
+              <span>
+                {statusFilter === "all"
+                  ? t.applicants.statusAll
+                  : getStatusLabel(statusFilter)[locale === "th" ? "th" : "en"]}
+              </span>
               <ChevronDown className={cn("h-4 w-4 transition-transform", isFilterOpen && "rotate-180")} />
             </button>
             {isFilterOpen && (
               <div className="absolute right-0 mt-2 w-52 bg-white rounded-xl border border-slate-200 shadow-xl py-2 z-50">
                 <button
-                  onClick={() => { setStatusFilter("all"); setIsFilterOpen(false); }}
+                  onClick={() => {
+                    setStatusFilter("all");
+                    setIsFilterOpen(false);
+                  }}
                   className={cn(
                     "w-full px-4 py-2.5 text-sm text-left transition-colors",
-                    statusFilter === "all" ? "bg-primary/10 text-primary font-medium" : "text-slate-700 hover:bg-slate-50"
+                    statusFilter === "all"
+                      ? "bg-primary/10 text-primary font-medium"
+                      : "text-slate-700 hover:bg-slate-50"
                   )}
                 >
-                  {locale === "th" ? "สถานะทั้งหมด" : "All Status"}
+                  {t.applicants.statusAll}
                 </button>
-                {(Object.keys(statusConfig) as ApplicantStatus[]).map((status) => (
+                {(["pending", "approved", "rejected"] as ApplicantStatus[]).map((status) => (
                   <button
                     key={status}
-                    onClick={() => { setStatusFilter(status); setIsFilterOpen(false); }}
+                    onClick={() => {
+                      setStatusFilter(status);
+                      setIsFilterOpen(false);
+                    }}
                     className={cn(
                       "w-full px-4 py-2.5 text-sm text-left transition-colors",
-                      statusFilter === status ? "bg-primary/10 text-primary font-medium" : "text-slate-700 hover:bg-slate-50"
+                      statusFilter === status
+                        ? "bg-primary/10 text-primary font-medium"
+                        : "text-slate-700 hover:bg-slate-50"
                     )}
                   >
-                    {statusConfig[status].label[locale]}
+                    {status === "pending"
+                      ? t.applicants.statusPending
+                      : status === "approved"
+                        ? t.applicants.statusApproved
+                        : t.applicants.statusRejected}
                   </button>
                 ))}
               </div>
@@ -303,12 +452,49 @@ export default function ApplicantsPage() {
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200">
-                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "ผู้สมัคร" : "Applicant"}</th>
-                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "ประสบการณ์" : "Experience"}</th>
-                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "เงินเดือนที่คาดหวัง" : "Expected Salary"}</th>
-                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "วันที่สมัคร" : "Applied Date"}</th>
-                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "สถานะ" : "Status"}</th>
-                <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "การดำเนินการ" : "Actions"}</th>
+                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {t.applicants.table.applicant}
+                </th>
+                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {t.applicants.table.phone}
+                </th>
+                {/* Show type column only on "all" tab */}
+                {activeTab === "all" && (
+                  <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    {t.applicants.table.type}
+                  </th>
+                )}
+                {/* Guard-specific columns */}
+                {(activeTab === "all" || activeTab === "guard") && (
+                  <>
+                    <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {t.applicants.table.experience}
+                    </th>
+                    <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {t.applicants.table.expectedSalary}
+                    </th>
+                  </>
+                )}
+                {/* Customer-specific columns */}
+                {activeTab === "customer" && (
+                  <>
+                    <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {t.applicants.table.companyName}
+                    </th>
+                    <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      {t.applicants.table.bookingPurpose}
+                    </th>
+                  </>
+                )}
+                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {t.applicants.table.appliedDate}
+                </th>
+                <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {t.applicants.table.status}
+                </th>
+                <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {t.applicants.table.actions}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -316,39 +502,108 @@ export default function ApplicantsPage() {
                 const status = statusConfig[applicant.status];
                 return (
                   <tr key={applicant.id} className="hover:bg-slate-50/50 transition-colors group">
+                    {/* Applicant Name + Avatar */}
                     <td className="py-4 px-5">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-100 to-amber-50 flex items-center justify-center flex-shrink-0">
-                          <span className="text-sm font-bold text-amber-700">{applicant.avatar}</span>
+                        <div
+                          className={cn(
+                            "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
+                            applicant.type === "guard"
+                              ? "bg-gradient-to-br from-amber-100 to-amber-50"
+                              : "bg-gradient-to-br from-blue-100 to-blue-50"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "text-sm font-bold",
+                              applicant.type === "guard" ? "text-amber-700" : "text-blue-700"
+                            )}
+                          >
+                            {applicant.avatar}
+                          </span>
                         </div>
                         <div>
                           <p className="font-semibold text-slate-900">{applicant.name}</p>
-                          <p className="text-xs text-slate-400">{applicant.phone}</p>
+                          <p className="text-xs text-slate-400">{applicant.id}</p>
                         </div>
                       </div>
                     </td>
+                    {/* Phone */}
                     <td className="py-4 px-5">
-                      <p className="text-sm text-slate-600 font-medium">{applicant.experience}</p>
+                      <p className="text-sm text-slate-600">{applicant.phone}</p>
                     </td>
-                    <td className="py-4 px-5">
-                      <p className="text-sm text-primary font-bold">{applicant.expectedSalary}</p>
-                    </td>
+                    {/* Type badge (all tab only) */}
+                    {activeTab === "all" && (
+                      <td className="py-4 px-5">
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold",
+                            applicant.type === "guard"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-blue-100 text-blue-700"
+                          )}
+                        >
+                          {applicant.type === "guard" ? (
+                            <Shield className="h-3 w-3" />
+                          ) : (
+                            <UserCheck className="h-3 w-3" />
+                          )}
+                          {t.applicants.badge[applicant.type]}
+                        </span>
+                      </td>
+                    )}
+                    {/* Guard-specific data */}
+                    {(activeTab === "all" || activeTab === "guard") && (
+                      <>
+                        <td className="py-4 px-5">
+                          <p className="text-sm text-slate-600 font-medium">
+                            {applicant.type === "guard" ? applicant.experience : "-"}
+                          </p>
+                        </td>
+                        <td className="py-4 px-5">
+                          <p className="text-sm text-primary font-bold">
+                            {applicant.type === "guard" ? applicant.expectedSalary : "-"}
+                          </p>
+                        </td>
+                      </>
+                    )}
+                    {/* Customer-specific data */}
+                    {activeTab === "customer" && (
+                      <>
+                        <td className="py-4 px-5">
+                          <p className="text-sm text-slate-600 font-medium">
+                            {applicant.type === "customer" ? (applicant.companyName || "-") : "-"}
+                          </p>
+                        </td>
+                        <td className="py-4 px-5">
+                          <p className="text-sm text-slate-600">
+                            {applicant.type === "customer" ? applicant.bookingPurpose : "-"}
+                          </p>
+                        </td>
+                      </>
+                    )}
+                    {/* Applied date */}
                     <td className="py-4 px-5">
                       <p className="text-sm text-slate-500">{applicant.appliedDate}</p>
                     </td>
+                    {/* Status */}
                     <td className="py-4 px-5">
-                      <span className={cn(
-                        "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold",
-                        status.bg, status.color
-                      )}>
-                        <span className={cn(
-                          "w-1.5 h-1.5 rounded-full",
-                          applicant.status === "pending" ? "bg-amber-500" :
-                            applicant.status === "approved" ? "bg-emerald-500" : "bg-red-500"
-                        )}></span>
-                        {status.label[locale]}
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold",
+                          status.bg,
+                          status.color
+                        )}
+                      >
+                        <span className={cn("w-1.5 h-1.5 rounded-full", status.dot)}></span>
+                        {applicant.status === "pending"
+                          ? t.applicants.statusPending
+                          : applicant.status === "approved"
+                            ? t.applicants.statusApproved
+                            : t.applicants.statusRejected}
                       </span>
                     </td>
+                    {/* Actions */}
                     <td className="py-4 px-5 text-right">
                       <button
                         onClick={() => {
@@ -372,7 +627,7 @@ export default function ApplicantsPage() {
             <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Users className="h-8 w-8 text-slate-400" />
             </div>
-            <p className="text-slate-500 font-medium">{locale === "th" ? "ไม่พบผู้สมัคร" : "No applicants found"}</p>
+            <p className="text-slate-500 font-medium">{t.applicants.noApplicantsFound}</p>
           </div>
         )}
       </div>
@@ -381,16 +636,45 @@ export default function ApplicantsPage() {
       {isApplicantModalOpen && selectedApplicant && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-gradient-to-r from-amber-50 to-white">
+            {/* Modal Header */}
+            <div
+              className={cn(
+                "flex items-center justify-between p-6 border-b border-slate-100",
+                selectedApplicant.type === "guard"
+                  ? "bg-gradient-to-r from-amber-50 to-white"
+                  : "bg-gradient-to-r from-blue-50 to-white"
+              )}
+            >
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-100 rounded-xl">
-                  <UserPlus className="h-5 w-5 text-amber-600" />
+                <div
+                  className={cn(
+                    "p-2 rounded-xl",
+                    selectedApplicant.type === "guard" ? "bg-amber-100" : "bg-blue-100"
+                  )}
+                >
+                  {selectedApplicant.type === "guard" ? (
+                    <Shield className="h-5 w-5 text-amber-600" />
+                  ) : (
+                    <UserCheck className="h-5 w-5 text-blue-600" />
+                  )}
                 </div>
                 <div>
                   <h2 className="text-xl font-bold text-slate-900">
-                    {locale === "th" ? "ตรวจสอบใบสมัคร" : "Review Application"}
+                    {t.applicants.modal.reviewTitle}
                   </h2>
-                  <p className="text-sm text-slate-500">{selectedApplicant.id}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <p className="text-sm text-slate-500">{selectedApplicant.id}</p>
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                        selectedApplicant.type === "guard"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-blue-100 text-blue-700"
+                      )}
+                    >
+                      {t.applicants.badge[selectedApplicant.type]}
+                    </span>
+                  </div>
                 </div>
               </div>
               <button
@@ -408,29 +692,55 @@ export default function ApplicantsPage() {
               {/* Header Info */}
               <div className="flex items-start justify-between mb-8">
                 <div className="flex items-center gap-6">
-                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-amber-100 to-amber-50 flex items-center justify-center text-2xl font-bold text-amber-700 shadow-inner">
+                  <div
+                    className={cn(
+                      "w-20 h-20 rounded-2xl flex items-center justify-center text-2xl font-bold shadow-inner",
+                      selectedApplicant.type === "guard"
+                        ? "bg-gradient-to-br from-amber-100 to-amber-50 text-amber-700"
+                        : "bg-gradient-to-br from-blue-100 to-blue-50 text-blue-700"
+                    )}
+                  >
                     {selectedApplicant.avatar}
                   </div>
                   <div>
-                    <h3 className="text-2xl font-bold text-slate-900 mb-1">{selectedApplicant.name}</h3>
-                    <p className="text-sm text-slate-500 mb-2">{selectedApplicant.experience}</p>
+                    <h3 className="text-2xl font-bold text-slate-900 mb-1">
+                      {selectedApplicant.name}
+                    </h3>
+                    {selectedApplicant.type === "guard" && (
+                      <p className="text-sm text-slate-500 mb-2">
+                        {selectedApplicant.experience}
+                      </p>
+                    )}
+                    {selectedApplicant.type === "customer" && selectedApplicant.companyName && (
+                      <p className="text-sm text-slate-500 mb-2 flex items-center gap-1.5">
+                        <Building2 className="h-3.5 w-3.5" />
+                        {selectedApplicant.companyName}
+                      </p>
+                    )}
                     <div className="flex items-center gap-2">
-                      <span className={cn(
-                        "px-3 py-1 text-xs font-semibold rounded-full",
-                        statusConfig[selectedApplicant.status].bg,
-                        statusConfig[selectedApplicant.status].color
-                      )}>
-                        {statusConfig[selectedApplicant.status].label[locale]}
+                      <span
+                        className={cn(
+                          "px-3 py-1 text-xs font-semibold rounded-full",
+                          statusConfig[selectedApplicant.status].bg,
+                          statusConfig[selectedApplicant.status].color
+                        )}
+                      >
+                        {selectedApplicant.status === "pending"
+                          ? t.applicants.statusPending
+                          : selectedApplicant.status === "approved"
+                            ? t.applicants.statusApproved
+                            : t.applicants.statusRejected}
                       </span>
                       <span className="text-xs text-slate-400">
-                        {locale === "th" ? "สมัครเมื่อ" : "Applied"}: {selectedApplicant.appliedDate}
+                        <Calendar className="h-3 w-3 inline mr-1" />
+                        {selectedApplicant.appliedDate}
                       </span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Contact & Salary Info */}
+              {/* Contact Info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 mb-8 p-4 bg-slate-50 rounded-xl">
                 <div className="flex items-center gap-3 text-slate-600">
                   <Phone className="h-5 w-5 text-slate-400" />
@@ -446,58 +756,79 @@ export default function ApplicantsPage() {
                     <span className="text-sm font-medium">{selectedApplicant.location}</span>
                   </div>
                 )}
-                <div className="flex items-center gap-3 text-slate-600">
-                  <Shield className="h-5 w-5 text-slate-400" />
-                  <span className="text-sm font-medium">
-                    {locale === "th" ? "เงินเดือนที่คาดหวัง" : "Expected Salary"}: <span className="text-primary font-bold">{selectedApplicant.expectedSalary}</span>
-                  </span>
-                </div>
+                {selectedApplicant.type === "guard" && (
+                  <div className="flex items-center gap-3 text-slate-600">
+                    <Shield className="h-5 w-5 text-slate-400" />
+                    <span className="text-sm font-medium">
+                      {t.applicants.table.expectedSalary}:{" "}
+                      <span className="text-primary font-bold">
+                        {selectedApplicant.expectedSalary}
+                      </span>
+                    </span>
+                  </div>
+                )}
+                {selectedApplicant.type === "customer" && (
+                  <div className="flex items-center gap-3 text-slate-600">
+                    <Briefcase className="h-5 w-5 text-slate-400" />
+                    <span className="text-sm font-medium">
+                      {selectedApplicant.bookingPurpose}
+                    </span>
+                  </div>
+                )}
               </div>
 
-              {/* Documents Section */}
-              <div className="mb-8">
-                <h4 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-wider">
-                  {locale === "th" ? "เอกสารยืนยันตัวตน" : "Identity Documents"}
-                </h4>
-                <div className="space-y-3">
-                  {selectedApplicant.documents.map((doc, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-xl hover:shadow-sm transition-all">
-                      <span className="text-sm font-medium text-slate-700">{doc.name}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (doc.url) setSelectedDoc({ name: doc.name, url: doc.url });
-                        }}
-                        disabled={!doc.url}
-                        className={cn(
-                          "text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-full transition-all",
-                          doc.status === "submitted"
-                            ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200 cursor-pointer"
-                            : doc.status === "pending"
-                              ? "bg-amber-100 text-amber-700"
-                              : "bg-red-100 text-red-700"
-                        )}
-                      >
-                        {doc.status === "submitted"
-                          ? (locale === "th" ? "ส่งแล้ว" : "Submitted")
-                          : doc.status === "pending"
-                            ? (locale === "th" ? "รอส่ง" : "Pending")
-                            : (locale === "th" ? "ยังไม่ส่ง" : "Missing")}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Certificates */}
-              {selectedApplicant.certificates.length > 0 && (
+              {/* Guard-specific: Documents */}
+              {selectedApplicant.type === "guard" && (
                 <div className="mb-8">
                   <h4 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-wider">
-                    {locale === "th" ? "ใบประกาศนียบัตร" : "Certificates"}
+                    {t.applicants.modal.documents}
+                  </h4>
+                  <div className="space-y-3">
+                    {selectedApplicant.documents.map((doc, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-xl hover:shadow-sm transition-all"
+                      >
+                        <span className="text-sm font-medium text-slate-700">{doc.name}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (doc.url) setSelectedDoc({ name: doc.name, url: doc.url });
+                          }}
+                          disabled={!doc.url}
+                          className={cn(
+                            "text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-full transition-all",
+                            doc.status === "submitted"
+                              ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200 cursor-pointer"
+                              : doc.status === "pending"
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-red-100 text-red-700"
+                          )}
+                        >
+                          {doc.status === "submitted"
+                            ? t.applicants.modal.submitted
+                            : doc.status === "pending"
+                              ? t.applicants.modal.pendingDoc
+                              : t.applicants.modal.missing}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Guard-specific: Certificates */}
+              {selectedApplicant.type === "guard" && selectedApplicant.certificates.length > 0 && (
+                <div className="mb-8">
+                  <h4 className="text-sm font-bold text-slate-900 mb-4 uppercase tracking-wider">
+                    {t.applicants.modal.certificates}
                   </h4>
                   <div className="flex flex-wrap gap-2">
                     {selectedApplicant.certificates.map((cert) => (
-                      <span key={cert} className="px-4 py-1.5 bg-blue-50 text-blue-700 rounded-full text-xs font-bold border border-blue-100">
+                      <span
+                        key={cert}
+                        className="px-4 py-1.5 bg-blue-50 text-blue-700 rounded-full text-xs font-bold border border-blue-100"
+                      >
                         {cert}
                       </span>
                     ))}
@@ -505,15 +836,27 @@ export default function ApplicantsPage() {
                 </div>
               )}
 
-              {/* Bio */}
-              <div className="pt-6 border-t border-slate-100">
-                <h4 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wider">
-                  {locale === "th" ? "ประวัติโดยย่อ" : "Background"}
-                </h4>
-                <p className="text-slate-600 text-sm leading-relaxed">
-                  {selectedApplicant.bio}
-                </p>
-              </div>
+              {/* Guard-specific: Bio */}
+              {selectedApplicant.type === "guard" && (
+                <div className="pt-6 border-t border-slate-100">
+                  <h4 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wider">
+                    {t.applicants.modal.background}
+                  </h4>
+                  <p className="text-slate-600 text-sm leading-relaxed">
+                    {selectedApplicant.bio}
+                  </p>
+                </div>
+              )}
+
+              {/* Approved Note */}
+              {selectedApplicant.status === "approved" && (
+                <div className="mt-6 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                  <p className="text-sm text-emerald-700 font-medium flex items-center gap-2">
+                    <Check className="h-4 w-4" />
+                    {t.applicants.approvedNote[selectedApplicant.type]}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Action Buttons */}
@@ -524,14 +867,14 @@ export default function ApplicantsPage() {
                   className="flex-1 py-3 px-4 bg-white border-2 border-red-200 text-red-600 rounded-xl text-sm font-bold hover:bg-red-50 hover:border-red-300 transition-all flex items-center justify-center gap-2"
                 >
                   <Ban className="h-4 w-4" />
-                  {locale === "th" ? "ปฏิเสธ" : "Reject"}
+                  {t.applicants.modal.reject}
                 </button>
                 <button
                   onClick={() => handleApproveApplicant(selectedApplicant.id)}
                   className="flex-1 py-3 px-4 bg-primary text-white rounded-xl text-sm font-bold hover:bg-emerald-600 transition-all shadow-lg shadow-primary/20 flex items-center justify-center gap-2"
                 >
                   <Check className="h-4 w-4" />
-                  {locale === "th" ? "อนุมัติ" : "Approve"}
+                  {t.applicants.modal.approve}
                 </button>
               </div>
             ) : (
@@ -543,7 +886,7 @@ export default function ApplicantsPage() {
                   }}
                   className="w-full py-3 px-4 bg-slate-200 text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-300 transition-all"
                 >
-                  {locale === "th" ? "ปิด" : "Close"}
+                  {t.applicants.modal.close}
                 </button>
               </div>
             )}
@@ -551,7 +894,7 @@ export default function ApplicantsPage() {
         </div>
       )}
 
-      {/* Document Viewer Modal */}
+      {/* Document Viewer Modal (Guard only) */}
       {selectedDoc && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
@@ -576,12 +919,7 @@ export default function ApplicantsPage() {
                 onClick={() => setSelectedDoc(null)}
                 className="px-6 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-300 transition-colors"
               >
-                {t.common.cancel}
-              </button>
-              <button
-                className="px-6 py-2 bg-primary text-white rounded-lg text-sm font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-primary/20"
-              >
-                Download
+                {t.applicants.modal.close}
               </button>
             </div>
           </div>

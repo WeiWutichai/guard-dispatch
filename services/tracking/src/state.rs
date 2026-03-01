@@ -7,7 +7,9 @@ use sqlx::PgPool;
 pub struct AppState {
     pub db: PgPool,
     pub redis_cache: redis::Client,
-    pub redis_pubsub: redis::Client,
+    /// Pre-established multiplexed Redis connection for GPS PubSub.
+    /// Clone is cheap — shares the underlying connection (per CLAUDE.md).
+    pub redis_pubsub: redis::aio::MultiplexedConnection,
     pub jwt_config: JwtConfig,
 }
 
@@ -16,8 +18,8 @@ impl HasJwtSecret for AppState {
         &self.jwt_config.secret
     }
 
-    fn decoding_key(&self) -> jsonwebtoken::DecodingKey {
-        self.jwt_config.decoding_key.clone()
+    fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
+        &self.jwt_config.decoding_key
     }
 }
 

@@ -1,3 +1,7 @@
+use axum::http::header::{
+    AUTHORIZATION, ACCEPT, CONTENT_TYPE, ORIGIN, COOKIE,
+    HeaderName,
+};
 use axum::http::{HeaderValue, Method};
 use tower_http::cors::CorsLayer;
 
@@ -8,6 +12,9 @@ use crate::error::AppError;
 /// - If CORS_ALLOWED_ORIGINS is set, parse comma-separated origins.
 /// - If not set, allow only localhost:3000 (safe dev default).
 /// - Production must set CORS_ALLOWED_ORIGINS explicitly.
+///
+/// Note: `allow_credentials(true)` requires explicit header list —
+/// `Any` (wildcard `*`) is forbidden by the CORS spec with credentials.
 pub fn build_cors_layer() -> CorsLayer {
     let origins_str = std::env::var("CORS_ALLOWED_ORIGINS")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
@@ -27,7 +34,14 @@ pub fn build_cors_layer() -> CorsLayer {
             Method::PATCH,
             Method::OPTIONS,
         ])
-        .allow_headers(tower_http::cors::Any)
+        .allow_headers([
+            AUTHORIZATION,
+            ACCEPT,
+            CONTENT_TYPE,
+            ORIGIN,
+            COOKIE,
+            HeaderName::from_static("x-requested-with"),
+        ])
         .allow_credentials(true)
 }
 
