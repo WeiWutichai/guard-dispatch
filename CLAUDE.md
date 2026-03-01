@@ -21,11 +21,13 @@
 - **Web Admin:** Next.js 16 + TypeScript (App Router)
   - Dev: `localhost:3000` ตรง (ไม่มี basePath)
   - Production (Docker/Nginx): basePath `/pguard-app` (ตั้งผ่าน `NEXT_PUBLIC_BASE_PATH`)
+  - **Map:** react-leaflet + leaflet (OpenStreetMap tiles — ต้องเปลี่ยนเป็น commercial tile provider สำหรับ production)
 - **Mobile App:** Flutter (iOS + Android) — อยู่ใน Monorepo เดียวกัน
   - **State Management:** Provider (`ChangeNotifierProvider`)
   - **HTTP Client:** Dio (with JWT interceptor via `ApiClient`)
   - **Secure Storage:** FlutterSecureStorage (Keychain on iOS, EncryptedSharedPreferences on Android)
   - **Auth Provider:** `AuthProvider` (centralized auth state via Provider)
+  - **Map:** flutter_map + latlong2 + geolocator
 
 ### Backend (Rust ทั้งหมด)
 - **Framework:** Axum 0.8 (ใช้ route syntax `/{id}` ไม่ใช่ `:id`)
@@ -227,6 +229,12 @@ CREATE TABLE chat.attachments (
 - Sidebar navigation defined ใน `components/Sidebar.tsx` — array 14 items
 - Modal pattern: `fixed inset-0 z-50`, `backdrop-blur-sm`, `animate-in fade-in zoom-in`
 - Applicants page ใช้ discriminated union types (`GuardApplicant | CustomerApplicant`) — ห้ามใช้ single generic type
+- **Map (Leaflet):** ต้อง dynamic import ด้วย `ssr: false` เสมอ — Leaflet ต้องการ `window`/DOM
+- **Map Auth:** หน้า map ต้อง gate ด้วย `useAuth()` — เฉพาะ admin/customer เท่านั้น (guard เห็นเฉพาะ location ตัวเอง)
+- **Map Types:** ใช้ `DisplayGuard` จาก `map/types.ts` — ห้าม duplicate interface ใน component
+- **Map Icons:** ใช้ module-level icon cache — ห้ามสร้าง `L.DivIcon` ใหม่ทุก render
+- **Map Search:** ต้อง debounce search input — ห้ามใช้ raw `searchQuery` ตรงใน filter useMemo
+- **Map Popup:** ใช้ conditional render (`{isSelected && <Popup>}`) — ห้าม mount Popup ทุก Marker
 
 ### Flutter Mobile
 - **Secure Storage:** ข้อมูล sensitive (JWT tokens, PIN hash) ต้องเก็บใน `FlutterSecureStorage` เท่านั้น — ห้ามใช้ `SharedPreferences` สำหรับ tokens
@@ -299,7 +307,11 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │   │       ├── applicants/     ← ผู้สมัคร (Guard + Customer tabs)
 │   │       ├── guards/         ← พนักงานรักษาความปลอดภัย (approved guards)
 │   │       ├── customers/      ← ลูกค้า (approved customers)
-│   │       ├── map/            ← แผนที่สด
+│   │       ├── map/            ← แผนที่สด (react-leaflet)
+│   │       │   ├── page.tsx           ← Map page (auth-gated, search, fullscreen)
+│   │       │   ├── map-area.tsx       ← Leaflet MapContainer (dynamic import, ssr:false)
+│   │       │   ├── dashboard-mini-map.tsx ← Read-only mini map for dashboard
+│   │       │   └── types.ts           ← Shared DisplayGuard type
 │   │       ├── tasks/          ← จัดการงาน
 │   │       ├── recruitment/    ← สรรหาบุคลากร
 │   │       ├── reviews/        ← รีวิว
@@ -357,6 +369,27 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 - **Stats Cards:** Scope ตาม active tab (นับเฉพาะ applicants ในประเภทที่เลือก)
 - **Modal:** Content แตกต่างตามประเภท — Guard แสดงเอกสาร/ใบประกาศ/ประวัติ, Customer แสดงบริษัท/วัตถุประสงค์
 - **Approved Note:** เมื่อสถานะ approved จะแสดงข้อความว่าไปอยู่เมนูไหน
+
+### Map Page Architecture (/map)
+- **Auth Gate:** `useAuth()` — admin + customer only (guards see unauthorized screen)
+  - Server-side: tracking API must enforce role-based filtering (guards see own location only)
+- **Map Library:** react-leaflet (Leaflet) — loaded via `dynamic(() => import("./map-area"), { ssr: false })` เพราะ Leaflet ต้องการ DOM
+- **Shared Type:** `DisplayGuard` interface อยู่ใน `map/types.ts` — ใช้ร่วมระหว่าง `page.tsx` และ `map-area.tsx`
+- **Search:** Unified search across `name`, `id`, `location` — debounced 300ms ป้องกัน keystroke lag
+- **Filter:** Status filter (all/active/idle/alert) + search ทำงานร่วมกันผ่าน `filteredGuards` useMemo
+- **Memoization:** Demo data เป็น module-level constant (`DEMO_GUARDS`) → `displayGuards` wrapped ใน `useMemo([guards])` → downstream useMemo/useCallback ทำงานถูกต้อง
+- **Markers:** `GuardMarker` component — conditional Popup render เฉพาะ selected guard + `markerRef.openPopup()` auto-open
+- **Icon Cache:** Module-level `Map<string, L.DivIcon>` — 6 variants (3 statuses × 2 selected states) สร้างครั้งเดียว
+- **Fullscreen:** `fixed inset-0 z-50` overlay + `map.invalidateSize()` หลัง resize
+- **Dashboard Mini Map:** `DashboardMiniMap` — read-only, no interaction (`dragging={false}`, `scrollWheelZoom={false}`)
+- **Tile Provider:** OSM (dev only) — production ต้องเปลี่ยนเป็น Mapbox/Maptiler
+
+### Flutter Mobile Map (live_map_screen.dart)
+- **Auth Gate:** `AuthProvider` role check — admin + customer only
+- **Map Library:** flutter_map + latlong2
+- **Stats:** `_GuardStats.from()` single-pass counter
+- **Widgets:** Extracted `_GuardMapLayer`, `_MarkerDot`, `_SelectedMarkerCallout` ป้องกัน unnecessary rebuild
+- **Import:** `import 'package:latlong2/latlong.dart' show LatLng;` — ต้อง `show LatLng` เพื่อหลีกเลี่ยง conflict กับ `dart:ui.Path`
 
 ### Sidebar Navigation Order (14 items)
 ```
@@ -553,6 +586,12 @@ RUST_LOG=info
 - ❌ ห้ามใช้ icon library อื่นนอกจาก **lucide-react**
 - ❌ ห้ามสร้างหน้าใหม่โดยไม่เพิ่มใน Sidebar navigation (`components/Sidebar.tsx`)
 - ❌ ห้ามมี `/members` route — ถูกรวมเข้า `/applicants` แล้ว (ใช้ tabs แบ่ง guard/customer)
+- ❌ ห้าม import Leaflet components โดยไม่ใช้ `dynamic(() => import(...), { ssr: false })` — Leaflet ต้องการ DOM
+- ❌ ห้ามแสดงหน้า map โดยไม่ตรวจ role — ต้อง gate ด้วย `useAuth()` (admin/customer เท่านั้น)
+- ❌ ห้าม duplicate `DisplayGuard` type — ใช้จาก `map/types.ts` เท่านั้น
+- ❌ ห้ามใช้ `tile.openstreetmap.org` ใน production — ต้องเปลี่ยนเป็น commercial tile provider (Mapbox/Maptiler)
+- ❌ ห้ามสร้าง `L.DivIcon` ใหม่ทุก render — ใช้ module-level icon cache
+- ❌ ห้าม mount `<Popup>` ทุก `<Marker>` — ใช้ conditional render เฉพาะ selected guard
 
 ### Flutter Mobile
 - ❌ ห้ามเก็บ JWT tokens หรือ PIN ใน `SharedPreferences` — ใช้ `FlutterSecureStorage` เท่านั้น
@@ -562,3 +601,5 @@ RUST_LOG=info
 - ❌ ห้ามเช็ค auth state แยกในแต่ละ screen — ใช้ `AuthProvider` ผ่าน Provider
 - ❌ ห้าม navigate ตรงหลัง login โดยไม่ validate credentials กับ backend ก่อน
 - ❌ ห้าม expose bank account number ใน UI ที่ไม่จำเป็น — input ต้อง mask, ปิด autocorrect/suggestions
+- ❌ ห้าม import `latlong2` แบบ full — ต้องใช้ `show LatLng` เพื่อหลีกเลี่ยง conflict กับ `dart:ui.Path`
+- ❌ ห้ามแสดงหน้า map โดยไม่ตรวจ role — ต้อง gate ด้วย `AuthProvider` (admin/customer เท่านั้น)

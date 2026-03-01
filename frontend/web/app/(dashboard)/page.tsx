@@ -9,9 +9,18 @@ import {
   Star,
   Award,
   Loader2,
+  MapPin,
+  ArrowRight,
 } from "lucide-react";
+import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useLanguage } from "@/components/LanguageProvider";
 import { bookingApi, type GuardRequest } from "@/lib/api";
+
+const DashboardMiniMap = dynamic(
+  () => import("./map/dashboard-mini-map"),
+  { ssr: false }
+);
 
 export default function Dashboard() {
   const { t, locale } = useLanguage();
@@ -159,6 +168,35 @@ export default function Dashboard() {
               {locale === "th" ? `ทั้งหมด ${totalCount} คำขอ` : `${totalCount} total requests`}
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* Live Operations Map */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-50 rounded-lg">
+              <MapPin className="h-5 w-5 text-emerald-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                {t.dashboard.liveOperationsMap}
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {t.dashboard.mapInitializing}
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/map"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-emerald-600 transition-colors"
+          >
+            {t.dashboard.viewFullMap}
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+        <div className="h-[300px]">
+          <DashboardMiniMap />
         </div>
       </div>
     </div>

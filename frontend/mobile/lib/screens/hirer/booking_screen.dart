@@ -454,10 +454,11 @@ class _BookingScreenState extends State<BookingScreen> {
         final isSelected = _selectedEquipment.contains(e);
         return GestureDetector(
           onTap: () => setState(() {
-            if (isSelected)
+            if (isSelected) {
               _selectedEquipment.remove(e);
-            else
+            } else {
               _selectedEquipment.add(e);
+            }
           }),
           child: Padding(
             padding: const EdgeInsets.only(bottom: 8),

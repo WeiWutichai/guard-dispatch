@@ -1335,3 +1335,53 @@ class HirerProfileSettingsStrings {
           : 'Alert when booking status changes',
       saveChanges = isThai ? 'บันทึกการเปลี่ยนแปลง' : 'Save Changes';
 }
+
+// ──────────────────────────────────────────────
+// 27. LiveMapStrings — live_map_screen
+// ──────────────────────────────────────────────
+class LiveMapStrings {
+  final String title;
+  final String subtitle;
+  final String totalOnMap;
+  final String active;
+  final String idle;
+  final String alerts;
+  final String filterAll;
+  final String filterActive;
+  final String filterIdle;
+  final String filterAlert;
+  final String personnelList;
+  final String guardsOnMap;
+  final String legend;
+  final String justNow;
+  final String minAgo;
+  final String hourAgo;
+  final String noGuards;
+  final String refresh;
+  final String myLocation;
+
+  LiveMapStrings({required bool isThai})
+    : title = isThai ? 'แผนที่ติดตามสด' : 'Live Map Tracking',
+      subtitle = isThai
+          ? 'ติดตามตำแหน่งเจ้าหน้าที่แบบเรียลไทม์'
+          : 'Real-time location monitoring',
+      totalOnMap = isThai ? 'ทั้งหมดบนแผนที่' : 'Total On Map',
+      active = isThai ? 'ปฏิบัติงาน' : 'Active',
+      idle = isThai ? 'ว่าง' : 'Idle',
+      alerts = isThai ? 'แจ้งเตือน' : 'Alerts',
+      filterAll = isThai ? 'ทั้งหมด' : 'All',
+      filterActive = isThai ? 'ปฏิบัติงาน' : 'Active',
+      filterIdle = isThai ? 'ว่าง' : 'Idle',
+      filterAlert = isThai ? 'แจ้งเตือน' : 'Alert',
+      personnelList = isThai ? 'เจ้าหน้าที่ปฏิบัติงาน' : 'Active Personnel',
+      guardsOnMap = isThai ? 'คนบนแผนที่' : 'guards on map',
+      legend = isThai ? 'สัญลักษณ์' : 'Legend',
+      justNow = isThai ? 'เมื่อสักครู่' : 'Just now',
+      minAgo = isThai ? 'นาทีที่แล้ว' : 'min ago',
+      hourAgo = isThai ? 'ชม. ที่แล้ว' : 'h ago',
+      noGuards = isThai
+          ? 'ไม่พบเจ้าหน้าที่ในตัวกรองนี้'
+          : 'No guards found for this filter',
+      refresh = isThai ? 'รีเฟรช' : 'Refresh',
+      myLocation = isThai ? 'ตำแหน่งของฉัน' : 'My Location';
+}

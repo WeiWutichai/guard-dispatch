@@ -265,9 +265,9 @@ class DashboardScreen extends StatelessWidget {
             children:
                 [
                       strings.sampleDate1,
-                      '10 ' + (isThai ? 'ม.ค.' : 'Jan'),
-                      '20 ' + (isThai ? 'ม.ค.' : 'Jan'),
-                      '30 ' + (isThai ? 'ม.ค.' : 'Jan'),
+                      '10 ${isThai ? 'ม.ค.' : 'Jan'}',
+                      '20 ${isThai ? 'ม.ค.' : 'Jan'}',
+                      '30 ${isThai ? 'ม.ค.' : 'Jan'}',
                     ]
                     .map<Widget>(
                       (e) => Text(
@@ -455,8 +455,7 @@ class DashboardScreen extends StatelessWidget {
         _buildWithdrawalItem(
           context,
           'นางสาวมานี มีทรัพย์',
-          (LanguageProvider.of(context).isThai ? 'กรุงเทพ' : 'Bangkok Bank') +
-              ' • XXX-X-X9911-X',
+          '${LanguageProvider.of(context).isThai ? 'กรุงเทพ' : 'Bangkok Bank'} • XXX-X-X9911-X',
           '฿15,200.00',
           strings.statusCompleted,
           isCompleted: true,

@@ -253,6 +253,11 @@ export const translations = {
       legend: "คำอธิบาย",
       activePersonnel: "พนักงานที่ใช้งาน",
       guardsOnMap: "พนักงานบนแผนที่",
+      searchPlaceholder: "ค้นหาพื้นที่หรือชื่อพนักงาน...",
+      noResults: "ไม่พบผลลัพธ์",
+      exitFullscreen: "ออกจากเต็มจอ",
+      allFilter: "ทั้งหมด",
+      unauthorized: "คุณไม่มีสิทธิ์เข้าถึงหน้านี้",
     },
 
     // Recruitment
@@ -631,6 +636,11 @@ export const translations = {
       legend: "Legend",
       activePersonnel: "Active Personnel",
       guardsOnMap: "guards on map",
+      searchPlaceholder: "Search areas or guard names...",
+      noResults: "No results found",
+      exitFullscreen: "Exit Fullscreen",
+      allFilter: "All",
+      unauthorized: "You do not have access to this page",
     },
 
     // Recruitment
