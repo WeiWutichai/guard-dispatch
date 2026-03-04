@@ -453,6 +453,7 @@ pub async fn submit_guard_profile(
 
     crate::service::submit_guard_profile(
         &state.db,
+        &state.redis,
         &state.s3_client,
         &state.s3_bucket,
         user_id,

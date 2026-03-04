@@ -435,10 +435,12 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 
 ### OTP Registration Flow — 3-Step Progressive (Phone → OTP → PIN → Register → Role → Guard Profile)
 
-> **Flow เปลี่ยนแปลง (2026-03-04):** 3-step progressive registration
+> **Flow เปลี่ยนแปลง (2026-03-05):** 3-step progressive registration with atomic guard role
 > - Step 1: `registerWithOtp(role=null)` ถูกเรียกใน `PinSetupScreen._finishSetup()` ทันทีหลัง PIN — Admin เห็น applicant โดยยังไม่มีประเภท
-> - Step 2: `updateRole(phone, role)` ถูกเรียกใน `RoleSelectionScreen._onRoleTap()` — Admin เห็นประเภทแล้ว
-> - Step 3: `submitGuardProfile(profileToken)` ถูกเรียกใน `GuardRegistrationScreen._onSubmit()` — Admin เห็นข้อมูลครบ
+> - Step 2: `updateRole(phone, 'guard')` ถูกเรียกใน `RoleSelectionScreen._onRoleTap()` — ออก `profile_token` เท่านั้น **ไม่ set role ใน DB** (guard ยังเป็น null)
+> - Step 2 (customer): `updateRole(phone, 'customer')` → set role ทันที (ไม่มี form step)
+> - Step 3: `submitGuardProfile(profileToken)` ถูกเรียกใน `GuardRegistrationScreen._onSubmit()` — set role='guard' + save profile **atomically** → Admin เห็นข้อมูลครบ
+> - **Rollback:** ถ้า Step 3 error (เช่น S3 upload fail) → role ยังเป็น null, ไม่มี partial state
 
 ```
 Flutter Mobile                          Backend (rust-auth)                    External
@@ -476,10 +478,11 @@ PinSetupScreen(phone, phoneVerifiedToken)
 RoleSelectionScreen(phone)
   ├─ ★ STEP 2: updateRole(phone, role)     POST /profile/role
   │   authProvider.updateRole(phone,   ──► ├─ validate_thai_phone()
-  │     'guard'/'customer')                 ├─ UPDATE auth.users SET role WHERE pending + role IS NULL
-  │                                         ├─ invalidate_user_cache()
+  │     'guard'/'customer')                 ├─ Guard: SELECT id (verify user) — ไม่ UPDATE role
+  │                                         ├─ Customer: UPDATE role='customer' ทันที
   │   ◄── profile_token (guard only) ─────┤ └─ encode_profile_token() if guard → Redis EX 15min
-  │                                              Admin เห็นประเภทแล้ว
+  │                                              Guard: Admin ยังเห็น role=null
+  │                                              Customer: Admin เห็นประเภทแล้ว
   ├─ guard → GuardRegistrationScreen(phone, profileToken)
   └─ customer → RegistrationPendingScreen
   ▼ (guard only)
@@ -493,8 +496,11 @@ GuardRegistrationScreen(phone, profileToken)
         profileToken, files...) ──────────► ├─ validate_profile_token() → Redis GETDEL
                                             ├─ validate magic bytes + size (JPEG/PNG/WEBP ≤10MB)
                                             ├─ upload docs to MinIO in PARALLEL (JoinSet)
-                                            └─ UPSERT auth.guard_profiles
+                                            ├─ UPSERT auth.guard_profiles
+                                            ├─ UPDATE auth.users SET role='guard' ← atomic!
+                                            └─ invalidate_user_cache() → Admin เห็นทันที
       (fallback: reissueProfileToken() if profileToken expired)
+      ★ ถ้า error → role ยังเป็น null (ไม่มี partial state)
   ▼
 RegistrationPendingScreen
   └─ "Back to Login" / "สมัครใหม่" → PhoneInputScreen
@@ -506,8 +512,11 @@ RegistrationPendingScreen
 >
 > **3-step progressive visibility:** Admin sees applicant at each step:
 > 1. After PIN: user appears with `role=null` ("ยังไม่ได้ระบุ")
-> 2. After role selection: type updates to guard/customer
-> 3. After form submit: full profile data visible, ready for approval
+> 2. After role selection: guard → role ยังเป็น null (แค่ออก profile_token); customer → role set ทันที
+> 3. After guard form submit: role='guard' + profile saved atomically — ถ้า error ไม่มี partial state
+>
+> **Atomic guard role:** `update_user_role(guard)` ไม่ UPDATE role — แค่ SELECT verify + issue profile_token.
+> `submit_guard_profile()` เป็นตัว SET role='guard' หลัง upload+save สำเร็จ → ถ้า S3 error, role ยัง null.
 >
 > **Profile token lifecycle:** `updateRole(role='guard')` issues `profile_token` (15-min JWT).
 > Used by `submitGuardProfile()`. If expired, `reissueProfileToken()` gets a fresh one.
@@ -522,7 +531,7 @@ RegistrationPendingScreen
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
 - `POST /otp/verify` → `handlers::verify_otp` (public, no JWT)
 - `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`.
-- `POST /profile/role` → `handlers::update_role` (public, no JWT) — sets role for pending user with `role IS NULL`. Returns `profile_token` for guard, null for customer.
+- `POST /profile/role` → `handlers::update_role` (public, no JWT) — guard: verify user + issue `profile_token` (**ไม่ set role**); customer: set role ทันที. Returns `profile_token` for guard, null for customer.
 - `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for pending guard (no OTP needed)
 - `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth — single-use)
 - `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT)
@@ -534,9 +543,9 @@ RegistrationPendingScreen
 
 **Auth Service — Guard Profile:**
 - `service::register_with_otp()`: if role=guard (explicit), calls `encode_profile_token()` → stores jti in Redis `SET EX 900` (15 min). When role=null (3-step flow), does NOT issue profile_token.
-- `service::update_user_role()`: UPDATE role for pending user with `role IS NULL`. If guard → issue profile_token. Rejects admin role. Uses `invalidate_user_cache()` so admin sees update immediately.
+- `service::update_user_role()`: Guard path: SELECT verify user (pending + role IS NULL or guard) + issue profile_token — **ไม่ UPDATE role**. Customer path: UPDATE role='customer'. Rejects admin role.
 - `service::validate_profile_token()`: async, takes redis param — decodes JWT, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
-- `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles` (text fields: `EXCLUDED.field` directly; doc key fields: `COALESCE(EXCLUDED, existing)` to preserve uploaded docs across partial resubmissions)
+- `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles`; then **SET role='guard'** + `invalidate_user_cache()` — role set only after successful save (atomic, no partial state on error)
 - file_key format for guard docs: `profiles/guard/{user_id}/{doc_type}.{ext}`
 
 **Flutter Mobile:**
@@ -782,6 +791,8 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม cast `response.data['field'] as String?` — ใช้ `raw is String ? raw : null` เพื่อป้องกัน crash
 - ❌ ห้ามเรียก `registerWithOtp()` ใน `RoleSelectionScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `PinSetupScreen._finishSetup()` เท่านั้น (3-step flow: register ก่อน, เลือก role ทีหลัง)
 - ❌ ห้ามเรียก `updateRole()` ใน `PinSetupScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `RoleSelectionScreen._onRoleTap()` เท่านั้น
+- ❌ ห้าม `update_user_role()` SET role='guard' ใน DB — guard path ต้องแค่ SELECT verify + issue profile_token เท่านั้น → role จะถูก set ใน `submit_guard_profile()` หลัง upload สำเร็จ (atomic, no partial state)
+- ❌ ห้าม `submit_guard_profile()` สำเร็จโดยไม่ set role='guard' — ต้อง UPDATE role + `invalidate_user_cache()` หลัง UPSERT profile เสมอ
 - ❌ ห้ามส่ง `phoneVerifiedToken` ไปยัง `RoleSelectionScreen` — token ถูก consume ใน `PinSetupScreen` แล้ว, ส่งแค่ `phone`
 - ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `SetPasswordScreen` — ต้อง navigate ไป `PinSetupScreen` โดยตรง (SetPasswordScreen ถูกลบออกจาก flow หลักแล้ว)
 - ❌ ห้ามแสดง `PinLockScreen` โดยตรวจเฉพาะ `pinService.isPinSet` — ต้องตรวจ `auth.status == AuthStatus.authenticated` ก่อนเสมอ (iOS Keychain persist ข้าม reinstall)

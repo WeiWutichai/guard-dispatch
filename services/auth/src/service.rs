@@ -913,17 +913,30 @@ pub async fn update_user_role(
         ));
     }
 
-    // Atomic UPDATE — only affects pending users with no role set yet.
-    let user: Option<(Uuid,)> = sqlx::query_as(
-        "UPDATE auth.users SET role = $2::user_role, updated_at = NOW() \
-         WHERE phone = $1 AND approval_status = 'pending' AND role IS NULL \
-         RETURNING id",
-    )
-    .bind(&phone_clean)
-    .bind(role.to_string())
-    .fetch_optional(db)
-    .await
-    .map_err(AppError::Database)?;
+    // Guard: do NOT set role yet — role is set atomically in submit_guard_profile
+    // so that if profile upload fails, the user stays role=null (no partial state).
+    // Customer: set role immediately (no profile step).
+    let user: Option<(Uuid,)> = if role == UserRole::Guard {
+        sqlx::query_as(
+            "SELECT id FROM auth.users \
+             WHERE phone = $1 AND approval_status = 'pending' AND (role IS NULL OR role = 'guard'::user_role)",
+        )
+        .bind(&phone_clean)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::Database)?
+    } else {
+        sqlx::query_as(
+            "UPDATE auth.users SET role = $2::user_role, updated_at = NOW() \
+             WHERE phone = $1 AND approval_status = 'pending' AND role IS NULL \
+             RETURNING id",
+        )
+        .bind(&phone_clean)
+        .bind(role.to_string())
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::Database)?
+    };
 
     let (user_id,) = user.ok_or_else(|| {
         AppError::BadRequest(
@@ -931,7 +944,7 @@ pub async fn update_user_role(
         )
     })?;
 
-    // Invalidate user cache so admin sees the updated role immediately
+    // Invalidate user cache (customer role changed; guard just needs fresh token)
     invalidate_user_cache(redis, &user_id).await?;
 
     // Issue profile_token only for guard role (needed for document upload)
@@ -1063,6 +1076,7 @@ pub async fn validate_profile_token(
 /// `files` maps document field name (e.g. "id_card") to raw bytes.
 pub async fn submit_guard_profile(
     db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
     s3_client: &aws_sdk_s3::Client,
     bucket: &str,
     user_id: Uuid,
@@ -1146,12 +1160,16 @@ pub async fn submit_guard_profile(
 
     // Set role to 'guard' and optionally update full_name — covers two-phase
     // registration where the user was created without a role/name and now
-    // completes the guard form.
+    // completes the guard form.  Role is set HERE (not in update_user_role)
+    // so that if S3 upload fails the user stays role=null — no partial state.
     sqlx::query("UPDATE auth.users SET role = 'guard'::user_role, full_name = COALESCE($2, full_name) WHERE id = $1")
         .bind(user_id)
         .bind(&form.full_name)
         .execute(db)
         .await?;
+
+    // Invalidate cache so admin sees the role + profile immediately
+    invalidate_user_cache(redis, &user_id).await?;
 
     Ok(())
 }
