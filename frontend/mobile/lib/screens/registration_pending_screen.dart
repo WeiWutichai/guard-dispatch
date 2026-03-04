@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../services/language_service.dart';
 import '../services/auth_service.dart';
-import '../providers/auth_provider.dart';
 import '../l10n/app_strings.dart';
-import 'phone_input_screen.dart';
 import 'role_selection_screen.dart';
+import 'guard_registration_screen.dart';
+import 'guard/guard_dashboard_screen.dart';
 
 class RegistrationPendingScreen extends StatefulWidget {
   const RegistrationPendingScreen({super.key});
@@ -26,35 +25,42 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
     _loadProfile();
   }
 
-  Future<void> _confirmRestart(RegistrationPendingStrings strings) async {
+  Future<void> _navigateToEdit(RegistrationPendingStrings strings) async {
+    final phone = _profile?['phone'] as String?;
+    if (phone == null || phone.isEmpty) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(strings.restartDialogTitle,
+        title: Text(strings.editDialogTitle,
             style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 17)),
-        content: Text(strings.restartDialogMessage,
+        content: Text(strings.editDialogMessage,
             style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary, height: 1.5)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text(strings.restartDialogCancel,
+            child: Text(strings.editDialogCancel,
                 style: GoogleFonts.inter(color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(strings.restartDialogConfirm,
-                style: GoogleFonts.inter(color: AppColors.danger, fontWeight: FontWeight.w700)),
+            child: Text(strings.editDialogConfirm,
+                style: GoogleFonts.inter(color: AppColors.primary, fontWeight: FontWeight.w700)),
           ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
-    await context.read<AuthProvider>().restartRegistration();
-    if (!mounted) return;
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+      MaterialPageRoute(
+        builder: (_) => GuardRegistrationScreen(
+          phone: phone,
+          initialProfile: _profile,
+          dashboard: const GuardDashboardScreen(),
+        ),
+      ),
       (route) => false,
     );
   }
@@ -216,9 +222,9 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // Re-apply button — clears all local registration data
+                  // Edit profile button — navigate to guard form with pre-filled data
                   GestureDetector(
-                    onTap: () => _confirmRestart(strings),
+                    onTap: () => _navigateToEdit(strings),
                     child: Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(vertical: 15),
@@ -228,7 +234,7 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
                         border: Border.all(color: AppColors.border, width: 1.5),
                       ),
                       child: Text(
-                        strings.restartButton,
+                        strings.editButton,
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
                           fontSize: 15,

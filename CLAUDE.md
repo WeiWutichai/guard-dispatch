@@ -503,7 +503,11 @@ GuardRegistrationScreen(phone, profileToken)
       ★ ถ้า error → role ยังเป็น null (ไม่มี partial state)
   ▼
 RegistrationPendingScreen
-  └─ "Back to Login" / "สมัครใหม่" → PhoneInputScreen
+  ├─ "Back to Login" → RoleSelectionScreen
+  └─ "แก้ข้อมูล" → GuardRegistrationScreen(phone, initialProfile, dashboard)
+      ├─ Pre-fills: full_name, gender, date_of_birth, experience, workplace, bank_name, account_name
+      ├─ Empty: account_number (security — masked locally), documents (re-upload or skip — backend COALESCE preserves)
+      └─ Back button: canPop() ? pop : pushAndRemoveUntil(RegistrationPendingScreen)
 ```
 
 > **Design decision:** Registration returns **202 Accepted with no tokens**. The user cannot
@@ -557,11 +561,13 @@ RegistrationPendingScreen
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
 - `AuthService`: `storeTokens()`, `markRegistered()`, `getPhone()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
-  - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only
+  - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only; also stores `phone` and `date_of_birth` (ISO format) for edit flow
+  - `getPendingProfile()` retrieves stored profile for pre-filling edit form
 - `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`
 - `main.dart` `home`: `Consumer<AuthProvider>` — routes to `RegistrationPendingScreen` when `status == pendingApproval` (handles app-restart while pending)
 - `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed).
 - `RoleSelectionScreen._onRoleTap()`: calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path → `RegistrationPendingScreen`
+- `GuardRegistrationScreen`: accepts optional `initialProfile` param for edit mode — `_prefillForm()` restores text fields, gender, DOB, bank from stored profile. Back button uses `canPop()` check to handle edit flow (no route to pop → navigate to `RegistrationPendingScreen`).
 - `GuardRegistrationScreen._onSubmit()`: only calls `submitGuardProfile(profileToken)` — no `registerWithOtp()`. Uses `reissueProfileToken()` fallback if profileToken is null/expired.
 
 **Nginx Rate Limit:**

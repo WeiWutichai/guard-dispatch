@@ -294,11 +294,11 @@ class RegistrationPendingStrings {
   final String docAttached;
   final String docNotAttached;
   final String bankTitle;
-  final String restartButton;
-  final String restartDialogTitle;
-  final String restartDialogMessage;
-  final String restartDialogConfirm;
-  final String restartDialogCancel;
+  final String editButton;
+  final String editDialogTitle;
+  final String editDialogMessage;
+  final String editDialogConfirm;
+  final String editDialogCancel;
 
   RegistrationPendingStrings({required bool isThai})
     : title = isThai ? 'รอการอนุมัติ' : 'Awaiting Approval',
@@ -329,13 +329,13 @@ class RegistrationPendingStrings {
       docAttached = isThai ? 'แนบแล้ว' : 'Attached',
       docNotAttached = isThai ? 'ยังไม่แนบ' : 'Not attached',
       bankTitle = isThai ? 'ข้อมูลธนาคาร' : 'Bank Account',
-      restartButton = isThai ? 'สมัครใหม่' : 'Re-apply',
-      restartDialogTitle = isThai ? 'ยืนยันการสมัครใหม่' : 'Confirm Re-apply',
-      restartDialogMessage = isThai
-          ? 'ข้อมูลการสมัครทั้งหมดจะถูกลบและคุณต้องกรอกข้อมูลใหม่ทั้งหมด ต้องการดำเนินการต่อหรือไม่?'
-          : 'All registration data will be cleared and you will need to fill in everything again. Continue?',
-      restartDialogConfirm = isThai ? 'ใช่ สมัครใหม่' : 'Yes, Re-apply',
-      restartDialogCancel = isThai ? 'ยกเลิก' : 'Cancel';
+      editButton = isThai ? 'แก้ข้อมูล' : 'Edit Profile',
+      editDialogTitle = isThai ? 'แก้ข้อมูลการสมัคร' : 'Edit Registration',
+      editDialogMessage = isThai
+          ? 'คุณสามารถแก้ไขข้อมูลและส่งใหม่ได้\nเอกสารที่แนบแล้วจะยังคงอยู่หากไม่แนบใหม่'
+          : 'You can edit and resubmit.\nPreviously attached documents will be preserved unless re-uploaded.',
+      editDialogConfirm = isThai ? 'แก้ข้อมูล' : 'Edit',
+      editDialogCancel = isThai ? 'ยกเลิก' : 'Cancel';
 }
 
 // ──────────────────────────────────────────────

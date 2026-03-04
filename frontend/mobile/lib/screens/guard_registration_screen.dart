@@ -18,12 +18,15 @@ class GuardRegistrationScreen extends StatefulWidget {
   /// If null (e.g. token expired), reissueProfileToken() is called as fallback.
   final String? profileToken;
   final Widget dashboard;
+  /// Pre-filled profile data for edit mode (from getPendingProfile()).
+  final Map<String, dynamic>? initialProfile;
 
   const GuardRegistrationScreen({
     super.key,
     required this.phone,
     this.profileToken,
     required this.dashboard,
+    this.initialProfile,
   });
 
   @override
@@ -65,6 +68,29 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     GlobalKey<FormState>(),
     GlobalKey<FormState>(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _prefillForm();
+  }
+
+  void _prefillForm() {
+    final p = widget.initialProfile;
+    if (p == null) return;
+    _fullNameController.text = (p['full_name'] as String?) ?? '';
+    _selectedGender = p['gender'] as String?;
+    final dobStr = p['date_of_birth'] as String?;
+    if (dobStr != null && dobStr.isNotEmpty) {
+      _dateOfBirth = DateTime.tryParse(dobStr);
+    }
+    _yearsExpController.text = (p['years_of_experience'] as String?) ?? '';
+    _previousWorkplaceController.text = (p['previous_workplace'] as String?) ?? '';
+    _selectedBank = p['bank_name'] as String?;
+    _accountNameController.text = (p['account_name'] as String?) ?? '';
+    // account_number is masked locally — user must re-enter for security.
+    // Documents stored as filenames only — user re-uploads or backend COALESCE preserves old.
+  }
 
   @override
   void dispose() {
@@ -130,9 +156,18 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
           await authProvider.reissueProfileToken(widget.phone);
 
       // Save profile summary locally (masked account number for security).
+      String? dobSave;
+      if (_dateOfBirth != null) {
+        dobSave =
+            '${_dateOfBirth!.year.toString().padLeft(4, '0')}-'
+            '${_dateOfBirth!.month.toString().padLeft(2, '0')}-'
+            '${_dateOfBirth!.day.toString().padLeft(2, '0')}';
+      }
       await AuthService.savePendingProfile({
+        'phone': widget.phone,
         'full_name': _fullNameController.text.trim(),
         'gender': _selectedGender,
+        'date_of_birth': dobSave,
         'years_of_experience': _yearsExpController.text.trim(),
         'previous_workplace': _previousWorkplaceController.text.trim(),
         'bank_name': _selectedBank,
@@ -355,7 +390,20 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
         children: [
           // Back button
           GestureDetector(
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              if (Navigator.canPop(context)) {
+                Navigator.pop(context);
+              } else {
+                // Edit flow uses pushAndRemoveUntil — no route to pop to.
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const RegistrationPendingScreen(),
+                  ),
+                  (route) => false,
+                );
+              }
+            },
             child: Container(
               width: 36,
               height: 36,
