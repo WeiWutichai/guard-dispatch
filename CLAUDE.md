@@ -433,18 +433,24 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 - **Widgets:** Extracted `_GuardMapLayer`, `_MarkerDot`, `_SelectedMarkerCallout` ป้องกัน unnecessary rebuild
 - **Import:** `import 'package:latlong2/latlong.dart' show LatLng;` — ต้อง `show LatLng` เพื่อหลีกเลี่ยง conflict กับ `dart:ui.Path`
 
-### OTP Registration Flow (Phone → OTP → PIN → Role → Guard Profile)
+### OTP Registration Flow (Phone → OTP → PIN → Fingerprint → Role → Guard Profile)
+
+> **Flow เปลี่ยนแปลง (2026-03):** ลบ `SetPasswordScreen` ออกจาก flow หลัก
+> `registerWithOtp()` ย้ายไปเรียกใน `GuardRegistrationScreen._onSubmit()` แทน
+> `phone_verified_token` ถูก pass ผ่านทุก screen จนถึงจุดที่ submit จริง
+
 ```
 Flutter Mobile                          Backend (rust-auth)                    External
 ─────────────────                       ───────────────────                    ────────
-PhoneInputScreen                        POST /otp/request
-  ├─ validate Thai phone (10 digits)    ├─ validate_thai_phone()
-  ├─ authProvider.requestOtp(phone) ──► ├─ Redis SET NX EX (rate limit)
+PhoneInputScreen
+  ├─ validate Thai phone (10 digits)    POST /otp/request
+  ├─ authProvider.requestOtp(phone) ──► ├─ validate_thai_phone()
+  │                                     ├─ Redis SET NX EX (rate limit)
   │                                     ├─ Redis INCR + TTL (daily cap)
   │                                     ├─ Invalidate old OTPs (DB)
   │                                     ├─ Generate OTP code
   │                                     ├─ Store in auth.otp_codes
-  │                                     └─ send_sms() ─────────────────────► INET SMS Gateway
+  │                                     └─ send_sms() ──────────────────────► INET SMS Gateway
   ▼
 OtpVerificationScreen                   POST /otp/verify
   ├─ 6-digit input (auto-advance)       ├─ Atomic UPDATE + FOR UPDATE
@@ -453,46 +459,54 @@ OtpVerificationScreen                   POST /otp/verify
   │                                     ├─ Mark OTP as used
   │  ◄── phone_verified_token ─────────┤ ├─ Issue JWT (phone + jti)
   │                                     └─ Store jti="valid" in Redis
+  ▼ (navigate directly to PinSetupScreen — no SetPasswordScreen)
+PinSetupScreen(phone, phoneVerifiedToken)
+  ├─ Step 1: Set 6-digit PIN → SHA-256 → FlutterSecureStorage
+  ├─ Step 2: Confirm PIN
+  ├─ Step 3: Fingerprint/Biometric enroll (Skip หรือ Enable)
+  └─ Navigate → RoleSelectionScreen(phone, phoneVerifiedToken)
   ▼
-SetPasswordScreen                       POST /register/otp
-  ├─ full_name, email, password         ├─ Decode JWT → (phone, jti)
-  ├─ Form validation                    ├─ Redis GETDEL jti (single-use)
-  ├─ authProvider.registerWithOtp() ──► ├─ Validate inputs
-  │                                     ├─ Argon2 hash (spawn_blocking)
-  │  ◄── 202 + profile_token (guard) ───┤ ├─ INSERT user (approval_status=pending)
-  │       null (non-guard) ─────────────┤ └─ if guard: encode_profile_token() → store jti in Redis EX 15min
-  ▼
-PinSetupScreen
-  ├─ Set PIN (SHA-256 → FlutterSecureStorage)
-  ├─ Optional biometric enroll
-  └─ Navigate → RoleSelectionScreen(phone, profileToken)
-  ▼
-RoleSelectionScreen
+RoleSelectionScreen(phone, phoneVerifiedToken)
   ├─ guard tap → isPendingApproval() + isRegistered() in parallel (Future.wait)
   │   ├─ pending + profile exists → RegistrationPendingScreen
-  │   ├─ pending + no profile → GuardRegistrationScreen(profileToken)
-  │   └─ not pending/registered → GuardRegistrationScreen(profileToken)
-  └─ customer tap → RegistrationFormScreen
+  │   ├─ pending + no profile → GuardRegistrationScreen(phone, phoneVerifiedToken)
+  │   └─ not pending/registered → GuardRegistrationScreen(phone, phoneVerifiedToken)
+  └─ customer tap → RegistrationFormScreen(phone, phoneVerifiedToken)
   ▼ (guard only)
-GuardRegistrationScreen                 POST /profile/guard
-  ├─ Step 1: personal info              ├─ validate_profile_token() → Redis GETDEL jti (single-use)
-  ├─ Step 2: 5 docs (image_picker)      ├─ validate magic bytes + size check FIRST
-  ├─ Step 3: bank account               ├─ upload docs to MinIO in PARALLEL (JoinSet)
-  ├─ authProvider.submitGuardProfile()  ├─ UPSERT auth.guard_profiles
-  │     Bearer: profileToken ─────────► └─ UPDATE users SET role = 'guard'
+GuardRegistrationScreen(phone, phoneVerifiedToken)
+  ├─ Step 1: full_name, gender, DOB, experience, workplace
+  ├─ Step 2: 5 docs (image_picker: id_card, security_license,
+  │           training_cert, criminal_check, driver_license)
+  ├─ Step 3: bank_name, account_number, account_name, passbook_photo
+  └─ _onSubmit():
+      ① authProvider.registerWithOtp(         POST /register/otp
+           phoneVerifiedToken,           ──► ├─ Decode JWT → (phone, jti)
+           fullName, role='guard')            ├─ Redis GETDEL jti (single-use)
+                                             ├─ Argon2 hash (optional password)
+         ◄── 202 + profile_token ───────────┤ ├─ UPSERT user (approval_status=pending)
+                                             └─ encode_profile_token() → Redis EX 15min
+      ②  authProvider.submitGuardProfile(     POST /profile/guard
+           profileToken, files...) ────────► ├─ validate_profile_token() → Redis GETDEL
+                                             ├─ validate magic bytes + size (JPEG/PNG/WEBP ≤10MB)
+                                             ├─ upload docs to MinIO in PARALLEL (JoinSet)
+                                             └─ UPSERT auth.guard_profiles
   ▼
 RegistrationPendingScreen
-  └─ "Back to Login" → PhoneInputScreen
+  └─ "Back to Login" / "สมัครใหม่" → PhoneInputScreen
 ```
 
 > **Design decision:** Registration returns **202 Accepted with no tokens**. The user cannot
 > access any protected endpoint until an admin approves the account. Only after approval
 > can the user log in normally via `/auth/login`.
 >
-> **Guard two-step design:** `register_with_otp()` returns a short-lived `profile_token` (15 min JWT
-> with `jti`) for guard registrations only. Used immediately by `GuardRegistrationScreen` to POST
-> profile data + documents. Profile token is single-use enforced via Redis GETDEL on the jti.
-> Non-guard roles receive `null` profile_token.
+> **Guard two-step submit:** `registerWithOtp()` (step ①) returns `profile_token` (15-min JWT)
+> used immediately for `submitGuardProfile()` (step ②). Both are called in `_onSubmit()`.
+> Profile token is single-use enforced via Redis GETDEL on jti.
+
+**iOS Keychain & PinLockScreen:**
+- iOS Keychain persists across app reinstalls — `isPinSet` อาจเป็น `true` แม้หลัง uninstall
+- `main.dart` ต้องเช็ค `auth.status == AuthStatus.authenticated` **ก่อน** `pinService.isPinSet`
+- PinLockScreen แสดงเฉพาะ authenticated users เท่านั้น — fresh install/unregistered → PhoneInputScreen
 
 **Auth Service OTP Endpoints (3 routes in main.rs):**
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
@@ -740,7 +754,9 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม upload ไฟล์ไปยัง S3/MinIO แบบ sequential loop — ใช้ `tokio::task::JoinSet` เพื่อ parallel upload เสมอ
 - ❌ ห้าม validate magic bytes ก่อนตรวจ file size — ต้องตรวจ size ก่อนเสมอ (ป้องกัน large allocation ก่อน reject)
 - ❌ ห้าม cast `response.data['field'] as String?` — ใช้ `raw is String ? raw : null` เพื่อป้องกัน crash
-- ❌ ห้ามเรียก `registerWithOtp()` ใน `PinSetupScreen` — `registerWithOtp()` ต้องถูกเรียกใน `SetPasswordScreen` เท่านั้น (มี password ครบก่อน PIN setup)
+- ❌ ห้ามเรียก `registerWithOtp()` ใน `PinSetupScreen` หรือ `RoleSelectionScreen` — ต้องเรียกใน `GuardRegistrationScreen._onSubmit()` เท่านั้น (หลังจาก collect full_name + role ครบแล้ว)
+- ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `SetPasswordScreen` — ต้อง navigate ไป `PinSetupScreen` โดยตรง (SetPasswordScreen ถูกลบออกจาก flow หลักแล้ว)
+- ❌ ห้ามแสดง `PinLockScreen` โดยตรวจเฉพาะ `pinService.isPinSet` — ต้องตรวจ `auth.status == AuthStatus.authenticated` ก่อนเสมอ (iOS Keychain persist ข้าม reinstall)
 
 ### Web Admin (Next.js)
 - ❌ ห้าม hardcode ข้อความภาษาในหน้า — ต้องใช้ `t.xxx` จาก `useLanguage()` เสมอ

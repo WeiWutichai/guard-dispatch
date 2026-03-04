@@ -68,7 +68,7 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
     try {
       final authProvider = context.read<AuthProvider>();
 
-      final profileToken = await authProvider.registerWithOtp(
+      await authProvider.registerWithOtp(
         phoneVerifiedToken: widget.phoneVerifiedToken,
         password: _passwordController.text,
         fullName: _fullNameController.text.trim(),
@@ -81,8 +81,9 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
 
       if (!mounted) return;
 
-      // Proceed to PIN setup. profileToken is passed through to
-      // RoleSelectionScreen → GuardRegistrationScreen for profile submission.
+      // NOTE: SetPasswordScreen is no longer in the main registration flow.
+      // OtpVerificationScreen now navigates directly to PinSetupScreen.
+      // This path is kept for compatibility only.
       final pinService = context.read<PinStorageService>();
       Navigator.pushAndRemoveUntil(
         context,
@@ -90,7 +91,7 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
           builder: (_) => PinSetupScreen(
             pinService: pinService,
             phone: widget.phone,
-            profileToken: profileToken,
+            phoneVerifiedToken: widget.phoneVerifiedToken,
           ),
         ),
         (route) => false,

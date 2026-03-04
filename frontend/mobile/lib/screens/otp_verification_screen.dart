@@ -9,7 +9,8 @@ import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import '../providers/auth_provider.dart';
 import '../services/auth_service.dart';
-import 'set_password_screen.dart';
+import 'pin_setup_screen.dart';
+import '../services/pin_storage_service.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
   final String? role;
@@ -139,13 +140,14 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         return;
       }
 
-      // Navigate to SetPasswordScreen to collect name/email/password
-      // before setting up PIN. RegisterWithOtp is called there so password
-      // is stored — guards can log in after admin approval.
+      // Navigate directly to PIN setup — name/email collected later in the
+      // registration form. registerWithOtp is called at the end of that flow.
+      final pinService = context.read<PinStorageService>();
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => SetPasswordScreen(
+          builder: (_) => PinSetupScreen(
+            pinService: pinService,
             phone: widget.phone,
             phoneVerifiedToken: phoneVerifiedToken,
           ),

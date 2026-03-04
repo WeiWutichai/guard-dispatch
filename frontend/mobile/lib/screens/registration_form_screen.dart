@@ -14,16 +14,16 @@ class RegistrationFormScreen extends StatefulWidget {
   final String role;
   final Widget dashboard;
   final String phone;
-  /// Short-lived profile_token returned by registerWithOtp() in PinSetupScreen.
-  /// Used to authenticate the guard profile submission without a full JWT.
-  final String? profileToken;
+  /// phone_verified_token from OTP step — passed to GuardRegistrationScreen
+  /// which calls registerWithOtp() at the end of the 3-step form.
+  final String? phoneVerifiedToken;
 
   const RegistrationFormScreen({
     super.key,
     required this.role,
     required this.dashboard,
     required this.phone,
-    this.profileToken,
+    this.phoneVerifiedToken,
   });
 
   @override
@@ -37,9 +37,9 @@ class _RegistrationFormScreenState extends State<RegistrationFormScreen> {
   Color get _roleColor => AppColors.primary;
 
   Future<void> _onRegisterNow() async {
-    // profile_token was obtained in PinSetupScreen — navigate directly.
-    if (widget.profileToken != null) {
-      _navigateToRegistration(widget.profileToken!);
+    // phoneVerifiedToken from OTP step — navigate directly to registration.
+    if (widget.phoneVerifiedToken != null) {
+      _navigateToRegistration(widget.phoneVerifiedToken!);
       return;
     }
 
@@ -87,13 +87,13 @@ class _RegistrationFormScreenState extends State<RegistrationFormScreen> {
     }
   }
 
-  void _navigateToRegistration(String profileToken) {
+  void _navigateToRegistration(String phoneVerifiedToken) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => GuardRegistrationScreen(
           phone: widget.phone,
-          profileToken: profileToken,
+          phoneVerifiedToken: phoneVerifiedToken,
           dashboard: widget.dashboard,
         ),
       ),

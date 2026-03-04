@@ -14,15 +14,15 @@ import 'registration_pending_screen.dart';
 
 class GuardRegistrationScreen extends StatefulWidget {
   final String phone;
-  /// profile_token returned by registerWithOtp() in PinSetupScreen.
-  /// Used to authenticate the guard profile submission.
-  final String? profileToken;
+  /// phone_verified_token from OTP step — used to call registerWithOtp()
+  /// at the end of the 3-step form to obtain a profile_token.
+  final String? phoneVerifiedToken;
   final Widget dashboard;
 
   const GuardRegistrationScreen({
     super.key,
     required this.phone,
-    this.profileToken,
+    this.phoneVerifiedToken,
     required this.dashboard,
   });
 
@@ -35,8 +35,6 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
   int _currentStep = 0;
   bool _isSubmitting = false;
   String? _errorMessage;
-  // Profile token received from PinSetupScreen via widget.profileToken.
-  late final String? _profileToken = widget.profileToken;
 
   // Step 1 — Personal info
   final _fullNameController = TextEditingController();
@@ -127,8 +125,19 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     try {
       final authProvider = context.read<AuthProvider>();
 
-      // profile_token was obtained in PinSetupScreen (passed via widget.profileToken).
-      final profileToken = _profileToken;
+      // Step 1: Register account (HTTP 202) and get profile_token for upload.
+      // registerWithOtp is called here (not in SetPasswordScreen) so that
+      // full_name is collected from the form and role is known.
+      String? profileToken;
+      if (widget.phoneVerifiedToken != null) {
+        profileToken = await authProvider.registerWithOtp(
+          phoneVerifiedToken: widget.phoneVerifiedToken!,
+          fullName: _fullNameController.text.trim().isEmpty
+              ? null
+              : _fullNameController.text.trim(),
+          role: 'guard',
+        );
+      }
 
       // Save profile summary locally (masked account number for security).
       await AuthService.savePendingProfile({

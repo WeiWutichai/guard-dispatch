@@ -59,9 +59,13 @@ class MyApp extends StatelessWidget {
               if (auth.status == AuthStatus.pendingApproval) {
                 return const RegistrationPendingScreen();
               }
-              return pinService.isPinSet
-                  ? PinLockScreen(pinService: pinService)
-                  : const PhoneInputScreen();
+              // PinLockScreen only for users who are fully authenticated.
+              // iOS Keychain persists across reinstalls so isPinSet can be true
+              // even on a fresh install — only gate authenticated sessions.
+              if (auth.status == AuthStatus.authenticated && pinService.isPinSet) {
+                return PinLockScreen(pinService: pinService);
+              }
+              return const PhoneInputScreen();
             },
           ),
         ),

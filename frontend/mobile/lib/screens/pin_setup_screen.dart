@@ -17,15 +17,15 @@ class PinSetupScreen extends StatefulWidget {
   /// If set, PIN setup is part of the registration flow.
   /// After PIN + biometric → go to RoleSelectionScreen.
   final String? phone;
-  /// Short-lived profile_token returned by SetPasswordScreen → registerWithOtp().
-  /// Passed through to RoleSelectionScreen → GuardRegistrationScreen.
-  final String? profileToken;
+  /// phone_verified_token from OTP step — passed through to RoleSelectionScreen
+  /// → GuardRegistrationScreen which calls registerWithOtp() at the end.
+  final String? phoneVerifiedToken;
 
   const PinSetupScreen({
     super.key,
     required this.pinService,
     this.phone,
-    this.profileToken,
+    this.phoneVerifiedToken,
   });
 
   @override
@@ -89,14 +89,14 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     await widget.pinService.setBiometricEnabled(enableBiometric);
     if (!mounted) return;
 
-    // registerWithOtp() was already called in SetPasswordScreen.
-    // profileToken was returned from there and passed through here.
+    // registerWithOtp() is called later in GuardRegistrationScreen._onSubmit().
+    // phoneVerifiedToken is passed through until then.
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(
         builder: (_) => RoleSelectionScreen(
           phone: widget.phone,
-          profileToken: widget.profileToken,
+          phoneVerifiedToken: widget.phoneVerifiedToken,
         ),
       ),
       (route) => false,

@@ -18,12 +18,12 @@ class RoleSelectionScreen extends StatefulWidget {
   /// [profileToken] is the short-lived JWT returned by registerWithOtp()
   /// (already called in PinSetupScreen) for submitting guard profile data.
   final String? phone;
-  final String? profileToken;
+  final String? phoneVerifiedToken;
 
   const RoleSelectionScreen({
     super.key,
     this.phone,
-    this.profileToken,
+    this.phoneVerifiedToken,
   });
 
   @override
@@ -67,7 +67,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
           MaterialPageRoute(
             builder: (_) => GuardRegistrationScreen(
               phone: phone ?? '',
-              profileToken: widget.profileToken,
+              phoneVerifiedToken: widget.phoneVerifiedToken,
               dashboard: dashboard,
             ),
           ),
@@ -82,7 +82,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
 
       // Not registered — get phone from widget props or storage fallback.
       String? phone = widget.phone;
-      final profileToken = widget.profileToken;
+      final phoneVerifiedToken = widget.phoneVerifiedToken;
       if (phone == null) {
         final stored = await AuthService.getPhoneVerifiedData();
         if (!mounted) return;
@@ -96,7 +96,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
               role: role,
               dashboard: dashboard,
               phone: phone ?? '',
-              profileToken: profileToken,
+              phoneVerifiedToken: phoneVerifiedToken,
             ),
           ),
         );
@@ -125,7 +125,6 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     }
 
     final String? phone = widget.phone ?? storedPhone;
-    final profileToken = widget.profileToken;
 
     if (phone != null) {
       Navigator.push(
@@ -134,8 +133,8 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
           builder: (_) => RegistrationFormScreen(
             role: role,
             dashboard: dashboard,
-            phone: phone!,
-            profileToken: profileToken,
+            phone: phone,
+            phoneVerifiedToken: widget.phoneVerifiedToken,
           ),
         ),
       );
