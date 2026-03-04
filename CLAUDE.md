@@ -162,6 +162,12 @@ CREATE TABLE chat.attachments (
 - ใช้ **Signed URL** เสมอ ห้าม expose bucket โดยตรง
 - file_key format: `chat/{chat_id}/{uuid}.{ext}`
 - URL หมดอายุ: **1 ชั่วโมง**
+- **Presigned URL Host Rewrite:** MinIO ใน Docker มี internal host `http://minio:9000` — browser ไม่สามารถเข้าถึงได้โดยตรง
+  - ต้องตั้ง `S3_PUBLIC_URL=http://localhost/minio-files` ใน env — presigned URL จะ replace `http://minio:9000` → `http://localhost/minio-files` ก่อน return ให้ client
+  - Nginx proxy `/minio-files/` → `http://minio:9000/` พร้อม `proxy_set_header Host "minio:9000"` เพื่อให้ MinIO validate signature ได้ (signature ถูก sign ด้วย Host `minio:9000`)
+  - `AppState` ต้องมีทั้ง `s3_endpoint: String` (internal) และ `s3_public_url: String` (public-facing)
+  - `get_guard_profile()` service ใช้ `rewrite` closure: `url.replacen(s3_endpoint, s3_public_url, 1)` — ทำก็ต่อเมื่อ `s3_endpoint != s3_public_url`
+  - Production (R2): ไม่ต้องตั้ง `S3_PUBLIC_URL` — `S3_ENDPOINT` คือ public URL อยู่แล้ว
 
 ### Database & Cache
 - ห้าม query ตรงไปที่ PostgreSQL โดยไม่ผ่าน **Connection Pool**
@@ -668,6 +674,7 @@ S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=<access-key>
 S3_SECRET_KEY=<secret-key>
 S3_BUCKET=guard-dispatch-files
+S3_PUBLIC_URL=http://localhost/minio-files  # Dev: Nginx proxy → MinIO. Production R2: omit (S3_ENDPOINT is already public)
 CORS_ALLOWED_ORIGINS=http://localhost:3000
 RUST_LOG=info
 
@@ -715,6 +722,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม return owned `DecodingKey` จาก `HasJwtSecret::decoding_key()` — ต้อง return `&DecodingKey` (reference)
 - ❌ ห้าม run Docker container เป็น root — ทุก Dockerfile ต้องมี `USER appuser` (non-root)
 - ❌ ห้ามใช้ MinIO default credentials (`minioadmin`) — ต้องตั้ง `S3_ACCESS_KEY` / `S3_SECRET_KEY` ผ่าน env var
+- ❌ ห้าม return presigned URL ที่มี internal Docker host (`http://minio:9000`) ให้ client — ต้อง rewrite ด้วย `S3_PUBLIC_URL` ก่อนเสมอ (browser ไม่สามารถ resolve `minio` hostname ได้)
 - ❌ ห้ามใช้ `audit_middleware` โดยไม่มี turbofish type — ต้องใช้ `audit_middleware::<Arc<AppState>>` เสมอ
 - ❌ ห้ามใช้ HTTP status code เป็น `entity_type` ใน audit log — ต้อง derive จาก URL path segment แรก
 - ❌ ห้ามใช้ `COUNT(*)` สำหรับ boolean existence check — ใช้ `EXISTS(SELECT 1 ...)` แทน
