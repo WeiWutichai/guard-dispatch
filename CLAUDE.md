@@ -728,6 +728,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม reuse phone_verified_token — ต้อง enforce single-use ด้วย `jti` + Redis `GETDEL`
 - ❌ ห้าม reuse profile_token — ต้อง enforce single-use ด้วย `jti` + Redis `GETDEL` เหมือน phone_verified_token
 - ❌ ห้ามออก access_token/refresh_token หรือ INSERT session ใน `register_with_otp()` — endpoint ต้อง return HTTP 202 พร้อม `RegisterWithOtpResponse` เท่านั้น (ไม่มี token)
+- ❌ ห้ามใช้ plain `INSERT INTO auth.users` ใน `register_with_otp()` — **ต้องใช้ UPSERT** `ON CONFLICT (phone) DO UPDATE SET password_hash=EXCLUDED.password_hash, full_name=EXCLUDED.full_name, approval_status='pending', updated_at=NOW() WHERE auth.users.approval_status='pending'` + `fetch_optional` → None = phone registered with non-pending status → `AppError::Conflict("Please log in instead")`
 - ❌ ห้าม upload ไฟล์ไปยัง S3/MinIO แบบ sequential loop — ใช้ `tokio::task::JoinSet` เพื่อ parallel upload เสมอ
 - ❌ ห้าม validate magic bytes ก่อนตรวจ file size — ต้องตรวจ size ก่อนเสมอ (ป้องกัน large allocation ก่อน reject)
 - ❌ ห้าม cast `response.data['field'] as String?` — ใช้ `raw is String ? raw : null` เพื่อป้องกัน crash

@@ -683,13 +683,25 @@ pub async fn register_with_otp(
     let is_role_none = req.role.is_none();
     let role_str: Option<String> = req.role.map(|r| r.to_string());
 
-    // Create user account with pending approval status.
+    // Create or re-register user account with pending approval status.
     // No session or tokens are issued — the user must wait for admin approval
     // before they can log in.
+    //
+    // ON CONFLICT (phone): if the phone already exists with approval_status =
+    // 'pending', allow the user to re-register (updates password/name, resets
+    // approval_status to pending, preserves existing role).
+    // If the phone exists with a non-pending status (approved/rejected), the
+    // WHERE condition is false → no-op → RETURNING returns no rows → 409.
     let user = sqlx::query_as::<_, UserRow>(
         r#"
         INSERT INTO auth.users (email, phone, password_hash, full_name, role, approval_status)
         VALUES ($1, $2, $3, $4, $5::user_role, 'pending'::approval_status)
+        ON CONFLICT (phone) DO UPDATE
+          SET password_hash   = EXCLUDED.password_hash,
+              full_name       = EXCLUDED.full_name,
+              approval_status = 'pending'::approval_status,
+              updated_at      = NOW()
+          WHERE auth.users.approval_status = 'pending'::approval_status
         RETURNING id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
         "#,
     )
@@ -698,14 +710,12 @@ pub async fn register_with_otp(
     .bind(&password_hash)
     .bind(&full_name)
     .bind(role_str.as_deref())
-    .fetch_one(db)
+    .fetch_optional(db)
     .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(ref db_err) if db_err.constraint().is_some() => {
-            AppError::Conflict("Email or phone already exists".to_string())
-        }
-        other => AppError::Database(other),
-    })?;
+    .map_err(AppError::Database)?
+    .ok_or_else(|| AppError::Conflict(
+        "This phone number is already registered. Please log in instead.".to_string(),
+    ))?;
 
     // Issue a short-lived profile_token whenever role is guard OR when no role is
     // specified (two-phase registration: basic info first, guard profile later).
