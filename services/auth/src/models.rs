@@ -195,6 +195,46 @@ pub struct PaginatedUsers {
 }
 
 // =============================================================================
+// Profile Token Reissue DTOs
+// =============================================================================
+
+/// Request to reissue a profile_token for a pending guard who already passed OTP.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReissueProfileTokenRequest {
+    pub phone: String,
+}
+
+/// Response containing a fresh profile_token.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReissueProfileTokenResponse {
+    pub profile_token: String,
+    pub message: String,
+}
+
+// =============================================================================
+// Update Role DTOs (step 2 of 3-step registration)
+// =============================================================================
+
+/// Request to set the role of a pending user (registered with role=null).
+/// Public endpoint — user identified by phone (no JWT, they have no tokens yet).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateRoleRequest {
+    pub phone: String,
+    pub role: UserRole,
+}
+
+/// Response after successfully setting a user's role.
+/// For guard: includes profile_token for submitting guard profile data.
+/// For customer: profile_token is null (no profile form needed).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UpdateRoleResponse {
+    pub message: String,
+    pub user_id: Uuid,
+    /// Short-lived JWT (15 min) for guard profile submission. Null for customer role.
+    pub profile_token: Option<String>,
+}
+
+// =============================================================================
 // Guard Profile DTOs
 // =============================================================================
 

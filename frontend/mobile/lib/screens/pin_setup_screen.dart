@@ -1,7 +1,10 @@
 import 'dart:ui';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
+import '../providers/auth_provider.dart';
 import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
@@ -89,15 +92,36 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     await widget.pinService.setBiometricEnabled(enableBiometric);
     if (!mounted) return;
 
-    // registerWithOtp() is called later in GuardRegistrationScreen._onSubmit().
-    // phoneVerifiedToken is passed through until then.
+    // Step 1 of 3-step registration: register user with no role right after PIN.
+    // This creates the user in backend (approval_status=pending, role=null).
+    // Admin sees the applicant immediately with "ยังไม่ได้ระบุ" (no type).
+    if (widget.phoneVerifiedToken != null) {
+      try {
+        final authProvider = context.read<AuthProvider>();
+        await authProvider.registerWithOtp(
+          phoneVerifiedToken: widget.phoneVerifiedToken!,
+          // No role, no fullName — role is chosen next, guard form collects name later.
+        );
+      } on DioException catch (e) {
+        if (!mounted) return;
+        final message = e.response?.data?['error']?['message'] as String?;
+        // Conflict = phone already registered (non-pending) → let them proceed to role selection
+        if (message != null && !message.contains('log in instead')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message)),
+          );
+          return; // Don't navigate on unexpected errors
+        }
+      }
+    }
+
+    if (!mounted) return;
+
+    // phoneVerifiedToken was consumed — only pass phone going forward.
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(
-        builder: (_) => RoleSelectionScreen(
-          phone: widget.phone,
-          phoneVerifiedToken: widget.phoneVerifiedToken,
-        ),
+        builder: (_) => RoleSelectionScreen(phone: widget.phone),
       ),
       (route) => false,
     );

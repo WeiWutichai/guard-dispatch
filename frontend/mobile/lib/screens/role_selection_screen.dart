@@ -1,7 +1,10 @@
 import 'dart:ui';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
+import '../providers/auth_provider.dart';
 import '../services/language_service.dart';
 import '../services/auth_service.dart';
 import '../l10n/app_strings.dart';
@@ -9,21 +12,16 @@ import '../widgets/language_toggle.dart';
 import 'guard/guard_dashboard_screen.dart';
 import 'hirer/hirer_dashboard_screen.dart';
 import 'phone_input_screen.dart';
-import 'registration_form_screen.dart';
 import 'registration_pending_screen.dart';
 import 'guard_registration_screen.dart';
 
 class RoleSelectionScreen extends StatefulWidget {
-  /// If set, this is a new registration flow.
-  /// [profileToken] is the short-lived JWT returned by registerWithOtp()
-  /// (already called in PinSetupScreen) for submitting guard profile data.
+  /// Phone number from OTP flow. Used to call updateRole API.
   final String? phone;
-  final String? phoneVerifiedToken;
 
   const RoleSelectionScreen({
     super.key,
     this.phone,
-    this.phoneVerifiedToken,
   });
 
   @override
@@ -32,19 +30,40 @@ class RoleSelectionScreen extends StatefulWidget {
 
 class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   Future<void> _onRoleTap(String role, Widget dashboard) async {
-    if (role == 'guard') {
-      // Parallel reads: isPendingApproval + isRegistered (both are SharedPreferences).
-      final results = await Future.wait([
-        AuthService.isPendingApproval(),
-        AuthService.isRegistered(role),
-      ]);
+    // Check if already registered (approved) → go to dashboard directly.
+    final results = await Future.wait([
+      AuthService.isPendingApproval(),
+      AuthService.isRegistered(role),
+    ]);
+    if (!mounted) return;
+
+    final isPending = results[0];
+    final isRegistered = results[1];
+
+    if (isRegistered) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => dashboard));
+      return;
+    }
+
+    // Resolve phone from widget props or storage fallback.
+    String? phone = widget.phone;
+    if (phone == null) {
+      final stored = await AuthService.getPhoneVerifiedData();
       if (!mounted) return;
+      phone = stored.$1;
+    }
+    if (phone == null) {
+      // No phone at all — go through full OTP flow
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+      );
+      return;
+    }
 
-      final isPending = results[0];
-      final isRegistered = results[1];
-
+    if (role == 'guard') {
+      // Check if guard already has profile submitted → pending screen
       if (isPending) {
-        // Guard is pending approval — check if profile was already submitted.
         final profile = await AuthService.getPendingProfile();
         if (!mounted) return;
         if (profile != null) {
@@ -54,95 +73,60 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
           );
           return;
         }
-        // Profile not yet submitted → go directly to guard form (skip
-        // RegistrationFormScreen which would trigger OTP again).
-        String? phone = widget.phone;
-        if (phone == null) {
-          final stored = await AuthService.getPhoneVerifiedData();
-          if (!mounted) return;
-          phone = stored.$1;
+      }
+
+      // Step 2: Set role via API → get profile_token for guard form
+      String? profileToken;
+      final pendingRole = await AuthService.getPendingRole();
+      if (!mounted) return;
+
+      try {
+        final authProvider = context.read<AuthProvider>();
+        if (pendingRole == 'guard') {
+          // Role already set — just need a fresh profile token
+          profileToken = await authProvider.reissueProfileToken(phone);
+        } else {
+          // Set role for the first time
+          profileToken = await authProvider.updateRole(phone, 'guard');
         }
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => GuardRegistrationScreen(
-              phone: phone ?? '',
-              phoneVerifiedToken: widget.phoneVerifiedToken,
-              dashboard: dashboard,
-            ),
-          ),
-        );
-        return;
-      }
-
-      if (isRegistered) {
-        Navigator.push(context, MaterialPageRoute(builder: (_) => dashboard));
-        return;
-      }
-
-      // Not registered — get phone from widget props or storage fallback.
-      String? phone = widget.phone;
-      final phoneVerifiedToken = widget.phoneVerifiedToken;
-      if (phone == null) {
-        final stored = await AuthService.getPhoneVerifiedData();
+      } on DioException catch (e) {
         if (!mounted) return;
-        phone = stored.$1;
-      }
-      if (phone != null) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RegistrationFormScreen(
-              role: role,
-              dashboard: dashboard,
-              phone: phone ?? '',
-              phoneVerifiedToken: phoneVerifiedToken,
-            ),
-          ),
+        final message = e.response?.data?['error']?['message'] as String?;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message ?? 'Failed to set role')),
         );
-      } else {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
-        );
+        return;
       }
-      return;
-    }
 
-    // Non-guard roles: isRegistered + getPhoneVerifiedData in parallel when
-    // phone is not already in widget props (avoids a second sequential read).
-    final (isRegistered, storedPhone) = await (
-      AuthService.isRegistered(role),
-      widget.phone == null
-          ? AuthService.getPhoneVerifiedData().then((r) => r.$1)
-          : Future.value(widget.phone),
-    ).wait;
-    if (!mounted) return;
-
-    if (isRegistered) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => dashboard));
-      return;
-    }
-
-    final String? phone = widget.phone ?? storedPhone;
-
-    if (phone != null) {
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => RegistrationFormScreen(
-            role: role,
+          builder: (_) => GuardRegistrationScreen(
+            phone: phone!,
+            profileToken: profileToken,
             dashboard: dashboard,
-            phone: phone,
-            phoneVerifiedToken: widget.phoneVerifiedToken,
           ),
         ),
       );
-    } else {
-      // Truly no phone at all (should not happen) — go through full OTP flow
-      Navigator.push(
+      return;
+    }
+
+    // Customer path: set role → go to pending screen
+    try {
+      final authProvider = context.read<AuthProvider>();
+      await authProvider.updateRole(phone, 'customer');
+      if (!mounted) return;
+      Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+        MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+        (route) => false,
+      );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final message = e.response?.data?['error']?['message'] as String?;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message ?? 'Failed to set role')),
       );
     }
   }

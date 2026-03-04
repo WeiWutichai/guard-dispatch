@@ -15,8 +15,10 @@ use shared::models::ApiResponse;
 use crate::models::{
     AuthResponse, GuardProfileFormData, GuardProfileResponse, ListUsersQuery, LoginRequest,
     PaginatedUsers, RefreshRequest, RegisterRequest, RegisterWithOtpRequest,
-    RegisterWithOtpResponse, RequestOtpRequest, RequestOtpResponse, UpdateApprovalStatusRequest,
-    UpdateProfileRequest, UserResponse, VerifyOtpRequest, VerifyOtpResponse,
+    RegisterWithOtpResponse, ReissueProfileTokenRequest, ReissueProfileTokenResponse,
+    RequestOtpRequest, RequestOtpResponse, UpdateApprovalStatusRequest,
+    UpdateProfileRequest, UpdateRoleRequest, UpdateRoleResponse, UserResponse,
+    VerifyOtpRequest, VerifyOtpResponse,
 };
 use crate::state::AppState;
 
@@ -460,6 +462,69 @@ pub async fn submit_guard_profile(
     .await?;
 
     Ok((StatusCode::OK, Json(shared::models::ApiResponse::success(()))))
+}
+
+/// Reissue a profile_token for a pending guard who already verified OTP.
+/// Allows retry of guard profile submission without repeating the OTP flow.
+#[utoipa::path(
+    post,
+    path = "/profile/reissue",
+    tag = "Profile",
+    request_body = ReissueProfileTokenRequest,
+    responses(
+        (status = 200, description = "New profile_token issued", body = ReissueProfileTokenResponse),
+        (status = 400, description = "Invalid phone format", body = ErrorBody),
+        (status = 404, description = "No pending registration found", body = ErrorBody),
+    ),
+)]
+pub async fn reissue_profile_token(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ReissueProfileTokenRequest>,
+) -> Result<Json<ApiResponse<ReissueProfileTokenResponse>>, AppError> {
+    let token = crate::service::reissue_profile_token(
+        &state.db,
+        &state.jwt_config,
+        &state.redis,
+        &req.phone,
+    )
+    .await?;
+
+    Ok(Json(ApiResponse::success(ReissueProfileTokenResponse {
+        profile_token: token,
+        message: "Profile token issued".to_string(),
+    })))
+}
+
+/// Set the role of a pending user (step 2 of 3-step registration).
+/// Public endpoint — user identified by phone (no JWT needed).
+#[utoipa::path(
+    post,
+    path = "/profile/role",
+    tag = "Profile",
+    request_body = UpdateRoleRequest,
+    responses(
+        (status = 200, description = "Role updated successfully", body = UpdateRoleResponse),
+        (status = 400, description = "Invalid phone/role or user already has a role", body = ErrorBody),
+    ),
+)]
+pub async fn update_role(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdateRoleRequest>,
+) -> Result<Json<ApiResponse<UpdateRoleResponse>>, AppError> {
+    let (user_id, profile_token) = crate::service::update_user_role(
+        &state.db,
+        &state.redis,
+        &state.jwt_config,
+        &req.phone,
+        req.role,
+    )
+    .await?;
+
+    Ok(Json(ApiResponse::success(UpdateRoleResponse {
+        message: "Role updated successfully".to_string(),
+        user_id,
+        profile_token,
+    })))
 }
 
 #[utoipa::path(

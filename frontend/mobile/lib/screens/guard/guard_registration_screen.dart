@@ -1,13 +1,26 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 import '../../services/auth_service.dart';
+import '../../providers/auth_provider.dart';
 
 class GuardRegistrationScreen extends StatefulWidget {
-  const GuardRegistrationScreen({super.key});
+  final String? phone;
+  final String? phoneVerifiedToken;
+
+  const GuardRegistrationScreen({
+    super.key,
+    this.phone,
+    this.phoneVerifiedToken,
+  });
 
   @override
   State<GuardRegistrationScreen> createState() =>
@@ -26,14 +39,16 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
   final _yearsExpController = TextEditingController(text: '0');
   final _workplaceController = TextEditingController();
 
-  // Step 2 document states
-  final Map<String, bool> _documents = {
-    'idCard': false,
-    'securityLicense': false,
-    'trainingCert': false,
-    'criminalCheck': false,
-    'driverLicense': false,
+  // Step 2 document files (real image_picker files)
+  final Map<String, File?> _documents = {
+    'id_card': null,
+    'security_license': null,
+    'training_cert': null,
+    'criminal_check': null,
+    'driver_license': null,
   };
+  // Step 3 passbook photo
+  File? _passbookPhoto;
 
   // Step 3 controllers
   String? _selectedBank;
@@ -50,7 +65,11 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     super.dispose();
   }
 
-  int get _uploadedDocCount => _documents.values.where((v) => v).length;
+  bool _isSubmitting = false;
+  String? _errorMessage;
+  final _imagePicker = ImagePicker();
+
+  int get _uploadedDocCount => _documents.values.where((v) => v != null).length;
 
   void _nextStep() {
     if (_currentStep < 2) {
@@ -66,20 +85,134 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     }
   }
 
-  void _submitApplication() async {
-    // In a real app, this would be an API call
-    await AuthService.markRegistered('guard', _nameController.text);
+  Future<void> _pickImage(String key, {bool isPassbook = false}) async {
+    final picked = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1920,
+      maxHeight: 1920,
+      imageQuality: 85,
+    );
+    if (picked != null) {
+      setState(() {
+        if (isPassbook) {
+          _passbookPhoto = File(picked.path);
+        } else {
+          _documents[key] = File(picked.path);
+        }
+      });
+    }
+  }
 
+  Future<void> _takePhoto(String key, {bool isPassbook = false}) async {
+    final picked = await _imagePicker.pickImage(
+      source: ImageSource.camera,
+      maxWidth: 1920,
+      maxHeight: 1920,
+      imageQuality: 85,
+    );
+    if (picked != null) {
+      setState(() {
+        if (isPassbook) {
+          _passbookPhoto = File(picked.path);
+        } else {
+          _documents[key] = File(picked.path);
+        }
+      });
+    }
+  }
+
+  void _removeFile(String key, {bool isPassbook = false}) {
     setState(() {
-      _submitted = true;
-      _submittedAt = DateTime.now();
+      if (isPassbook) {
+        _passbookPhoto = null;
+      } else {
+        _documents[key] = null;
+      }
     });
   }
 
-  void _simulateUpload(String key) {
+  Future<void> _submitApplication() async {
+    if (_isSubmitting) return;
     setState(() {
-      _documents[key] = !_documents[key]!;
+      _isSubmitting = true;
+      _errorMessage = null;
     });
+
+    try {
+      final authProvider = context.read<AuthProvider>();
+      String? profileToken;
+
+      // Step ①: Get profile_token
+      if (widget.phoneVerifiedToken != null) {
+        // First-time submission — register with OTP token
+        profileToken = await authProvider.registerWithOtp(
+          phoneVerifiedToken: widget.phoneVerifiedToken!,
+          fullName: _nameController.text,
+          role: 'guard',
+        );
+      } else {
+        // Retry — user is already pending, reissue profile_token
+        final phone = widget.phone ?? await AuthService.getPhone('guard');
+        if (phone == null) throw Exception('Phone number not available');
+        profileToken = await authProvider.reissueProfileToken(phone);
+      }
+
+      if (profileToken == null) {
+        throw Exception('Failed to get profile token');
+      }
+
+      // Step ②: Submit guard profile with documents
+      final files = <String, File>{};
+      for (final entry in _documents.entries) {
+        if (entry.value != null) {
+          files[entry.key] = entry.value!;
+        }
+      }
+      if (_passbookPhoto != null) {
+        files['passbook_photo'] = _passbookPhoto!;
+      }
+
+      await authProvider.submitGuardProfile(
+        profileToken: profileToken,
+        fullName: _nameController.text,
+        gender: _selectedGender,
+        dateOfBirth: _selectedDateOfBirth != null
+            ? '${_selectedDateOfBirth!.year}-${_selectedDateOfBirth!.month.toString().padLeft(2, '0')}-${_selectedDateOfBirth!.day.toString().padLeft(2, '0')}'
+            : null,
+        yearsOfExperience: int.tryParse(_yearsExpController.text),
+        previousWorkplace: _workplaceController.text.isNotEmpty
+            ? _workplaceController.text
+            : null,
+        bankName: _selectedBank,
+        accountNumber: _accountNumberController.text.isNotEmpty
+            ? _accountNumberController.text
+            : null,
+        accountName: _accountNameController.text.isNotEmpty
+            ? _accountNameController.text
+            : null,
+        files: files,
+      );
+
+      await AuthService.markRegistered('guard', _nameController.text);
+
+      if (!mounted) return;
+      setState(() {
+        _submitted = true;
+        _submittedAt = DateTime.now();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      String msg = e.toString();
+      if (e is DioException && e.response?.data is Map) {
+        final data = e.response!.data as Map;
+        if (data['error']?['message'] != null) {
+          msg = data['error']['message'].toString();
+        }
+      }
+      setState(() => _errorMessage = msg);
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override
@@ -277,11 +410,11 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
 
   Widget _buildDocumentsStep(GuardRegistrationStrings strings) {
     final docItems = [
-      {'key': 'idCard', 'label': strings.idCard},
-      {'key': 'securityLicense', 'label': strings.securityLicense},
-      {'key': 'trainingCert', 'label': strings.trainingCert},
-      {'key': 'criminalCheck', 'label': strings.criminalCheck},
-      {'key': 'driverLicense', 'label': strings.driverLicense},
+      {'key': 'id_card', 'label': strings.idCard},
+      {'key': 'security_license', 'label': strings.securityLicense},
+      {'key': 'training_cert', 'label': strings.trainingCert},
+      {'key': 'criminal_check', 'label': strings.criminalCheck},
+      {'key': 'driver_license', 'label': strings.driverLicense},
     ];
 
     return Column(
@@ -308,9 +441,11 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
   Widget _buildDocumentUploadItem(
     String label,
     String key,
-    GuardRegistrationStrings strings,
-  ) {
-    final isUploaded = _documents[key] ?? false;
+    GuardRegistrationStrings strings, {
+    bool isPassbook = false,
+  }) {
+    final file = isPassbook ? _passbookPhoto : _documents[key];
+    final isUploaded = file != null;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -326,71 +461,98 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
               : AppColors.border,
         ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: isUploaded
-                  ? AppColors.primary.withValues(alpha: 0.1)
-                  : AppColors.border.withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              isUploaded
-                  ? Icons.check_circle_rounded
-                  : Icons.description_outlined,
-              color: isUploaded ? AppColors.primary : AppColors.textSecondary,
-              size: 22,
-            ),
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: isUploaded
+                      ? AppColors.primary.withValues(alpha: 0.1)
+                      : AppColors.border.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  isUploaded
+                      ? Icons.check_circle_rounded
+                      : Icons.description_outlined,
+                  color: isUploaded ? AppColors.primary : AppColors.textSecondary,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isUploaded
+                          ? file.path.split('/').last
+                          : strings.notAttached,
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: isUploaded
+                            ? AppColors.primary
+                            : AppColors.textSecondary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              if (isUploaded)
+                IconButton(
+                  onPressed: () => _removeFile(key, isPassbook: isPassbook),
+                  icon: const Icon(Icons.close, size: 18),
+                  color: AppColors.danger,
+                ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+          if (isUploaded) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(file, height: 120, width: double.infinity, fit: BoxFit.cover),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickImage(key, isPassbook: isPassbook),
+                  icon: const Icon(Icons.upload_file, size: 18),
+                  label: Text(strings.uploadFile, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: BorderSide(color: AppColors.primary.withValues(alpha: 0.3)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  isUploaded ? 'document_$key.jpg' : strings.notAttached,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: isUploaded
-                        ? AppColors.primary
-                        : AppColors.textSecondary,
-                  ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                onPressed: () => _takePhoto(key, isPassbook: isPassbook),
+                icon: const Icon(Icons.camera_alt, size: 22),
+                color: AppColors.primary,
+                style: IconButton.styleFrom(
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
-              ],
-            ),
-          ),
-          TextButton(
-            onPressed: () => _simulateUpload(key),
-            style: TextButton.styleFrom(
-              foregroundColor: isUploaded
-                  ? AppColors.danger
-                  : AppColors.primary,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
               ),
-            ),
-            child: Text(
-              isUploaded
-                  ? (LanguageProvider.of(context).isThai ? 'ลบ' : 'Remove')
-                  : strings.uploadFile,
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            ],
           ),
         ],
       ),
@@ -423,7 +585,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
         ),
         const SizedBox(height: 20),
         _buildLabel(strings.passbookPhoto),
-        _buildDocumentUploadItem(strings.passbookPhoto, 'passbook', strings),
+        _buildDocumentUploadItem(strings.passbookPhoto, 'passbook_photo', strings, isPassbook: true),
       ],
     );
   }
@@ -867,8 +1029,24 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
                   ),
                 ),
               ),
+            if (_errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.danger.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _errorMessage!,
+                    style: GoogleFonts.inter(fontSize: 13, color: AppColors.danger),
+                  ),
+                ),
+              ),
             ElevatedButton(
-              onPressed: _nextStep,
+              onPressed: _isSubmitting ? null : _nextStep,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
@@ -878,13 +1056,22 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
                 ),
                 elevation: 0,
               ),
-              child: Text(
-                _currentStep == 2 ? strings.submitApplication : strings.next,
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              child: _isSubmitting
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : Text(
+                      _currentStep == 2 ? strings.submitApplication : strings.next,
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
             ),
           ],
         ),

@@ -138,6 +138,39 @@ class AuthProvider extends ChangeNotifier {
     return raw is String ? raw : null;
   }
 
+  /// Reissue a profile_token for a pending guard who already passed OTP.
+  /// Used when retrying profile submission without repeating the OTP flow.
+  Future<String> reissueProfileToken(String phone) async {
+    final response = await _apiClient.dio.post(
+      '/auth/profile/reissue',
+      data: {'phone': phone},
+    );
+    final token = response.data['data']?['profile_token'];
+    if (token is! String) {
+      throw Exception('Failed to reissue profile token');
+    }
+    return token;
+  }
+
+  /// Set the role of a pending user (step 2 of 3-step registration).
+  /// Calls POST /auth/profile/role with phone + role.
+  /// Returns profile_token for guard role (null for customer).
+  Future<String?> updateRole(String phone, String role) async {
+    final response = await _apiClient.dio.post(
+      '/auth/profile/role',
+      data: {'phone': phone, 'role': role},
+    );
+
+    // Update local pending state with the chosen role
+    await AuthService.setPendingApproval(role: role);
+    _role = role;
+    notifyListeners();
+
+    // Return profile_token for guard (null for customer)
+    final raw = response.data['data']?['profile_token'];
+    return raw is String ? raw : null;
+  }
+
   /// Submit guard profile data after registration.
   ///
   /// Calls POST /auth/profile/guard with multipart form data.

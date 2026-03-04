@@ -717,11 +717,11 @@ pub async fn register_with_otp(
         "This phone number is already registered. Please log in instead.".to_string(),
     ))?;
 
-    // Issue a short-lived profile_token whenever role is guard OR when no role is
-    // specified (two-phase registration: basic info first, guard profile later).
+    // Issue a short-lived profile_token only when role is explicitly guard.
+    // When role=null (3-step flow), profile_token comes later from POST /profile/role.
     // This token is NOT an access/refresh token — it can only be used for profile submission.
     // jti is stored in Redis for single-use enforcement via GETDEL in validate_profile_token.
-    let profile_token = if is_guard || is_role_none {
+    let profile_token = if is_guard {
         let (token, jti) = encode_profile_token(
             user.id,
             &jwt_config.encoding_key,
@@ -840,6 +840,122 @@ pub async fn update_approval_status(
     invalidate_user_cache(redis, &user_id).await?;
 
     Ok(response)
+}
+
+// =============================================================================
+// Reissue Profile Token (for pending guards retrying profile submission)
+// =============================================================================
+
+/// Issue a new profile_token for a user who is already pending and has verified
+/// their phone via OTP previously. This avoids requiring a second OTP round-trip
+/// when the initial profile submission failed (e.g. network error, body limit).
+pub async fn reissue_profile_token(
+    db: &PgPool,
+    jwt_config: &JwtConfig,
+    redis: &redis::aio::MultiplexedConnection,
+    phone: &str,
+) -> Result<String, AppError> {
+    let phone_clean = otp::validate_thai_phone(phone)?;
+
+    // User must exist AND be pending
+    let user: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM auth.users WHERE phone = $1 AND approval_status = 'pending'"
+    )
+    .bind(&phone_clean)
+    .fetch_optional(db)
+    .await?;
+
+    let (user_id,) = user.ok_or_else(|| {
+        AppError::NotFound("No pending registration found for this phone".to_string())
+    })?;
+
+    // Issue fresh profile_token + store jti in Redis
+    let (token, jti) = encode_profile_token(
+        user_id,
+        &jwt_config.encoding_key,
+        PROFILE_TOKEN_TTL_MINUTES,
+    )?;
+    let ttl_secs = PROFILE_TOKEN_TTL_MINUTES * 60;
+    redis::cmd("SET")
+        .arg(format!("profile_jti:{jti}"))
+        .arg("valid")
+        .arg("EX")
+        .arg(ttl_secs)
+        .query_async::<()>(&mut redis.clone())
+        .await
+        .map_err(AppError::Redis)?;
+
+    Ok(token)
+}
+
+// =============================================================================
+// Update User Role (step 2 of 3-step registration)
+// =============================================================================
+
+/// Set the role of a pending user identified by phone.
+/// Only works for users with `approval_status='pending'` and `role IS NULL`.
+/// For guard role: issues a profile_token for profile submission.
+pub async fn update_user_role(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+    jwt_config: &JwtConfig,
+    phone: &str,
+    role: UserRole,
+) -> Result<(Uuid, Option<String>), AppError> {
+    use shared::models::UserRole;
+
+    let phone_clean = otp::validate_thai_phone(phone)?;
+
+    // Reject admin role — cannot self-assign
+    if role == UserRole::Admin {
+        return Err(AppError::BadRequest(
+            "Cannot self-assign admin role".to_string(),
+        ));
+    }
+
+    // Atomic UPDATE — only affects pending users with no role set yet.
+    let user: Option<(Uuid,)> = sqlx::query_as(
+        "UPDATE auth.users SET role = $2::user_role, updated_at = NOW() \
+         WHERE phone = $1 AND approval_status = 'pending' AND role IS NULL \
+         RETURNING id",
+    )
+    .bind(&phone_clean)
+    .bind(role.to_string())
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let (user_id,) = user.ok_or_else(|| {
+        AppError::BadRequest(
+            "No pending user with unset role found for this phone".to_string(),
+        )
+    })?;
+
+    // Invalidate user cache so admin sees the updated role immediately
+    invalidate_user_cache(redis, &user_id).await?;
+
+    // Issue profile_token only for guard role (needed for document upload)
+    let profile_token = if role == UserRole::Guard {
+        let (token, jti) = encode_profile_token(
+            user_id,
+            &jwt_config.encoding_key,
+            PROFILE_TOKEN_TTL_MINUTES,
+        )?;
+        let ttl_secs = PROFILE_TOKEN_TTL_MINUTES * 60;
+        redis::cmd("SET")
+            .arg(format!("profile_jti:{jti}"))
+            .arg("valid")
+            .arg("EX")
+            .arg(ttl_secs)
+            .query_async::<()>(&mut redis.clone())
+            .await
+            .map_err(AppError::Redis)?;
+        Some(token)
+    } else {
+        None
+    };
+
+    Ok((user_id, profile_token))
 }
 
 // =============================================================================

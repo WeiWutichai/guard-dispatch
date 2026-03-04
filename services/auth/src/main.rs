@@ -5,6 +5,7 @@ mod state;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, patch, post};
 use axum::Router;
@@ -39,6 +40,8 @@ use crate::state::AppState;
         handlers::list_users,
         handlers::update_approval_status,
         handlers::get_guard_profile,
+        handlers::reissue_profile_token,
+        handlers::update_role,
     ),
     components(schemas(
         models::RegisterRequest,
@@ -55,6 +58,10 @@ use crate::state::AppState;
         models::RegisterWithOtpResponse,
         models::ListUsersQuery,
         models::UpdateApprovalStatusRequest,
+        models::ReissueProfileTokenRequest,
+        models::ReissueProfileTokenResponse,
+        models::UpdateRoleRequest,
+        models::UpdateRoleResponse,
         models::PaginatedUsers,
         shared::models::UserRole,
         shared::models::ApprovalStatus,
@@ -175,7 +182,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/logout", post(handlers::logout))
         .route("/users", get(handlers::list_users))
         .route("/users/{id}/approval", patch(handlers::update_approval_status))
-        .route("/profile/guard", post(handlers::submit_guard_profile))
+        .merge(
+            Router::new()
+                .route("/profile/guard", post(handlers::submit_guard_profile))
+                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)), // 10MB for document uploads
+        )
+        .route("/profile/reissue", post(handlers::reissue_profile_token))
+        .route("/profile/role", post(handlers::update_role))
         .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile))
         .merge({
             let swagger = SwaggerUi::new("/swagger-ui")

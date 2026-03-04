@@ -433,11 +433,12 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 - **Widgets:** Extracted `_GuardMapLayer`, `_MarkerDot`, `_SelectedMarkerCallout` ป้องกัน unnecessary rebuild
 - **Import:** `import 'package:latlong2/latlong.dart' show LatLng;` — ต้อง `show LatLng` เพื่อหลีกเลี่ยง conflict กับ `dart:ui.Path`
 
-### OTP Registration Flow (Phone → OTP → PIN → Fingerprint → Role → Guard Profile)
+### OTP Registration Flow — 3-Step Progressive (Phone → OTP → PIN → Register → Role → Guard Profile)
 
-> **Flow เปลี่ยนแปลง (2026-03):** ลบ `SetPasswordScreen` ออกจาก flow หลัก
-> `registerWithOtp()` ย้ายไปเรียกใน `GuardRegistrationScreen._onSubmit()` แทน
-> `phone_verified_token` ถูก pass ผ่านทุก screen จนถึงจุดที่ submit จริง
+> **Flow เปลี่ยนแปลง (2026-03-04):** 3-step progressive registration
+> - Step 1: `registerWithOtp(role=null)` ถูกเรียกใน `PinSetupScreen._finishSetup()` ทันทีหลัง PIN — Admin เห็น applicant โดยยังไม่มีประเภท
+> - Step 2: `updateRole(phone, role)` ถูกเรียกใน `RoleSelectionScreen._onRoleTap()` — Admin เห็นประเภทแล้ว
+> - Step 3: `submitGuardProfile(profileToken)` ถูกเรียกใน `GuardRegistrationScreen._onSubmit()` — Admin เห็นข้อมูลครบ
 
 ```
 Flutter Mobile                          Backend (rust-auth)                    External
@@ -464,32 +465,36 @@ PinSetupScreen(phone, phoneVerifiedToken)
   ├─ Step 1: Set 6-digit PIN → SHA-256 → FlutterSecureStorage
   ├─ Step 2: Confirm PIN
   ├─ Step 3: Fingerprint/Biometric enroll (Skip หรือ Enable)
-  └─ Navigate → RoleSelectionScreen(phone, phoneVerifiedToken)
+  ├─ ★ STEP 1: registerWithOtp(role=null)   POST /register/otp
+  │   authProvider.registerWithOtp(     ──► ├─ Decode JWT → (phone, jti)
+  │     phoneVerifiedToken)                 ├─ Redis GETDEL jti (single-use)
+  │                                         ├─ Argon2 hash (random password)
+  │   ◄── 202 + user_id ──────────────────┤ ├─ UPSERT user (role=NULL, status=pending)
+  │   (no profile_token — role unknown)     └─ Admin เห็น applicant ไม่มีประเภท
+  └─ Navigate → RoleSelectionScreen(phone)  ← phoneVerifiedToken consumed
   ▼
-RoleSelectionScreen(phone, phoneVerifiedToken)
-  ├─ guard tap → isPendingApproval() + isRegistered() in parallel (Future.wait)
-  │   ├─ pending + profile exists → RegistrationPendingScreen
-  │   ├─ pending + no profile → GuardRegistrationScreen(phone, phoneVerifiedToken)
-  │   └─ not pending/registered → GuardRegistrationScreen(phone, phoneVerifiedToken)
-  └─ customer tap → RegistrationFormScreen(phone, phoneVerifiedToken)
+RoleSelectionScreen(phone)
+  ├─ ★ STEP 2: updateRole(phone, role)     POST /profile/role
+  │   authProvider.updateRole(phone,   ──► ├─ validate_thai_phone()
+  │     'guard'/'customer')                 ├─ UPDATE auth.users SET role WHERE pending + role IS NULL
+  │                                         ├─ invalidate_user_cache()
+  │   ◄── profile_token (guard only) ─────┤ └─ encode_profile_token() if guard → Redis EX 15min
+  │                                              Admin เห็นประเภทแล้ว
+  ├─ guard → GuardRegistrationScreen(phone, profileToken)
+  └─ customer → RegistrationPendingScreen
   ▼ (guard only)
-GuardRegistrationScreen(phone, phoneVerifiedToken)
+GuardRegistrationScreen(phone, profileToken)
   ├─ Step 1: full_name, gender, DOB, experience, workplace
   ├─ Step 2: 5 docs (image_picker: id_card, security_license,
   │           training_cert, criminal_check, driver_license)
   ├─ Step 3: bank_name, account_number, account_name, passbook_photo
-  └─ _onSubmit():
-      ① authProvider.registerWithOtp(         POST /register/otp
-           phoneVerifiedToken,           ──► ├─ Decode JWT → (phone, jti)
-           fullName, role='guard')            ├─ Redis GETDEL jti (single-use)
-                                             ├─ Argon2 hash (optional password)
-         ◄── 202 + profile_token ───────────┤ ├─ UPSERT user (approval_status=pending)
-                                             └─ encode_profile_token() → Redis EX 15min
-      ②  authProvider.submitGuardProfile(     POST /profile/guard
-           profileToken, files...) ────────► ├─ validate_profile_token() → Redis GETDEL
-                                             ├─ validate magic bytes + size (JPEG/PNG/WEBP ≤10MB)
-                                             ├─ upload docs to MinIO in PARALLEL (JoinSet)
-                                             └─ UPSERT auth.guard_profiles
+  └─ ★ STEP 3: _onSubmit():
+      authProvider.submitGuardProfile(       POST /profile/guard
+        profileToken, files...) ──────────► ├─ validate_profile_token() → Redis GETDEL
+                                            ├─ validate magic bytes + size (JPEG/PNG/WEBP ≤10MB)
+                                            ├─ upload docs to MinIO in PARALLEL (JoinSet)
+                                            └─ UPSERT auth.guard_profiles
+      (fallback: reissueProfileToken() if profileToken expired)
   ▼
 RegistrationPendingScreen
   └─ "Back to Login" / "สมัครใหม่" → PhoneInputScreen
@@ -499,19 +504,26 @@ RegistrationPendingScreen
 > access any protected endpoint until an admin approves the account. Only after approval
 > can the user log in normally via `/auth/login`.
 >
-> **Guard two-step submit:** `registerWithOtp()` (step ①) returns `profile_token` (15-min JWT)
-> used immediately for `submitGuardProfile()` (step ②). Both are called in `_onSubmit()`.
-> Profile token is single-use enforced via Redis GETDEL on jti.
+> **3-step progressive visibility:** Admin sees applicant at each step:
+> 1. After PIN: user appears with `role=null` ("ยังไม่ได้ระบุ")
+> 2. After role selection: type updates to guard/customer
+> 3. After form submit: full profile data visible, ready for approval
+>
+> **Profile token lifecycle:** `updateRole(role='guard')` issues `profile_token` (15-min JWT).
+> Used by `submitGuardProfile()`. If expired, `reissueProfileToken()` gets a fresh one.
+> Single-use enforced via Redis GETDEL on jti.
 
 **iOS Keychain & PinLockScreen:**
 - iOS Keychain persists across app reinstalls — `isPinSet` อาจเป็น `true` แม้หลัง uninstall
 - `main.dart` ต้องเช็ค `auth.status == AuthStatus.authenticated` **ก่อน** `pinService.isPinSet`
 - PinLockScreen แสดงเฉพาะ authenticated users เท่านั้น — fresh install/unregistered → PhoneInputScreen
 
-**Auth Service OTP Endpoints (3 routes in main.rs):**
+**Auth Service OTP & Profile Endpoints (main.rs):**
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
 - `POST /otp/verify` → `handlers::verify_otp` (public, no JWT)
-- `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session created
+- `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`.
+- `POST /profile/role` → `handlers::update_role` (public, no JWT) — sets role for pending user with `role IS NULL`. Returns `profile_token` for guard, null for customer.
+- `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for pending guard (no OTP needed)
 - `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth — single-use)
 - `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT)
 
@@ -521,24 +533,27 @@ RegistrationPendingScreen
 - `shared::auth` — `PhoneVerifyClaims` (JWT with jti), `encode_phone_verify_token()`, `decode_phone_verify_token()`; `ProfileTokenClaims` (JWT with jti), `encode_profile_token()` → `(String, String)` (token, jti), `decode_profile_token()` → `(Uuid, String)` (user_id, jti)
 
 **Auth Service — Guard Profile:**
-- `service::register_with_otp()`: if role=guard, calls `encode_profile_token()` → stores jti in Redis `SET EX 900` (15 min) with key `profile_jti:{jti}`, returns `profile_token`
+- `service::register_with_otp()`: if role=guard (explicit), calls `encode_profile_token()` → stores jti in Redis `SET EX 900` (15 min). When role=null (3-step flow), does NOT issue profile_token.
+- `service::update_user_role()`: UPDATE role for pending user with `role IS NULL`. If guard → issue profile_token. Rejects admin role. Uses `invalidate_user_cache()` so admin sees update immediately.
 - `service::validate_profile_token()`: async, takes redis param — decodes JWT, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
 - `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles` (text fields: `EXCLUDED.field` directly; doc key fields: `COALESCE(EXCLUDED, existing)` to preserve uploaded docs across partial resubmissions)
 - file_key format for guard docs: `profiles/guard/{user_id}/{doc_type}.{ext}`
 
 **Flutter Mobile:**
-- `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`
+- `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for guard), `reissueProfileToken(phone)`, `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`
   - `AuthStatus` enum: `unknown` | `authenticated` | `unauthenticated` | `pendingApproval`
   - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
+  - `updateRole()` calls `POST /auth/profile/role`, updates local pending state with role
   - `checkAuthStatus()`: checks `isPendingApproval()` flag first → then access token → else unauthenticated
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
 - `AuthService`: `storeTokens()`, `markRegistered()`, `getPhone()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
   - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only
-- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`; profile/guard uses `Authorization: Bearer {profileToken}` header directly
+- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`
 - `main.dart` `home`: `Consumer<AuthProvider>` — routes to `RegistrationPendingScreen` when `status == pendingApproval` (handles app-restart while pending)
-- `GuardRegistrationScreen`: uses `image_picker` (real file picking, not simulation); `_documents` map is `Map<String, File?>`; passes `Map<String, File>` to `submitGuardProfile()`
-- `RoleSelectionScreen._onRoleTap()`: guard path runs `isPendingApproval()` + `isRegistered(role)` in parallel via `Future.wait`; non-guard path runs `isRegistered(role)` + `getPhoneVerifiedData()` in parallel via record `.wait`
+- `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed).
+- `RoleSelectionScreen._onRoleTap()`: calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path → `RegistrationPendingScreen`
+- `GuardRegistrationScreen._onSubmit()`: only calls `submitGuardProfile(profileToken)` — no `registerWithOtp()`. Uses `reissueProfileToken()` fallback if profileToken is null/expired.
 
 **Nginx Rate Limit:**
 - `otp_limit` zone: 3 req/min per IP — applied to `location /auth/otp/`
@@ -597,6 +612,17 @@ RegistrationPendingScreen
 docker compose up
 flutter run --dart-define=API_URL=http://10.0.2.2:80
 ```
+
+### Flutter Hot Keys (while `flutter run` is active)
+
+| Key | Action |
+|-----|--------|
+| `r` | Hot reload (preserve state) |
+| `R` | Hot restart (reset state) |
+| `h` | List all interactive commands |
+| `d` | Detach (leave app running, exit CLI) |
+| `c` | Clear the screen |
+| `q` | Quit (terminate app + CLI) |
 
 ---
 
@@ -754,7 +780,9 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม upload ไฟล์ไปยัง S3/MinIO แบบ sequential loop — ใช้ `tokio::task::JoinSet` เพื่อ parallel upload เสมอ
 - ❌ ห้าม validate magic bytes ก่อนตรวจ file size — ต้องตรวจ size ก่อนเสมอ (ป้องกัน large allocation ก่อน reject)
 - ❌ ห้าม cast `response.data['field'] as String?` — ใช้ `raw is String ? raw : null` เพื่อป้องกัน crash
-- ❌ ห้ามเรียก `registerWithOtp()` ใน `PinSetupScreen` หรือ `RoleSelectionScreen` — ต้องเรียกใน `GuardRegistrationScreen._onSubmit()` เท่านั้น (หลังจาก collect full_name + role ครบแล้ว)
+- ❌ ห้ามเรียก `registerWithOtp()` ใน `RoleSelectionScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `PinSetupScreen._finishSetup()` เท่านั้น (3-step flow: register ก่อน, เลือก role ทีหลัง)
+- ❌ ห้ามเรียก `updateRole()` ใน `PinSetupScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `RoleSelectionScreen._onRoleTap()` เท่านั้น
+- ❌ ห้ามส่ง `phoneVerifiedToken` ไปยัง `RoleSelectionScreen` — token ถูก consume ใน `PinSetupScreen` แล้ว, ส่งแค่ `phone`
 - ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `SetPasswordScreen` — ต้อง navigate ไป `PinSetupScreen` โดยตรง (SetPasswordScreen ถูกลบออกจาก flow หลักแล้ว)
 - ❌ ห้ามแสดง `PinLockScreen` โดยตรวจเฉพาะ `pinService.isPinSet` — ต้องตรวจ `auth.status == AuthStatus.authenticated` ก่อนเสมอ (iOS Keychain persist ข้าม reinstall)
 

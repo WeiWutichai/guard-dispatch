@@ -14,15 +14,15 @@ import 'registration_pending_screen.dart';
 
 class GuardRegistrationScreen extends StatefulWidget {
   final String phone;
-  /// phone_verified_token from OTP step — used to call registerWithOtp()
-  /// at the end of the 3-step form to obtain a profile_token.
-  final String? phoneVerifiedToken;
+  /// profile_token from updateRole() — used to call submitGuardProfile().
+  /// If null (e.g. token expired), reissueProfileToken() is called as fallback.
+  final String? profileToken;
   final Widget dashboard;
 
   const GuardRegistrationScreen({
     super.key,
     required this.phone,
-    this.phoneVerifiedToken,
+    this.profileToken,
     required this.dashboard,
   });
 
@@ -125,19 +125,9 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     try {
       final authProvider = context.read<AuthProvider>();
 
-      // Step 1: Register account (HTTP 202) and get profile_token for upload.
-      // registerWithOtp is called here (not in SetPasswordScreen) so that
-      // full_name is collected from the form and role is known.
-      String? profileToken;
-      if (widget.phoneVerifiedToken != null) {
-        profileToken = await authProvider.registerWithOtp(
-          phoneVerifiedToken: widget.phoneVerifiedToken!,
-          fullName: _fullNameController.text.trim().isEmpty
-              ? null
-              : _fullNameController.text.trim(),
-          role: 'guard',
-        );
-      }
+      // Get profile_token: use the one from updateRole(), or reissue if expired/null.
+      final profileToken = widget.profileToken ??
+          await authProvider.reissueProfileToken(widget.phone);
 
       // Save profile summary locally (masked account number for security).
       await AuthService.savePendingProfile({
@@ -156,46 +146,43 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
         'doc_passbook': _passbookFile?.path.split('/').last,
       });
 
-      // Submit to backend only if profile_token is available (may be null if
-      // token expired — local save above ensures pending screen still shows data).
-      if (profileToken != null) {
-        String? dobString;
-        if (_dateOfBirth != null) {
-          dobString =
-              '${_dateOfBirth!.year.toString().padLeft(4, '0')}-'
-              '${_dateOfBirth!.month.toString().padLeft(2, '0')}-'
-              '${_dateOfBirth!.day.toString().padLeft(2, '0')}';
-        }
-        // Collect picked files for upload.
-        final filesToUpload = <String, File>{};
-        if (_documents['idCard'] != null) filesToUpload['id_card'] = _documents['idCard']!;
-        if (_documents['securityLicense'] != null) filesToUpload['security_license'] = _documents['securityLicense']!;
-        if (_documents['trainingCert'] != null) filesToUpload['training_cert'] = _documents['trainingCert']!;
-        if (_documents['criminalCheck'] != null) filesToUpload['criminal_check'] = _documents['criminalCheck']!;
-        if (_documents['driverLicense'] != null) filesToUpload['driver_license'] = _documents['driverLicense']!;
-        if (_passbookFile != null) filesToUpload['passbook_photo'] = _passbookFile!;
-
-        await authProvider.submitGuardProfile(
-          profileToken: profileToken,
-          fullName: _fullNameController.text.trim().isEmpty
-              ? null
-              : _fullNameController.text.trim(),
-          gender: _selectedGender,
-          dateOfBirth: dobString,
-          yearsOfExperience: int.tryParse(_yearsExpController.text.trim()),
-          previousWorkplace: _previousWorkplaceController.text.trim().isEmpty
-              ? null
-              : _previousWorkplaceController.text.trim(),
-          bankName: _selectedBank,
-          accountNumber: _accountNumberController.text.trim().isEmpty
-              ? null
-              : _accountNumberController.text.trim(),
-          accountName: _accountNameController.text.trim().isEmpty
-              ? null
-              : _accountNameController.text.trim(),
-          files: filesToUpload,
-        );
+      // Submit guard profile with documents to backend.
+      String? dobString;
+      if (_dateOfBirth != null) {
+        dobString =
+            '${_dateOfBirth!.year.toString().padLeft(4, '0')}-'
+            '${_dateOfBirth!.month.toString().padLeft(2, '0')}-'
+            '${_dateOfBirth!.day.toString().padLeft(2, '0')}';
       }
+      // Collect picked files for upload.
+      final filesToUpload = <String, File>{};
+      if (_documents['idCard'] != null) filesToUpload['id_card'] = _documents['idCard']!;
+      if (_documents['securityLicense'] != null) filesToUpload['security_license'] = _documents['securityLicense']!;
+      if (_documents['trainingCert'] != null) filesToUpload['training_cert'] = _documents['trainingCert']!;
+      if (_documents['criminalCheck'] != null) filesToUpload['criminal_check'] = _documents['criminalCheck']!;
+      if (_documents['driverLicense'] != null) filesToUpload['driver_license'] = _documents['driverLicense']!;
+      if (_passbookFile != null) filesToUpload['passbook_photo'] = _passbookFile!;
+
+      await authProvider.submitGuardProfile(
+        profileToken: profileToken,
+        fullName: _fullNameController.text.trim().isEmpty
+            ? null
+            : _fullNameController.text.trim(),
+        gender: _selectedGender,
+        dateOfBirth: dobString,
+        yearsOfExperience: int.tryParse(_yearsExpController.text.trim()),
+        previousWorkplace: _previousWorkplaceController.text.trim().isEmpty
+            ? null
+            : _previousWorkplaceController.text.trim(),
+        bankName: _selectedBank,
+        accountNumber: _accountNumberController.text.trim().isEmpty
+            ? null
+            : _accountNumberController.text.trim(),
+        accountName: _accountNameController.text.trim().isEmpty
+            ? null
+            : _accountNameController.text.trim(),
+        files: filesToUpload,
+      );
 
       await AuthService.clearPhoneVerifiedData();
 
