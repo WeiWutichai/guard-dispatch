@@ -45,6 +45,21 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       return;
     }
 
+    // If already pending with a role assigned → go straight to pending screen.
+    // Must check BEFORE phone resolution so we never ask for phone twice.
+    if (isPending) {
+      final pendingRole = await AuthService.getPendingRole();
+      if (!mounted) return;
+      if (pendingRole != null) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+          (route) => false,
+        );
+        return;
+      }
+    }
+
     // Resolve phone from widget props or storage fallback.
     String? phone = widget.phone;
     if (phone == null) {
@@ -62,19 +77,6 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     }
 
     if (role == 'guard') {
-      // Check if guard already has profile submitted → pending screen
-      if (isPending) {
-        final profile = await AuthService.getPendingProfile();
-        if (!mounted) return;
-        if (profile != null) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
-          );
-          return;
-        }
-      }
-
       // Step 2: Set role via API → get profile_token for guard form
       String? profileToken;
       final pendingRole = await AuthService.getPendingRole();
