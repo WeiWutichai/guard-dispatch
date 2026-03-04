@@ -104,12 +104,12 @@ class _GuardLoginScreenState extends State<GuardLoginScreen> {
                 width: 80,
                 height: 80,
                 decoration: BoxDecoration(
-                  color: AppColors.teal.withValues(alpha: 0.1),
+                  color: AppColors.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Icon(
                   Icons.badge_rounded,
-                  color: AppColors.teal,
+                  color: AppColors.primary,
                   size: 40,
                 ),
               ),
@@ -128,7 +128,7 @@ class _GuardLoginScreenState extends State<GuardLoginScreen> {
                 style: GoogleFonts.inter(
                   fontSize: 15,
                   fontWeight: FontWeight.w500,
-                  color: AppColors.teal.withValues(alpha: 0.7),
+                  color: AppColors.primary.withValues(alpha: 0.7),
                 ),
               ),
               const SizedBox(height: 40),
@@ -139,7 +139,7 @@ class _GuardLoginScreenState extends State<GuardLoginScreen> {
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(24),
                   border: Border.all(
-                    color: AppColors.teal.withValues(alpha: 0.15),
+                    color: AppColors.primary.withValues(alpha: 0.15),
                   ),
                 ),
                 child: Column(

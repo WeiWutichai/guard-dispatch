@@ -7,7 +7,7 @@ type TranslationStructure = {
   header: Record<string, string>;
   dashboard: Record<string, string>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  applicants: Record<string, any>;
+  applicants: Record<string, any>; // includes nested modal.guardProfile
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   guards: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -126,10 +126,37 @@ export const translations = {
         approve: "อนุมัติ",
         reject: "ปฏิเสธ",
         close: "ปิด",
+        awaitingRole: "ผู้สมัครยังไม่ได้เลือกประเภท รอให้เลือก รปภ. หรือผู้เรียก รปภ. ก่อนอนุมัติ",
+        guardProfile: {
+          personalInfo: "ข้อมูลส่วนตัว",
+          experience: "ประสบการณ์",
+          workplace: "ที่ทำงานเดิม",
+          yearsExp: "ปีประสบการณ์",
+          gender: "เพศ",
+          dateOfBirth: "วันเกิด",
+          documentsSection: "เอกสารที่แนบมา",
+          bankSection: "ข้อมูลบัญชีธนาคาร",
+          bankName: "ธนาคาร",
+          accountNumber: "เลขบัญชี",
+          accountName: "ชื่อบัญชี",
+          viewDocument: "ดูเอกสาร",
+          notProvided: "ไม่ได้ระบุ",
+          uploaded: "อัปโหลดแล้ว",
+          notUploaded: "ยังไม่ได้อัปโหลด",
+          loadingProfile: "กำลังโหลดข้อมูลโปรไฟล์...",
+          noProfile: "ยังไม่มีข้อมูลโปรไฟล์",
+          docIdCard: "บัตรประชาชน",
+          docSecurityLicense: "ใบรับรองเจ้าหน้าที่รักษาความปลอดภัย",
+          docTrainingCert: "ใบรับรองการฝึกอบรม",
+          docCriminalCheck: "ใบรับรองไม่มีประวัติอาชญากรรม",
+          docDriverLicense: "ใบขับขี่",
+          passbookPhoto: "รูปสมุดบัญชี",
+        },
       },
       badge: {
         guard: "เจ้าหน้าที่ รปภ.",
         customer: "ผู้เรียก รปภ.",
+        noRole: "ยังไม่ได้ระบุ",
       },
       searchPlaceholder: "ค้นหาผู้สมัคร...",
       noApplicantsFound: "ไม่พบผู้สมัคร",
@@ -141,6 +168,11 @@ export const translations = {
         guard: "ผ่านการอนุมัติ — ดูรายชื่อได้ที่เมนู \"พนักงานรักษาความปลอดภัย\"",
         customer: "ผ่านการอนุมัติ — ดูรายชื่อได้ที่เมนู \"ลูกค้า\"",
       },
+      loading: "กำลังโหลดข้อมูลผู้สมัคร...",
+      errorLoading: "ไม่สามารถโหลดข้อมูลได้",
+      retry: "ลองใหม่",
+      approveSuccess: "อนุมัติผู้สมัครสำเร็จ",
+      rejectSuccess: "ปฏิเสธผู้สมัครสำเร็จ",
     },
 
     // Guards
@@ -509,10 +541,37 @@ export const translations = {
         approve: "Approve",
         reject: "Reject",
         close: "Close",
+        awaitingRole: "Applicant hasn't selected a role yet. Wait for them to choose Security Guard or Customer before approving.",
+        guardProfile: {
+          personalInfo: "Personal Information",
+          experience: "Experience",
+          workplace: "Previous Workplace",
+          yearsExp: "Years of Experience",
+          gender: "Gender",
+          dateOfBirth: "Date of Birth",
+          documentsSection: "Submitted Documents",
+          bankSection: "Bank Account",
+          bankName: "Bank",
+          accountNumber: "Account Number",
+          accountName: "Account Name",
+          viewDocument: "View Document",
+          notProvided: "Not provided",
+          uploaded: "Uploaded",
+          notUploaded: "Not uploaded",
+          loadingProfile: "Loading profile...",
+          noProfile: "No profile submitted yet",
+          docIdCard: "ID Card",
+          docSecurityLicense: "Security Guard License",
+          docTrainingCert: "Training Certificate",
+          docCriminalCheck: "Criminal Record Check",
+          docDriverLicense: "Driver's License",
+          passbookPhoto: "Passbook Photo",
+        },
       },
       badge: {
         guard: "Security Guard",
         customer: "Customer",
+        noRole: "Unspecified",
       },
       searchPlaceholder: "Search applicants...",
       noApplicantsFound: "No applicants found",
@@ -524,6 +583,11 @@ export const translations = {
         guard: "Approved — view in \"Security Guards\" menu",
         customer: "Approved — view in \"Customers\" menu",
       },
+      loading: "Loading applicants...",
+      errorLoading: "Failed to load applicants",
+      retry: "Retry",
+      approveSuccess: "Applicant approved successfully",
+      rejectSuccess: "Applicant rejected successfully",
     },
 
     // Guards

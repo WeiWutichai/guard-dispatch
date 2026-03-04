@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
-import 'screens/pin_setup_screen.dart';
+import 'screens/phone_input_screen.dart';
 import 'screens/pin_lock_screen.dart';
+import 'screens/registration_pending_screen.dart';
 import 'services/pin_storage_service.dart';
 import 'services/language_service.dart';
 import 'theme/colors.dart';
@@ -35,6 +36,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(
           create: (_) => AuthProvider()..checkAuthStatus(),
         ),
+        Provider<PinStorageService>.value(value: pinService),
       ],
       child: LanguageProvider(
         notifier: langNotifier,
@@ -52,9 +54,16 @@ class MyApp extends StatelessWidget {
             textTheme: GoogleFonts.interTextTheme(Theme.of(context).textTheme),
             useMaterial3: true,
           ),
-          home: pinService.isPinSet
-              ? PinLockScreen(pinService: pinService)
-              : PinSetupScreen(pinService: pinService),
+          home: Consumer<AuthProvider>(
+            builder: (context, auth, _) {
+              if (auth.status == AuthStatus.pendingApproval) {
+                return const RegistrationPendingScreen();
+              }
+              return pinService.isPinSet
+                  ? PinLockScreen(pinService: pinService)
+                  : const PhoneInputScreen();
+            },
+          ),
         ),
       ),
     );

@@ -68,6 +68,115 @@ pub fn decode_jwt_with_key(token: &str, key: &DecodingKey) -> Result<JwtClaims, 
     Ok(token_data.claims)
 }
 
+/// Claims for a temporary phone-verification JWT (issued after OTP verification).
+/// This token has a short TTL and carries the verified phone number.
+/// The `jti` field makes the token single-use (tracked via Redis).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PhoneVerifyClaims {
+    pub phone: String,
+    pub purpose: String,
+    /// Unique token ID for single-use enforcement.
+    pub jti: String,
+    pub exp: i64,
+    pub iat: i64,
+}
+
+/// Encode a short-lived phone-verification JWT with a unique `jti` for single-use enforcement.
+/// Returns `(token, jti)` so the caller can track the jti in Redis.
+pub fn encode_phone_verify_token(
+    phone: &str,
+    key: &EncodingKey,
+    expiry_minutes: i64,
+) -> Result<(String, String), AppError> {
+    let now = Utc::now();
+    let jti = Uuid::new_v4().to_string();
+    let claims = PhoneVerifyClaims {
+        phone: phone.to_string(),
+        purpose: "phone_verify".to_string(),
+        jti: jti.clone(),
+        exp: (now + chrono::TimeDelta::minutes(expiry_minutes)).timestamp(),
+        iat: now.timestamp(),
+    };
+
+    let token = jsonwebtoken::encode(&Header::default(), &claims, key)
+        .map_err(|e| AppError::Internal(format!("Failed to encode phone verify token: {e}")))?;
+    Ok((token, jti))
+}
+
+/// Decode and validate a phone-verification JWT.
+/// Returns `(phone, jti)` — caller must check jti against Redis for single-use enforcement.
+pub fn decode_phone_verify_token(
+    token: &str,
+    key: &DecodingKey,
+) -> Result<(String, String), AppError> {
+    let mut validation = Validation::default();
+    validation.validate_exp = true;
+    validation.set_required_spec_claims(&["exp"]);
+
+    let token_data = jsonwebtoken::decode::<PhoneVerifyClaims>(token, key, &validation)
+        .map_err(|e| AppError::BadRequest(format!("Invalid or expired phone verification token: {e}")))?;
+
+    if token_data.claims.purpose != "phone_verify" {
+        return Err(AppError::BadRequest("Invalid token purpose".to_string()));
+    }
+
+    Ok((token_data.claims.phone, token_data.claims.jti))
+}
+
+/// Claims for a temporary profile-submission JWT (issued after guard OTP registration).
+/// This token has a short TTL (15 min) and grants the bearer the right to submit
+/// their guard profile (documents, experience, bank info) via `POST /profile/guard`.
+/// It is NOT an access or refresh token — it cannot access any other endpoint.
+/// The `jti` field enables single-use enforcement via Redis GETDEL.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProfileTokenClaims {
+    pub sub: Uuid,
+    pub purpose: String,
+    /// Unique token ID for single-use enforcement (tracked in Redis).
+    pub jti: String,
+    pub exp: i64,
+    pub iat: i64,
+}
+
+/// Encode a short-lived profile-submission JWT for a newly registered guard.
+/// Returns `(token, jti)` so the caller can store the jti in Redis for GETDEL enforcement.
+pub fn encode_profile_token(
+    user_id: Uuid,
+    key: &EncodingKey,
+    expiry_minutes: i64,
+) -> Result<(String, String), AppError> {
+    let now = Utc::now();
+    let jti = Uuid::new_v4().to_string();
+    let claims = ProfileTokenClaims {
+        sub: user_id,
+        purpose: "guard_profile".to_string(),
+        jti: jti.clone(),
+        exp: (now + chrono::TimeDelta::minutes(expiry_minutes)).timestamp(),
+        iat: now.timestamp(),
+    };
+
+    let token = jsonwebtoken::encode(&Header::default(), &claims, key)
+        .map_err(|e| AppError::Internal(format!("Failed to encode profile token: {e}")))?;
+    Ok((token, jti))
+}
+
+/// Decode and validate a profile-submission JWT.
+/// Returns `(user_id, jti)` — caller must GETDEL jti from Redis for single-use enforcement.
+pub fn decode_profile_token(token: &str, key: &DecodingKey) -> Result<(Uuid, String), AppError> {
+    let mut validation = Validation::default();
+    validation.validate_exp = true;
+    validation.set_required_spec_claims(&["exp"]);
+
+    let token_data = jsonwebtoken::decode::<ProfileTokenClaims>(token, key, &validation)
+        .map_err(|e| AppError::Unauthorized(format!("Invalid or expired profile token: {e}")))?;
+
+    if token_data.claims.purpose != "guard_profile" {
+        return Err(AppError::Unauthorized("Invalid token purpose".to_string()));
+    }
+
+    Ok((token_data.claims.sub, token_data.claims.jti))
+}
+
 /// Build a Set-Cookie header value for an httpOnly, Secure, SameSite=Lax cookie.
 pub fn build_cookie(name: &str, value: &str, max_age_secs: i64, path: &str) -> String {
     format!(

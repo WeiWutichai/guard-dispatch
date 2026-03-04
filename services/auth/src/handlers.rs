@@ -1,8 +1,10 @@
-use axum::extract::State;
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::header::SET_COOKIE;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use std::collections::HashMap;
 use std::sync::Arc;
+use uuid::Uuid;
 
 use shared::auth::{
     build_clear_cookie, build_cookie, AuthUser, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE,
@@ -11,8 +13,10 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AuthResponse, LoginRequest, RefreshRequest, RegisterRequest, UpdateProfileRequest,
-    UserResponse,
+    AuthResponse, GuardProfileFormData, GuardProfileResponse, ListUsersQuery, LoginRequest,
+    PaginatedUsers, RefreshRequest, RegisterRequest, RegisterWithOtpRequest,
+    RegisterWithOtpResponse, RequestOtpRequest, RequestOtpResponse, UpdateApprovalStatusRequest,
+    UpdateProfileRequest, UserResponse, VerifyOtpRequest, VerifyOtpResponse,
 };
 use crate::state::AppState;
 
@@ -229,6 +233,268 @@ pub async fn logout(
     headers.append(SET_COOKIE, clear_marker.parse().expect("valid cookie"));
 
     Ok((headers, Json(ApiResponse::success(()))))
+}
+
+// =============================================================================
+// OTP Handlers
+// =============================================================================
+
+#[utoipa::path(
+    post,
+    path = "/otp/request",
+    tag = "OTP",
+    request_body = RequestOtpRequest,
+    responses(
+        (status = 200, description = "OTP sent successfully", body = RequestOtpResponse),
+        (status = 400, description = "Invalid phone or rate limited", body = ErrorBody),
+    ),
+)]
+pub async fn request_otp(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RequestOtpRequest>,
+) -> Result<Json<ApiResponse<RequestOtpResponse>>, AppError> {
+    let response = crate::service::request_otp(
+        &state.db,
+        &state.redis,
+        &state.sms_config,
+        &state.otp_config,
+        &state.http_client,
+        &req.phone,
+    )
+    .await?;
+    Ok(Json(ApiResponse::success(response)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/otp/verify",
+    tag = "OTP",
+    request_body = VerifyOtpRequest,
+    responses(
+        (status = 200, description = "OTP verified, phone_verified_token returned", body = VerifyOtpResponse),
+        (status = 400, description = "Invalid or expired OTP", body = ErrorBody),
+    ),
+)]
+pub async fn verify_otp(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<VerifyOtpRequest>,
+) -> Result<Json<ApiResponse<VerifyOtpResponse>>, AppError> {
+    let response = crate::service::verify_otp(
+        &state.db,
+        &state.redis,
+        &state.jwt_config,
+        &state.otp_config,
+        &req.phone,
+        &req.code,
+    )
+    .await?;
+    Ok(Json(ApiResponse::success(response)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/register/otp",
+    tag = "Auth",
+    request_body = RegisterWithOtpRequest,
+    responses(
+        (status = 202, description = "Account created — pending admin approval. No tokens issued.", body = RegisterWithOtpResponse),
+        (status = 400, description = "Validation error or invalid token", body = ErrorBody),
+        (status = 409, description = "Email or phone already exists", body = ErrorBody),
+    ),
+)]
+pub async fn register_with_otp(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterWithOtpRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<RegisterWithOtpResponse>>), AppError> {
+    let response = crate::service::register_with_otp(
+        &state.db,
+        &state.redis,
+        &state.jwt_config,
+        req,
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(response))))
+}
+
+// =============================================================================
+// Admin Handlers
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/users",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(
+        ("role" = Option<String>, Query, description = "Filter by role (guard, customer)"),
+        ("approval_status" = Option<String>, Query, description = "Filter by status (pending, approved, rejected)"),
+        ("search" = Option<String>, Query, description = "Search by name, email, or phone"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 20, max 100)"),
+        ("offset" = Option<i64>, Query, description = "Offset for pagination"),
+    ),
+    responses(
+        (status = 200, description = "List of users", body = PaginatedUsers),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+    ),
+)]
+pub async fn list_users(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<ListUsersQuery>,
+) -> Result<Json<ApiResponse<PaginatedUsers>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+
+    let result = crate::service::list_users(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(result)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/users/{id}/approval",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(
+        ("id" = Uuid, Path, description = "User ID to update"),
+    ),
+    request_body = UpdateApprovalStatusRequest,
+    responses(
+        (status = 200, description = "Approval status updated", body = UserResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+        (status = 404, description = "User not found", body = ErrorBody),
+    ),
+)]
+pub async fn update_approval_status(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateApprovalStatusRequest>,
+) -> Result<Json<ApiResponse<UserResponse>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+
+    let updated = crate::service::update_approval_status(&state.db, &state.redis, id, req).await?;
+    Ok(Json(ApiResponse::success(updated)))
+}
+
+// =============================================================================
+// Guard Profile Handlers
+// =============================================================================
+
+/// Submit guard profile data (multipart/form-data).
+/// Requires `Authorization: Bearer <profile_token>` header (short-lived JWT issued at registration).
+/// Accepts text fields and optional document image files.
+pub async fn submit_guard_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<shared::models::ApiResponse<()>>), AppError> {
+    // Validate profile_token from Authorization header
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("Missing profile token".to_string()))?;
+
+    let user_id = crate::service::validate_profile_token(token, &state.jwt_config, &state.redis).await?;
+
+    let mut form = GuardProfileFormData::default();
+    let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+
+    // Parse multipart fields
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        AppError::BadRequest(format!("Multipart parse error: {e}"))
+    })? {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "full_name" => {
+                form.full_name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            "gender" => {
+                form.gender = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            "date_of_birth" => {
+                form.date_of_birth = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            "years_of_experience" => {
+                let s = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                form.years_of_experience = s.parse::<i32>().ok();
+            }
+            "previous_workplace" => {
+                form.previous_workplace = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            "bank_name" => {
+                form.bank_name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            "account_number" => {
+                form.account_number = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            "account_name" => {
+                form.account_name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            // Document image fields
+            "id_card" | "security_license" | "training_cert" | "criminal_check" | "driver_license" | "passbook_photo" => {
+                let data = field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                if !data.is_empty() {
+                    files.insert(name, data.to_vec());
+                }
+            }
+            _ => {
+                // Ignore unknown fields
+            }
+        }
+    }
+
+    crate::service::submit_guard_profile(
+        &state.db,
+        &state.s3_client,
+        &state.s3_bucket,
+        user_id,
+        form,
+        files,
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(shared::models::ApiResponse::success(()))))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/guard-profile/{user_id}",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(
+        ("user_id" = Uuid, Path, description = "Guard user ID"),
+    ),
+    responses(
+        (status = 200, description = "Guard profile with signed document URLs", body = GuardProfileResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+        (status = 404, description = "Guard profile not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_guard_profile(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<shared::models::ApiResponse<GuardProfileResponse>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+
+    let profile = crate::service::get_guard_profile(
+        &state.db,
+        &state.s3_client,
+        &state.s3_bucket,
+        user_id,
+    )
+    .await?;
+
+    Ok(Json(shared::models::ApiResponse::success(profile)))
 }
 
 #[cfg(test)]

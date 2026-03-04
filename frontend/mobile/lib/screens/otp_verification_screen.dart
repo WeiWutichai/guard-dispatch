@@ -1,24 +1,31 @@
 import 'dart:async';
-import 'dart:ui';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
-import '../services/auth_service.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
-import 'role_selection_screen.dart';
+import '../providers/auth_provider.dart';
+import '../services/auth_service.dart';
+import 'set_password_screen.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
   final String? role;
   final String phone;
   final Widget? destination;
 
+  /// When true, pop with the phone_verified_token instead of navigating
+  /// to PinSetupScreen. Used by RegistrationFormScreen to re-verify.
+  final bool returnTokenOnly;
+
   const OtpVerificationScreen({
     super.key,
     this.role,
     required this.phone,
     this.destination,
+    this.returnTokenOnly = false,
   });
 
   @override
@@ -34,12 +41,11 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   bool _hasError = false;
   bool _isVerifying = false;
+  String? _errorMessage;
   int _resendSeconds = 30;
   Timer? _resendTimer;
 
-  Color get _roleColor => widget.role == 'customer'
-      ? AppColors.primary
-      : (widget.role == 'guard' ? AppColors.teal : AppColors.primary);
+  Color get _roleColor => AppColors.primary;
 
   String get _maskedPhone {
     if (widget.phone.length >= 4) {
@@ -83,15 +89,18 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   String get _enteredOtp => _controllers.map((c) => c.text).join();
 
-  void _onOtpChanged(int index, String value, OtpStrings strings) {
-    setState(() => _hasError = false);
+  void _onOtpChanged(int index, String value) {
+    setState(() {
+      _hasError = false;
+      _errorMessage = null;
+    });
 
     if (value.isNotEmpty && index < 5) {
       _focusNodes[index + 1].requestFocus();
     }
 
     if (_enteredOtp.length == 6) {
-      _verifyOtp(strings);
+      _verifyOtp();
     }
   }
 
@@ -105,74 +114,84 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     }
   }
 
-  Future<void> _verifyOtp(OtpStrings strings) async {
-    setState(() => _isVerifying = true);
+  Future<void> _verifyOtp() async {
+    setState(() {
+      _isVerifying = true;
+      _errorMessage = null;
+    });
 
-    // Verify OTP via AuthService (server-side when API is ready)
-    final isValid = await AuthService.verifyOtp(widget.phone, _enteredOtp);
+    try {
+      final authProvider = context.read<AuthProvider>();
+      final phoneVerifiedToken = await authProvider.verifyOtp(
+        widget.phone,
+        _enteredOtp,
+      );
 
-    if (!mounted) return;
-
-    if (isValid) {
-      // Mark registered if role is present
-      if (widget.role != null) {
-        await AuthService.markRegistered(widget.role!, widget.phone);
-      }
+      // Persist phone + token so RoleSelectionScreen can retrieve them
+      // even if not passed directly (e.g. arriving from PinLockScreen).
+      await AuthService.storePhoneVerifiedData(widget.phone, phoneVerifiedToken);
 
       if (!mounted) return;
 
-      // Success feedback
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(
-                Icons.check_circle_rounded,
-                color: Colors.white,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                strings.registerSuccess,
-                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
-              ),
-            ],
+      if (widget.returnTokenOnly) {
+        // Pop back with the token (used by RegistrationFormScreen)
+        Navigator.pop(context, phoneVerifiedToken);
+        return;
+      }
+
+      // Navigate to SetPasswordScreen to collect name/email/password
+      // before setting up PIN. RegisterWithOtp is called there so password
+      // is stored — guards can log in after admin approval.
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SetPasswordScreen(
+            phone: widget.phone,
+            phoneVerifiedToken: phoneVerifiedToken,
           ),
-          backgroundColor: AppColors.primary,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          duration: const Duration(milliseconds: 1200),
         ),
       );
-
-      // Navigate to destination, removing phone+otp screens from stack
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted) {
-          final destination = widget.destination ?? const RoleSelectionScreen();
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (_) => destination),
-            (route) => route.isFirst,
-          );
-        }
-      });
-    } else {
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final message = e.response?.data?['error']?['message'] as String?;
       setState(() {
         _hasError = true;
         _isVerifying = false;
+        _errorMessage = message;
       });
-      // Clear OTP fields after error
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (mounted) {
-          for (final c in _controllers) {
-            c.clear();
-          }
-          _focusNodes[0].requestFocus();
-          setState(() => _hasError = false);
+      _clearFieldsAfterDelay();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _hasError = true;
+        _isVerifying = false;
+        _errorMessage = e.toString();
+      });
+      _clearFieldsAfterDelay();
+    }
+  }
+
+  void _clearFieldsAfterDelay() {
+    Future.delayed(const Duration(milliseconds: 1200), () {
+      if (mounted) {
+        for (final c in _controllers) {
+          c.clear();
         }
-      });
+        _focusNodes[0].requestFocus();
+        setState(() => _hasError = false);
+      }
+    });
+  }
+
+  Future<void> _resendOtp() async {
+    try {
+      final authProvider = context.read<AuthProvider>();
+      await authProvider.requestOtp(widget.phone);
+      _startResendTimer();
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final message = e.response?.data?['error']?['message'] as String?;
+      setState(() => _errorMessage = message ?? e.message);
     }
   }
 
@@ -206,7 +225,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               height: 260,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.teal.withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
               ),
             ),
           ),
@@ -276,15 +295,15 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                   ),
                   const SizedBox(height: 36),
                   // OTP input boxes
-                  _buildOtpFields(strings),
+                  _buildOtpFields(),
                   const SizedBox(height: 14),
                   // Error message
                   AnimatedOpacity(
-                    opacity: _hasError ? 1.0 : 0.0,
+                    opacity: (_hasError || _errorMessage != null) ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 200),
                     child: Center(
                       child: Text(
-                        strings.otpIncorrect,
+                        _errorMessage ?? strings.otpIncorrect,
                         style: GoogleFonts.inter(
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
@@ -318,7 +337,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                             ),
                           )
                         : GestureDetector(
-                            onTap: _startResendTimer,
+                            onTap: _resendOtp,
                             child: Text(
                               strings.resendOtp,
                               style: GoogleFonts.inter(
@@ -330,44 +349,6 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                           ),
                   ),
                   const Spacer(),
-                  // Hint for prototype
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.06),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: AppColors.primary.withValues(alpha: 0.15),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.lightbulb_outline_rounded,
-                              size: 18,
-                              color: AppColors.primary,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                strings.prototypeHint,
-                                style: GoogleFonts.inter(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
                   const SizedBox(height: 32),
                 ],
               ),
@@ -378,7 +359,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     );
   }
 
-  Widget _buildOtpFields(OtpStrings strings) {
+  Widget _buildOtpFields() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(6, (index) {
@@ -400,7 +381,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               keyboardType: TextInputType.number,
               maxLength: 1,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              onChanged: (value) => _onOtpChanged(index, value, strings),
+              onChanged: (value) => _onOtpChanged(index, value),
               style: GoogleFonts.inter(
                 fontSize: 22,
                 fontWeight: FontWeight.w700,

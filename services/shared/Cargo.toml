@@ -21,6 +21,8 @@ thiserror       = { workspace = true }
 anyhow          = { workspace = true }
 dotenvy         = { workspace = true }
 argon2          = { workspace = true }
+rand            = { workspace = true }
+reqwest         = { workspace = true }
 utoipa          = { workspace = true }
 
 [dev-dependencies]

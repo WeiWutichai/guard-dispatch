@@ -1,11 +1,16 @@
 import 'dart:ui';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../providers/auth_provider.dart';
 import 'otp_verification_screen.dart';
+import 'registration_pending_screen.dart';
 
 class PhoneInputScreen extends StatefulWidget {
   final String? role;
@@ -21,6 +26,8 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   bool _isValid = false;
+  bool _isLoading = false;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -47,23 +54,59 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
   IconData? get _roleIcon => widget.role == 'customer'
       ? Icons.home_work_rounded
       : (widget.role == 'guard' ? Icons.badge_rounded : null);
-  Color get _roleColor => widget.role == 'customer'
-      ? AppColors.primary
-      : (widget.role == 'guard' ? AppColors.teal : AppColors.primary);
+  Color get _roleColor => AppColors.primary;
 
-  void _onNext() {
-    if (!_isValid) return;
+  Future<void> _onNext() async {
+    if (!_isValid || _isLoading) return;
+
+    // Pending users should see their status screen, not go through OTP again.
+    final auth = context.read<AuthProvider>();
+    if (auth.isPendingApproval) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+        (route) => false,
+      );
+      return;
+    }
+
     final phone = _controller.text.replaceAll('-', '').replaceAll(' ', '');
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => OtpVerificationScreen(
-          role: widget.role,
-          phone: phone,
-          destination: widget.destination,
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final authProvider = context.read<AuthProvider>();
+      await authProvider.requestOtp(phone);
+
+      // Persist phone early so it's always available after this point
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('verified_phone', phone);
+
+      if (!mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => OtpVerificationScreen(
+            role: widget.role,
+            phone: phone,
+            destination: widget.destination,
+          ),
         ),
-      ),
-    );
+      );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final message = e.response?.data?['error']?['message'] as String?;
+      setState(() => _errorMessage = message ?? e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = e.toString());
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -96,7 +139,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
               height: 260,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.teal.withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
               ),
             ),
           ),
@@ -106,25 +149,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SizedBox(height: 8),
-                  // Back button
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.arrow_back_ios_rounded,
-                        size: 18,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 36),
                   if (widget.role != null) ...[
                     // Role badge
                     Container(
@@ -216,7 +241,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                                   child: Row(
                                     children: [
                                       Text(
-                                        '🇹🇭',
+                                        '\u{1F1F9}\u{1F1ED}',
                                         style: GoogleFonts.inter(fontSize: 18),
                                       ),
                                       const SizedBox(width: 6),
@@ -304,7 +329,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        'เราจะส่งรหัส OTP 6 หลักไปยังเบอร์นี้',
+                        strings.otpInfo,
                         style: GoogleFonts.inter(
                           fontSize: 12,
                           color: AppColors.textSecondary.withValues(alpha: 0.6),
@@ -312,16 +337,39 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                       ),
                     ],
                   ),
+                  // Error message
+                  if (_errorMessage != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.danger.withValues(alpha: 0.2)),
+                      ),
+                      child: Text(
+                        _errorMessage!,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: AppColors.danger,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
                   const Spacer(),
                   // Submit button
                   GestureDetector(
-                    onTap: _isValid ? _onNext : null,
+                    onTap: (_isValid && !_isLoading) ? _onNext : null,
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       decoration: BoxDecoration(
-                        color: _isValid ? _roleColor : AppColors.border,
+                        color: _isLoading
+                            ? _roleColor.withValues(alpha: 0.5)
+                            : (_isValid ? _roleColor : AppColors.border),
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: _isValid
                             ? [
@@ -336,24 +384,37 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
+                          if (_isLoading) ...[
+                            const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                          ],
                           Text(
-                            'ขอรหัส OTP',
+                            strings.requestOtp,
                             style: GoogleFonts.inter(
                               fontSize: 16,
                               fontWeight: FontWeight.w700,
-                              color: _isValid
+                              color: (_isValid || _isLoading)
                                   ? Colors.white
                                   : AppColors.textSecondary,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Icon(
-                            Icons.arrow_forward_rounded,
-                            size: 18,
-                            color: _isValid
-                                ? Colors.white
-                                : AppColors.textSecondary,
-                          ),
+                          if (!_isLoading) ...[
+                            const SizedBox(width: 8),
+                            Icon(
+                              Icons.arrow_forward_rounded,
+                              size: 18,
+                              color: _isValid
+                                  ? Colors.white
+                                  : AppColors.textSecondary,
+                            ),
+                          ],
                         ],
                       ),
                     ),

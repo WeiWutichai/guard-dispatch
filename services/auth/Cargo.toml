@@ -25,8 +25,12 @@ thiserror       = { workspace = true }
 anyhow          = { workspace = true }
 dotenvy         = { workspace = true }
 argon2          = { workspace = true }
+subtle          = { workspace = true }
+reqwest         = { workspace = true }
 utoipa          = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
+aws-sdk-s3      = { workspace = true }
+bytes           = { workspace = true }
 shared          = { workspace = true }
 
 [dev-dependencies]

@@ -31,10 +31,34 @@ export interface UserResponse {
   email: string;
   phone: string;
   full_name: string;
-  role: "admin" | "customer" | "guard";
+  role: "admin" | "customer" | "guard" | null;
   avatar_url: string | null;
   is_active: boolean;
+  approval_status: "pending" | "approved" | "rejected";
   created_at: string;
+}
+
+export interface PaginatedUsers {
+  users: UserResponse[];
+  total: number;
+}
+
+// Guard profile submitted during mobile registration
+export interface GuardProfile {
+  user_id: string;
+  gender: string | null;
+  date_of_birth: string | null;
+  years_of_experience: number | null;
+  previous_workplace: string | null;
+  id_card_url: string | null;
+  security_license_url: string | null;
+  training_cert_url: string | null;
+  criminal_check_url: string | null;
+  driver_license_url: string | null;
+  bank_name: string | null;
+  account_number: string | null;
+  account_name: string | null;
+  passbook_photo_url: string | null;
 }
 
 // Booking types
@@ -320,6 +344,33 @@ export const authApi = {
       // Even if API call fails, cookies are cleared by the backend
     }
   },
+
+  listUsers: (params?: {
+    role?: string;
+    approval_status?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.role) query.set("role", params.role);
+    if (params?.approval_status) query.set("approval_status", params.approval_status);
+    if (params?.search) query.set("search", params.search);
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.offset) query.set("offset", String(params.offset));
+    const qs = query.toString();
+    return apiFetch<PaginatedUsers>(`/auth/users${qs ? `?${qs}` : ""}`);
+  },
+
+  updateApprovalStatus: (userId: string, approvalStatus: "pending" | "approved" | "rejected") =>
+    apiFetch<UserResponse>(`/auth/users/${userId}/approval`, {
+      method: "PATCH",
+      body: JSON.stringify({ approval_status: approvalStatus }),
+    }),
+
+  /** Fetch a guard applicant's profile (experience, documents, bank info). Admin only. */
+  getGuardProfile: (userId: string): Promise<GuardProfile> =>
+    apiFetch<GuardProfile>(`/auth/admin/guard-profile/${userId}`),
 };
 
 // ---------------------------------------------------------------------------

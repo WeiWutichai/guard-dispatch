@@ -103,13 +103,13 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
       children: [
         _buildCompletedJobItem(
           strings.sampleClient,
-          strings.sampleDate2 + ' 2023',
+          '${strings.sampleDate2} 2023',
           '฿1,200',
         ),
         const SizedBox(height: 12),
         _buildCompletedJobItem(
           'คุณวิชัย นามสมมุติ',
-          strings.sampleDate3 + ' 2023',
+          '${strings.sampleDate3} 2023',
           '฿960',
         ),
       ],

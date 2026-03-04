@@ -3,13 +3,150 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/colors.dart';
 import '../services/language_service.dart';
+import '../services/auth_service.dart';
 import '../l10n/app_strings.dart';
 import '../widgets/language_toggle.dart';
 import 'guard/guard_dashboard_screen.dart';
 import 'hirer/hirer_dashboard_screen.dart';
+import 'phone_input_screen.dart';
+import 'registration_form_screen.dart';
+import 'registration_pending_screen.dart';
+import 'guard_registration_screen.dart';
 
-class RoleSelectionScreen extends StatelessWidget {
-  const RoleSelectionScreen({super.key});
+class RoleSelectionScreen extends StatefulWidget {
+  /// If set, this is a new registration flow.
+  /// [profileToken] is the short-lived JWT returned by registerWithOtp()
+  /// (already called in PinSetupScreen) for submitting guard profile data.
+  final String? phone;
+  final String? profileToken;
+
+  const RoleSelectionScreen({
+    super.key,
+    this.phone,
+    this.profileToken,
+  });
+
+  @override
+  State<RoleSelectionScreen> createState() => _RoleSelectionScreenState();
+}
+
+class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
+  Future<void> _onRoleTap(String role, Widget dashboard) async {
+    if (role == 'guard') {
+      // Parallel reads: isPendingApproval + isRegistered (both are SharedPreferences).
+      final results = await Future.wait([
+        AuthService.isPendingApproval(),
+        AuthService.isRegistered(role),
+      ]);
+      if (!mounted) return;
+
+      final isPending = results[0];
+      final isRegistered = results[1];
+
+      if (isPending) {
+        // Guard is pending approval — check if profile was already submitted.
+        final profile = await AuthService.getPendingProfile();
+        if (!mounted) return;
+        if (profile != null) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+          );
+          return;
+        }
+        // Profile not yet submitted → go directly to guard form (skip
+        // RegistrationFormScreen which would trigger OTP again).
+        String? phone = widget.phone;
+        if (phone == null) {
+          final stored = await AuthService.getPhoneVerifiedData();
+          if (!mounted) return;
+          phone = stored.$1;
+        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GuardRegistrationScreen(
+              phone: phone ?? '',
+              profileToken: widget.profileToken,
+              dashboard: dashboard,
+            ),
+          ),
+        );
+        return;
+      }
+
+      if (isRegistered) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => dashboard));
+        return;
+      }
+
+      // Not registered — get phone from widget props or storage fallback.
+      String? phone = widget.phone;
+      final profileToken = widget.profileToken;
+      if (phone == null) {
+        final stored = await AuthService.getPhoneVerifiedData();
+        if (!mounted) return;
+        phone = stored.$1;
+      }
+      if (phone != null) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RegistrationFormScreen(
+              role: role,
+              dashboard: dashboard,
+              phone: phone ?? '',
+              profileToken: profileToken,
+            ),
+          ),
+        );
+      } else {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+        );
+      }
+      return;
+    }
+
+    // Non-guard roles: isRegistered + getPhoneVerifiedData in parallel when
+    // phone is not already in widget props (avoids a second sequential read).
+    final (isRegistered, storedPhone) = await (
+      AuthService.isRegistered(role),
+      widget.phone == null
+          ? AuthService.getPhoneVerifiedData().then((r) => r.$1)
+          : Future.value(widget.phone),
+    ).wait;
+    if (!mounted) return;
+
+    if (isRegistered) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => dashboard));
+      return;
+    }
+
+    final String? phone = widget.phone ?? storedPhone;
+    final profileToken = widget.profileToken;
+
+    if (phone != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => RegistrationFormScreen(
+            role: role,
+            dashboard: dashboard,
+            phone: phone!,
+            profileToken: profileToken,
+          ),
+        ),
+      );
+    } else {
+      // Truly no phone at all (should not happen) — go through full OTP flow
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +178,7 @@ class RoleSelectionScreen extends StatelessWidget {
               height: 260,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.teal.withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
               ),
             ),
           ),
@@ -205,17 +342,13 @@ class RoleSelectionScreen extends StatelessWidget {
     );
   }
 
-  void _navigateToRole(BuildContext context, Widget destination) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => destination));
-  }
-
   Widget _buildHireCard(
     BuildContext context,
     bool isThai,
     RoleSelectionStrings strings,
   ) {
     return GestureDetector(
-      onTap: () => _navigateToRole(context, const HirerDashboardScreen()),
+      onTap: () => _onRoleTap('customer', const HirerDashboardScreen()),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
         child: BackdropFilter(
@@ -325,7 +458,7 @@ class RoleSelectionScreen extends StatelessWidget {
     RoleSelectionStrings strings,
   ) {
     return GestureDetector(
-      onTap: () => _navigateToRole(context, const GuardDashboardScreen()),
+      onTap: () => _onRoleTap('guard', const GuardDashboardScreen()),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
         child: BackdropFilter(
@@ -356,12 +489,12 @@ class RoleSelectionScreen extends StatelessWidget {
                     width: 56,
                     height: 56,
                     decoration: BoxDecoration(
-                      color: AppColors.teal.withValues(alpha: 0.08),
+                      color: AppColors.primary.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: const Icon(
                       Icons.badge_rounded,
-                      color: AppColors.teal,
+                      color: AppColors.primary,
                       size: 30,
                     ),
                   ),

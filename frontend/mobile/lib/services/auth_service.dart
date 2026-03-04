@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -5,6 +6,10 @@ class AuthService {
   static const _keyPrefix = 'registered_';
   static const _keyAccessToken = 'access_token';
   static const _keyRefreshToken = 'refresh_token';
+  static const _keyVerifiedPhone = 'verified_phone';
+  static const _keyPhoneVerifiedToken = 'phone_verified_token';
+  static const _keyPendingApproval = 'pending_approval';
+  static const _keyPendingRole = 'pending_role';
 
   static const _secureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -27,62 +32,6 @@ class AuthService {
     return prefs.getString('phone_$role');
   }
 
-  /// Request OTP from server for phone number verification.
-  ///
-  /// SECURITY WARNING: This is a STUB — does NOT call the backend.
-  /// MUST be replaced with real API call before production deployment.
-  /// See: POST /auth/request-otp
-  // ignore: todo
-  // TODO(CRITICAL-SECURITY): Replace stub with real API call via ApiClient
-  static Future<bool> requestOtp(String phone) async {
-    assert(() {
-      // ignore: avoid_print
-      print('[SECURITY] requestOtp is a STUB — not calling backend!');
-      return true;
-    }());
-
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    // STUB: Replace with actual API call:
-    // final response = await apiClient.dio.post('/auth/request-otp', data: {'phone': phone});
-    // return response.statusCode == 200;
-
-    if (phone.isEmpty) return false;
-    return true;
-  }
-
-  /// Verify OTP code against server.
-  ///
-  /// SECURITY WARNING: This is a STUB — accepts ANY 6-digit OTP without
-  /// server verification. MUST be replaced before production deployment.
-  /// See: POST /auth/verify-otp
-  // ignore: todo
-  // TODO(CRITICAL-SECURITY): Replace stub with real API call via ApiClient
-  static Future<bool> verifyOtp(String phone, String otp) async {
-    assert(() {
-      // ignore: avoid_print
-      print('[SECURITY] verifyOtp is a STUB — accepts any 6-digit OTP!');
-      return true;
-    }());
-
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    // STUB: Replace with actual API call:
-    // final response = await apiClient.dio.post('/auth/verify-otp', data: {
-    //   'phone': phone,
-    //   'otp': otp,
-    // });
-    // if (response.statusCode == 200) {
-    //   await storeTokens(response.data['access_token'], response.data['refresh_token']);
-    //   return true;
-    // }
-    // return false;
-
-    // STUB: accept any 6-digit OTP (no hardcoded value in source)
-    if (otp.length != 6) return false;
-    return true;
-  }
-
   /// Authenticate guard with the backend auth service.
   ///
   /// SECURITY WARNING: This is a STUB — accepts ANY non-empty credentials
@@ -99,17 +48,6 @@ class AuthService {
 
     // Simulate network delay
     await Future.delayed(const Duration(milliseconds: 800));
-
-    // STUB: Replace with actual API call:
-    // final response = await apiClient.dio.post('/auth/login', data: {
-    //   'guard_id': guardId,
-    //   'password': password,
-    // });
-    // if (response.statusCode == 200) {
-    //   await storeTokens(response.data['access_token'], response.data['refresh_token']);
-    //   return true;
-    // }
-    // return false;
 
     // STUB: reject empty credentials, accept any non-empty pair
     if (guardId.isEmpty || password.isEmpty) return false;
@@ -136,5 +74,84 @@ class AuthService {
   static Future<void> clearTokens() async {
     await _secureStorage.delete(key: _keyAccessToken);
     await _secureStorage.delete(key: _keyRefreshToken);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pending approval state (non-sensitive — SharedPreferences is appropriate)
+  // ---------------------------------------------------------------------------
+
+  static Future<bool> isPendingApproval() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyPendingApproval) ?? false;
+  }
+
+  static Future<void> setPendingApproval({String? role}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyPendingApproval, true);
+    if (role != null) {
+      await prefs.setString(_keyPendingRole, role);
+    } else {
+      await prefs.remove(_keyPendingRole);
+    }
+  }
+
+  static Future<String?> getPendingRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyPendingRole);
+  }
+
+  static Future<void> clearPendingApproval() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyPendingApproval);
+    await prefs.remove(_keyPendingRole);
+  }
+
+  /// Store phone + phoneVerifiedToken after OTP verification.
+  /// Used as fallback when RoleSelectionScreen doesn't receive them directly.
+  static Future<void> storePhoneVerifiedData(String phone, String token) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyVerifiedPhone, phone);
+    await _secureStorage.write(key: _keyPhoneVerifiedToken, value: token);
+  }
+
+  /// Retrieve stored phone + phoneVerifiedToken.
+  static Future<(String?, String?)> getPhoneVerifiedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final phone = prefs.getString(_keyVerifiedPhone);
+    final token = await _secureStorage.read(key: _keyPhoneVerifiedToken);
+    return (phone, token);
+  }
+
+  /// Clear stored phone verified data (after registration completes).
+  static Future<void> clearPhoneVerifiedData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyVerifiedPhone);
+    await _secureStorage.delete(key: _keyPhoneVerifiedToken);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pending profile summary (shown on RegistrationPendingScreen)
+  // ---------------------------------------------------------------------------
+
+  static const _keyPendingProfileJson = 'pending_profile_json';
+
+  /// Save submitted guard profile fields locally so they can be displayed
+  /// on [RegistrationPendingScreen] without an authenticated API call.
+  static Future<void> savePendingProfile(Map<String, String?> data) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyPendingProfileJson, jsonEncode(data));
+  }
+
+  /// Retrieve locally saved profile summary. Returns null if not set.
+  static Future<Map<String, dynamic>?> getPendingProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_keyPendingProfileJson);
+    if (raw == null) return null;
+    return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+  }
+
+  static Future<void> clearPendingProfile() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyPendingProfileJson);
   }
 }

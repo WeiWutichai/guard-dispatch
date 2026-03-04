@@ -5,4 +5,6 @@ pub mod db;
 pub mod error;
 pub mod models;
 pub mod openapi;
+pub mod otp;
 pub mod redis_client;
+pub mod sms;

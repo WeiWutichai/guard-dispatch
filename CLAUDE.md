@@ -34,6 +34,7 @@
 - **Async Runtime:** Tokio (latest stable)
 - **ORM/Query:** SQLx (latest) + compile-time checked macros เท่านั้น
 - **Auth:** JWT (jsonwebtoken crate)
+- **OTP:** Phone verification via SMS (INET/Cheese Digital CSGAPI)
 - **Serialization:** Serde + serde_json
 - **API Docs:** utoipa 5 + utoipa-swagger-ui 9 (Swagger UI ที่ `/docs` ของแต่ละ service)
 
@@ -99,12 +100,28 @@ nginx-gateway (port 80/443 — จุดเข้าเดียว)
 
 ```
 PostgreSQL: guard_dispatch_db
-├── schema: auth         (users, sessions, roles)
+├── schema: auth         (users, sessions, roles, otp_codes)
 ├── schema: booking      (requests, assignments, status)
 ├── schema: tracking     (locations, history)
 ├── schema: notification (logs, templates)
 ├── schema: chat         (messages, attachments metadata)
 └── schema: audit        (logs ทุก action)
+```
+
+### OTP Codes Table
+```sql
+CREATE TABLE auth.otp_codes (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone       TEXT NOT NULL,
+  code        VARCHAR(16) NOT NULL,
+  purpose     VARCHAR(20) NOT NULL DEFAULT 'register',
+  is_used     BOOLEAN NOT NULL DEFAULT false,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_otp_codes_phone_purpose ON auth.otp_codes(phone, purpose, is_used);
+CREATE INDEX idx_otp_codes_expires_at ON auth.otp_codes(expires_at);
 ```
 
 ### Chat Attachments Table
@@ -167,8 +184,8 @@ CREATE TABLE chat.attachments (
 - ทุก input validation ต้อง return `AppError::BadRequest` พร้อมข้อความที่ชัดเจน
 
 ### Security
-- ทุก API ต้องมี **JWT validation** ยกเว้น `/auth/login` และ `/auth/register`
-- Rate limiting ที่ Nginx layer (auth: 5r/s, API: 30r/s, WS: 5r/s)
+- ทุก API ต้องมี **JWT validation** ยกเว้น `/auth/login`, `/auth/register`, `/otp/request`, `/otp/verify`
+- Rate limiting ที่ Nginx layer (auth: 5r/s, API: 30r/s, WS: 5r/s, OTP: 3r/m)
 - ทุก request log เก็บใน `audit` schema
 - **JWT Storage:**
   - Web: httpOnly + Secure + SameSite=Lax **cookies** (ห้ามใช้ localStorage เด็ดขาด)
@@ -204,6 +221,21 @@ CREATE TABLE chat.attachments (
   - **entity_type:** derive จาก URL path segment แรก (เช่น `/auth/login` → `"auth"`, `/booking/requests` → `"booking"`) — ห้ามใช้ HTTP status code เป็น entity_type
 - **Password Hashing:** Argon2 ต้อง run ใน `tokio::task::spawn_blocking()` เสมอ — ห้าม block async runtime
 - **Login Error Messages:** ห้ามส่ง error ที่เปิดเผยว่า email มีอยู่ในระบบหรือไม่ — ใช้ message เดียวกันสำหรับ wrong password, inactive account, not found
+- **OTP Security:**
+  - **SMS Gateway:** INET/Cheese Digital CSGAPI (`bulksms.cheesemobile.com/v2/`) — config ผ่าน `SmsConfig::from_env()`
+  - **Shared HTTP Client:** `reqwest::Client` เก็บใน AppState — timeout 10s, connect timeout 5s — ห้ามสร้าง client ใหม่ทุก request
+  - **Rate Limiting:** Atomic `SET NX EX` ใน Redis (per-phone cooldown) — ห้ามใช้ separate EXISTS + SET (TOCTOU race)
+  - **Daily Cap:** Per-phone daily OTP limit ผ่าน Redis `INCR` — ต้องตรวจ `TTL` หลัง INCR แล้ว set EXPIRE ถ้า TTL < 0 (crash-recovery) — ห้ามใช้ `if count == 1` เท่านั้น
+  - **Attempt Counter:** Atomic `UPDATE ... WHERE id = (SELECT ... FOR UPDATE)` ใน PostgreSQL — ห้ามทำ SELECT แล้ว UPDATE แยก
+  - **Constant-Time Comparison:** ใช้ `subtle::ConstantTimeEq` เปรียบเทียบ OTP code — ห้ามใช้ `==` (timing side-channel)
+  - **Phone Verify Token:** JWT พร้อม `jti` (UUID) สำหรับ single-use enforcement — เก็บ jti เป็น "valid" ใน Redis, consume ด้วย `GETDEL` ตอน register
+  - **Phone Verify TTL:** แยกจาก OTP expiry — `PHONE_VERIFY_TTL_MINUTES` (default 10 นาที) ให้เวลากรอก form registration
+  - **OTP Cleanup:** Background task (`tokio::spawn`) ลบ expired OTP codes ทุก 1 ชั่วโมง
+  - **Phone Format:** `otp::validate_thai_phone()` — strip non-digit, ต้อง 10 หลักขึ้นต้นด้วย `0`
+  - **International Format:** `otp::to_international_format()` — แปลง `0812345678` → `66812345678` ก่อนส่ง SMS
+- **Registration (OTP flow):** `POST /register/otp` ต้อง return **HTTP 202 Accepted** โดยไม่มี token — ห้ามออก access_token/refresh_token ให้ user ที่ยังมี `approval_status = pending`
+  - User ต้องรอ Admin อนุมัติก่อนจึงจะ login ได้ (ผ่าน `/auth/login` ปกติ)
+  - `register_with_otp()` service ต้อง INSERT user แล้ว return `RegisterWithOtpResponse` เท่านั้น — ห้าม INSERT session หรือเรียก `encode_jwt_with_key()`
 - **Refresh Token Rotation:** ต้องเป็น **atomic** (single `UPDATE ... WHERE refresh_token = $1 RETURNING ...`) — ห้ามทำ SELECT แล้ว UPDATE แยก
 - **Session Limit:** จำกัด max **5 sessions ต่อ user** — evict oldest sessions เมื่อเกิน
 - **Authorization (IDOR Prevention):**
@@ -283,8 +315,8 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 ├── nginx/
 │   └── nginx.conf              ← Security headers + rate limiting
 ├── services/
-│   ├── shared/                 ← Shared library crate (auth, config, error, models)
-│   ├── auth/                   ← Rust (JWT + cookies + argon2)
+│   ├── shared/                 ← Shared library crate (auth, config, error, models, otp, sms)
+│   ├── auth/                   ← Rust (JWT + cookies + argon2 + OTP/SMS)
 │   ├── booking/                ← Rust
 │   ├── tracking/               ← Rust + WebSocket GPS
 │   ├── notification/           ← Rust + FCM
@@ -332,7 +364,11 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   │   ├── auth_service.dart    ← Token storage + login/OTP
 │       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
 │       │   │   └── language_service.dart
-│       │   ├── screens/                ← 31 screens (guard/customer/common)
+│       │   ├── screens/                ← 31+ screens (guard/customer/common)
+│       │   │   ├── phone_input_screen.dart           ← OTP: กรอกเบอร์โทร
+│       │   │   ├── otp_verification_screen.dart      ← OTP: กรอกรหัส 6 หลัก
+│       │   │   ├── set_password_screen.dart          ← OTP: ตั้งรหัสผ่าน + ข้อมูล
+│       │   │   └── registration_pending_screen.dart  ← รอ Admin อนุมัติ (no tokens)
 │       │   ├── l10n/                   ← Bilingual strings (TH/EN)
 │       │   └── theme/                  ← Colors, styles
 │       └── pubspec.yaml
@@ -390,6 +426,103 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 - **Stats:** `_GuardStats.from()` single-pass counter
 - **Widgets:** Extracted `_GuardMapLayer`, `_MarkerDot`, `_SelectedMarkerCallout` ป้องกัน unnecessary rebuild
 - **Import:** `import 'package:latlong2/latlong.dart' show LatLng;` — ต้อง `show LatLng` เพื่อหลีกเลี่ยง conflict กับ `dart:ui.Path`
+
+### OTP Registration Flow (Phone → OTP → PIN → Role → Guard Profile)
+```
+Flutter Mobile                          Backend (rust-auth)                    External
+─────────────────                       ───────────────────                    ────────
+PhoneInputScreen                        POST /otp/request
+  ├─ validate Thai phone (10 digits)    ├─ validate_thai_phone()
+  ├─ authProvider.requestOtp(phone) ──► ├─ Redis SET NX EX (rate limit)
+  │                                     ├─ Redis INCR + TTL (daily cap)
+  │                                     ├─ Invalidate old OTPs (DB)
+  │                                     ├─ Generate OTP code
+  │                                     ├─ Store in auth.otp_codes
+  │                                     └─ send_sms() ─────────────────────► INET SMS Gateway
+  ▼
+OtpVerificationScreen                   POST /otp/verify
+  ├─ 6-digit input (auto-advance)       ├─ Atomic UPDATE + FOR UPDATE
+  ├─ Auto-trigger on complete           ├─ Check max attempts
+  ├─ authProvider.verifyOtp() ────────► ├─ subtle::ConstantTimeEq compare
+  │                                     ├─ Mark OTP as used
+  │  ◄── phone_verified_token ─────────┤ ├─ Issue JWT (phone + jti)
+  │                                     └─ Store jti="valid" in Redis
+  ▼
+SetPasswordScreen                       POST /register/otp
+  ├─ full_name, email, password         ├─ Decode JWT → (phone, jti)
+  ├─ Form validation                    ├─ Redis GETDEL jti (single-use)
+  ├─ authProvider.registerWithOtp() ──► ├─ Validate inputs
+  │                                     ├─ Argon2 hash (spawn_blocking)
+  │  ◄── 202 + profile_token (guard) ───┤ ├─ INSERT user (approval_status=pending)
+  │       null (non-guard) ─────────────┤ └─ if guard: encode_profile_token() → store jti in Redis EX 15min
+  ▼
+PinSetupScreen
+  ├─ Set PIN (SHA-256 → FlutterSecureStorage)
+  ├─ Optional biometric enroll
+  └─ Navigate → RoleSelectionScreen(phone, profileToken)
+  ▼
+RoleSelectionScreen
+  ├─ guard tap → isPendingApproval() + isRegistered() in parallel (Future.wait)
+  │   ├─ pending + profile exists → RegistrationPendingScreen
+  │   ├─ pending + no profile → GuardRegistrationScreen(profileToken)
+  │   └─ not pending/registered → GuardRegistrationScreen(profileToken)
+  └─ customer tap → RegistrationFormScreen
+  ▼ (guard only)
+GuardRegistrationScreen                 POST /profile/guard
+  ├─ Step 1: personal info              ├─ validate_profile_token() → Redis GETDEL jti (single-use)
+  ├─ Step 2: 5 docs (image_picker)      ├─ validate magic bytes + size check FIRST
+  ├─ Step 3: bank account               ├─ upload docs to MinIO in PARALLEL (JoinSet)
+  ├─ authProvider.submitGuardProfile()  ├─ UPSERT auth.guard_profiles
+  │     Bearer: profileToken ─────────► └─ UPDATE users SET role = 'guard'
+  ▼
+RegistrationPendingScreen
+  └─ "Back to Login" → PhoneInputScreen
+```
+
+> **Design decision:** Registration returns **202 Accepted with no tokens**. The user cannot
+> access any protected endpoint until an admin approves the account. Only after approval
+> can the user log in normally via `/auth/login`.
+>
+> **Guard two-step design:** `register_with_otp()` returns a short-lived `profile_token` (15 min JWT
+> with `jti`) for guard registrations only. Used immediately by `GuardRegistrationScreen` to POST
+> profile data + documents. Profile token is single-use enforced via Redis GETDEL on the jti.
+> Non-guard roles receive `null` profile_token.
+
+**Auth Service OTP Endpoints (3 routes in main.rs):**
+- `POST /otp/request` → `handlers::request_otp` (public, no JWT)
+- `POST /otp/verify` → `handlers::verify_otp` (public, no JWT)
+- `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session created
+- `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth — single-use)
+- `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT)
+
+**Shared Modules:**
+- `shared::otp` — `OtpConfig`, `validate_thai_phone()`, `generate_otp()`, `to_international_format()`, `format_otp_message()`
+- `shared::sms` — `SmsConfig`, `send_sms()` (INET CSGAPI gateway)
+- `shared::auth` — `PhoneVerifyClaims` (JWT with jti), `encode_phone_verify_token()`, `decode_phone_verify_token()`; `ProfileTokenClaims` (JWT with jti), `encode_profile_token()` → `(String, String)` (token, jti), `decode_profile_token()` → `(Uuid, String)` (user_id, jti)
+
+**Auth Service — Guard Profile:**
+- `service::register_with_otp()`: if role=guard, calls `encode_profile_token()` → stores jti in Redis `SET EX 900` (15 min) with key `profile_jti:{jti}`, returns `profile_token`
+- `service::validate_profile_token()`: async, takes redis param — decodes JWT, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
+- `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles` (text fields: `EXCLUDED.field` directly; doc key fields: `COALESCE(EXCLUDED, existing)` to preserve uploaded docs across partial resubmissions)
+- file_key format for guard docs: `profiles/guard/{user_id}/{doc_type}.{ext}`
+
+**Flutter Mobile:**
+- `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`
+  - `AuthStatus` enum: `unknown` | `authenticated` | `unauthenticated` | `pendingApproval`
+  - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
+  - `checkAuthStatus()`: checks `isPendingApproval()` flag first → then access token → else unauthenticated
+  - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
+- `AuthService`: `storeTokens()`, `markRegistered()`, `getPhone()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
+  - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
+  - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only
+- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`; profile/guard uses `Authorization: Bearer {profileToken}` header directly
+- `main.dart` `home`: `Consumer<AuthProvider>` — routes to `RegistrationPendingScreen` when `status == pendingApproval` (handles app-restart while pending)
+- `GuardRegistrationScreen`: uses `image_picker` (real file picking, not simulation); `_documents` map is `Map<String, File?>`; passes `Map<String, File>` to `submitGuardProfile()`
+- `RoleSelectionScreen._onRoleTap()`: guard path runs `isPendingApproval()` + `isRegistered(role)` in parallel via `Future.wait`; non-guard path runs `isRegistered(role)` + `getPhoneVerifiedData()` in parallel via record `.wait`
+
+**Nginx Rate Limit:**
+- `otp_limit` zone: 3 req/min per IP — applied to `location /auth/otp/`
+- `auth_limit` zone: 5 req/s — applied to `location /auth/` (covers `/auth/register/otp`, `/auth/profile/guard`)
 
 ### Sidebar Navigation Order (14 items)
 ```
@@ -510,6 +643,7 @@ aws-sdk-s3      = "1"
 bytes           = "1"
 reqwest         = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 argon2          = "0.5"
+subtle          = "2"
 utoipa           = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 shared          = { path = "services/shared" }
@@ -536,6 +670,13 @@ S3_SECRET_KEY=<secret-key>
 S3_BUCKET=guard-dispatch-files
 CORS_ALLOWED_ORIGINS=http://localhost:3000
 RUST_LOG=info
+
+# OTP / SMS (INET Cheese Digital CSGAPI)
+INET_SMS_USERNAME=<username จาก Cheese Digital>
+INET_SMS_PASSWORD=<password จาก Cheese Digital>
+INET_SMS_SENDER=<sender name ที่ลงทะเบียนกับ INET>
+PHONE_VERIFY_TTL_MINUTES=10
+DAILY_OTP_LIMIT=10
 ```
 
 > **Note:** Redis ทั้งสอง instance ใช้ internal port 6379 (ไม่ใช่ 6380 สำหรับ pubsub อีกแล้ว)
@@ -579,6 +720,18 @@ RUST_LOG=info
 - ❌ ห้ามใช้ `COUNT(*)` สำหรับ boolean existence check — ใช้ `EXISTS(SELECT 1 ...)` แทน
 - ❌ ห้าม FCM config fallback เป็นค่า default (เช่น `"not-set"`) — ต้อง fail-fast ด้วย `AppError`
 - ❌ ห้ามสร้าง service โดยไม่เพิ่ม audit middleware — ทุก service ต้องมี `audit_middleware` layer
+- ❌ ห้ามเปรียบเทียบ OTP ด้วย `==` — ต้องใช้ `subtle::ConstantTimeEq` เพื่อป้องกัน timing side-channel
+- ❌ ห้ามใช้ separate `EXISTS` + `SET` สำหรับ OTP rate limit — ต้องใช้ atomic `SET NX EX` (TOCTOU race)
+- ❌ ห้ามใช้ `if count == 1` เพียงอย่างเดียวสำหรับ daily cap TTL — ต้องตรวจ `TTL` หลัง `INCR` เสมอ (crash-recovery)
+- ❌ ห้ามทำ OTP attempt counter แบบ SELECT → UPDATE แยก — ต้อง atomic `UPDATE ... WHERE id = (SELECT ... FOR UPDATE)`
+- ❌ ห้ามสร้าง `reqwest::Client` ใหม่ทุก SMS request — ต้องใช้ shared client จาก AppState (พร้อม timeout)
+- ❌ ห้าม reuse phone_verified_token — ต้อง enforce single-use ด้วย `jti` + Redis `GETDEL`
+- ❌ ห้าม reuse profile_token — ต้อง enforce single-use ด้วย `jti` + Redis `GETDEL` เหมือน phone_verified_token
+- ❌ ห้ามออก access_token/refresh_token หรือ INSERT session ใน `register_with_otp()` — endpoint ต้อง return HTTP 202 พร้อม `RegisterWithOtpResponse` เท่านั้น (ไม่มี token)
+- ❌ ห้าม upload ไฟล์ไปยัง S3/MinIO แบบ sequential loop — ใช้ `tokio::task::JoinSet` เพื่อ parallel upload เสมอ
+- ❌ ห้าม validate magic bytes ก่อนตรวจ file size — ต้องตรวจ size ก่อนเสมอ (ป้องกัน large allocation ก่อน reject)
+- ❌ ห้าม cast `response.data['field'] as String?` — ใช้ `raw is String ? raw : null` เพื่อป้องกัน crash
+- ❌ ห้ามเรียก `registerWithOtp()` ใน `PinSetupScreen` — `registerWithOtp()` ต้องถูกเรียกใน `SetPasswordScreen` เท่านั้น (มี password ครบก่อน PIN setup)
 
 ### Web Admin (Next.js)
 - ❌ ห้าม hardcode ข้อความภาษาในหน้า — ต้องใช้ `t.xxx` จาก `useLanguage()` เสมอ
@@ -601,5 +754,10 @@ RUST_LOG=info
 - ❌ ห้ามเช็ค auth state แยกในแต่ละ screen — ใช้ `AuthProvider` ผ่าน Provider
 - ❌ ห้าม navigate ตรงหลัง login โดยไม่ validate credentials กับ backend ก่อน
 - ❌ ห้าม expose bank account number ใน UI ที่ไม่จำเป็น — input ต้อง mask, ปิด autocorrect/suggestions
+- ❌ ห้ามเก็บ bank account number เต็มใน SharedPreferences — ต้อง mask (เห็นเฉพาะ 4 หลักสุดท้าย) ก่อน `savePendingProfile()`; full number ส่งไป backend เท่านั้น
+- ❌ ห้าม simulate file picking (`_simulatePickFile`) — ต้องใช้ `image_picker` จริง (`ImagePicker().pickImage()`) สำหรับ document upload
+- ❌ ห้ามเรียก `isPendingApproval()` + `isRegistered()` แบบ sequential ใน `_onRoleTap()` — ต้องใช้ `Future.wait([...])` parallel เสมอ
 - ❌ ห้าม import `latlong2` แบบ full — ต้องใช้ `show LatLng` เพื่อหลีกเลี่ยง conflict กับ `dart:ui.Path`
 - ❌ ห้ามแสดงหน้า map โดยไม่ตรวจ role — ต้อง gate ด้วย `AuthProvider` (admin/customer เท่านั้น)
+- ❌ ห้าม set `AuthStatus.authenticated` หลัง `registerWithOtp()` — ต้อง set `AuthStatus.pendingApproval` เท่านั้น ห้ามเก็บ token ที่ registration
+- ❌ ห้าม navigate ไปหน้า dashboard หรือ PinSetupScreen หลัง registration — ต้องไป `RegistrationPendingScreen` เสมอ

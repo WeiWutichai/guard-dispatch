@@ -155,6 +155,178 @@ class OtpStrings {
 }
 
 // ──────────────────────────────────────────────
+// 5b. RegistrationFormStrings — registration_form_screen
+// ──────────────────────────────────────────────
+class RegistrationFormStrings {
+  final String title;
+  final String subtitle;
+  final String fullNameLabel;
+  final String fullNameHint;
+  final String fullNameRequired;
+  final String emailLabel;
+  final String emailHint;
+  final String guardBadge;
+  final String customerBadge;
+  final String submitButton;
+  final String registering;
+  final String registerSuccess;
+
+  RegistrationFormStrings({required bool isThai})
+    : title = isThai ? 'สมัครสมาชิก' : 'Register',
+      subtitle = isThai
+          ? 'กรอกข้อมูลของคุณเพื่อเริ่มใช้งาน'
+          : 'Fill in your details to get started',
+      fullNameLabel = isThai ? 'ชื่อ-นามสกุล' : 'Full Name',
+      fullNameHint = isThai ? 'กรอกชื่อ-นามสกุล' : 'Enter your full name',
+      fullNameRequired = isThai ? 'กรุณากรอกชื่อ-นามสกุล' : 'Please enter your full name',
+      emailLabel = isThai ? 'อีเมล (ไม่บังคับ)' : 'Email (Optional)',
+      emailHint = isThai ? 'กรอกอีเมล' : 'Enter your email',
+      guardBadge = isThai ? 'สมัครเป็นเจ้าหน้าที่ รปภ.' : 'Register as Guard',
+      customerBadge = isThai ? 'สมัครเป็นผู้เรียกใช้บริการ' : 'Register as Customer',
+      submitButton = isThai ? 'สมัครสมาชิก' : 'Register',
+      registering = isThai ? 'กำลังสมัครสมาชิก...' : 'Registering...',
+      registerSuccess = isThai ? 'สมัครสมาชิกสำเร็จ!' : 'Registration successful!';
+}
+
+// ──────────────────────────────────────────────
+// 5b-old. RegistrationRoleStrings — registration_role_screen
+// ──────────────────────────────────────────────
+class RegistrationRoleStrings {
+  final String title;
+  final String subtitle;
+  final String customerTitle;
+  final String customerDesc;
+  final String customerCta;
+  final String guardTitle;
+  final String guardDesc;
+  final String guardCta;
+  final String registering;
+
+  RegistrationRoleStrings({required bool isThai})
+    : title = isThai ? 'เลือกบทบาทของคุณ' : 'Choose Your Role',
+      subtitle = isThai
+          ? 'คุณต้องการใช้งานในบทบาทใด?'
+          : 'How would you like to use SecureGuard?',
+      customerTitle = isThai ? 'ผู้เรียกใช้บริการ' : 'Hire a Guard',
+      customerDesc = isThai
+          ? 'จ้างเจ้าหน้าที่รักษาความปลอดภัยมืออาชีพ'
+          : 'Hire professional security personnel',
+      customerCta = isThai ? 'สมัครเป็นผู้เรียก' : 'Register as Customer',
+      guardTitle = isThai ? 'เจ้าหน้าที่ รปภ.' : 'Security Guard',
+      guardDesc = isThai
+          ? 'สมัครเป็นเจ้าหน้าที่รักษาความปลอดภัย'
+          : 'Register as a security guard',
+      guardCta = isThai ? 'สมัครเป็น รปภ.' : 'Register as Guard',
+      registering = isThai ? 'กำลังสมัครสมาชิก...' : 'Registering...';
+}
+
+// ──────────────────────────────────────────────
+// 5c. SetPasswordStrings — set_password_screen
+// ──────────────────────────────────────────────
+class SetPasswordStrings {
+  final String title;
+  final String subtitle;
+  final String fullNameLabel;
+  final String fullNameHint;
+  final String emailLabel;
+  final String emailHint;
+  final String passwordLabel;
+  final String passwordHint;
+  final String confirmPasswordLabel;
+  final String confirmPasswordHint;
+  final String passwordRequirement;
+  final String passwordMismatch;
+  final String createAccount;
+  final String registering;
+  final String registerSuccess;
+
+  SetPasswordStrings({required bool isThai})
+    : title = isThai ? 'ตั้งรหัสผ่าน' : 'Set Password',
+      subtitle = isThai
+          ? 'กรอกข้อมูลเพื่อสร้างบัญชีของคุณ'
+          : 'Fill in your details to create your account',
+      fullNameLabel = isThai ? 'ชื่อ-นามสกุล' : 'Full Name',
+      fullNameHint = isThai ? 'กรอกชื่อ-นามสกุล' : 'Enter your full name',
+      emailLabel = isThai ? 'อีเมล' : 'Email',
+      emailHint = isThai ? 'กรอกอีเมล' : 'Enter your email',
+      passwordLabel = isThai ? 'รหัสผ่าน' : 'Password',
+      passwordHint = isThai ? 'กรอกรหัสผ่าน' : 'Enter password',
+      confirmPasswordLabel = isThai ? 'ยืนยันรหัสผ่าน' : 'Confirm Password',
+      confirmPasswordHint = isThai ? 'กรอกรหัสผ่านอีกครั้ง' : 'Enter password again',
+      passwordRequirement = isThai
+          ? 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร'
+          : 'Password must be at least 8 characters',
+      passwordMismatch = isThai
+          ? 'รหัสผ่านไม่ตรงกัน'
+          : 'Passwords do not match',
+      createAccount = isThai ? 'สร้างบัญชี' : 'Create Account',
+      registering = isThai ? 'กำลังสร้างบัญชี...' : 'Creating account...',
+      registerSuccess = isThai
+          ? 'สร้างบัญชีสำเร็จ!'
+          : 'Account created successfully!';
+}
+
+// ──────────────────────────────────────────────
+// 5d. RegistrationPendingStrings — registration_pending_screen
+// ──────────────────────────────────────────────
+class RegistrationPendingStrings {
+  final String title;
+  final String subtitle;
+  final String detail;
+  final String backToLogin;
+  final String appDataTitle;
+  final String fieldName;
+  final String fieldGender;
+  final String fieldExperience;
+  final String fieldWorkplace;
+  final String fieldBank;
+  final String fieldAccountNumber;
+  final String fieldAccountName;
+  final String years;
+  final String notSpecified;
+  final String documentsTitle;
+  final String docIdCard;
+  final String docSecurityLicense;
+  final String docTrainingCert;
+  final String docCriminalCheck;
+  final String docDriverLicense;
+  final String docPassbook;
+  final String docAttached;
+  final String docNotAttached;
+  final String bankTitle;
+
+  RegistrationPendingStrings({required bool isThai})
+    : title = isThai ? 'รอการอนุมัติ' : 'Awaiting Approval',
+      subtitle = isThai
+          ? 'บัญชีของคุณอยู่ระหว่างการตรวจสอบ'
+          : 'Your account is under review',
+      detail = isThai
+          ? 'ทีมงานกำลังตรวจสอบข้อมูลของคุณ\nคุณจะได้รับการแจ้งเตือนเมื่อบัญชีได้รับการอนุมัติ'
+          : 'Our team is reviewing your information.\nYou will be notified once your account is approved.',
+      backToLogin = isThai ? 'กลับสู่หน้าหลัก' : 'Back to Home',
+      appDataTitle = isThai ? 'ข้อมูลส่วนตัว' : 'Personal Info',
+      fieldName = isThai ? 'ชื่อ-นามสกุล' : 'Full Name',
+      fieldGender = isThai ? 'เพศ' : 'Gender',
+      fieldExperience = isThai ? 'ประสบการณ์' : 'Experience',
+      fieldWorkplace = isThai ? 'ที่ทำงานเดิม' : 'Previous Workplace',
+      fieldBank = isThai ? 'ธนาคาร' : 'Bank',
+      fieldAccountNumber = isThai ? 'เลขบัญชี' : 'Account No.',
+      fieldAccountName = isThai ? 'ชื่อบัญชี' : 'Account Name',
+      years = isThai ? 'ปี' : 'yr',
+      notSpecified = isThai ? 'ไม่ได้ระบุ' : 'Not specified',
+      documentsTitle = isThai ? 'เอกสารแนบ' : 'Documents',
+      docIdCard = isThai ? 'บัตรประชาชน' : 'ID Card',
+      docSecurityLicense = isThai ? 'ใบอนุญาต รปภ.' : 'Security License',
+      docTrainingCert = isThai ? 'ใบรับรองการฝึก' : 'Training Cert',
+      docCriminalCheck = isThai ? 'ใบตรวจอาชญากรรม' : 'Criminal Check',
+      docDriverLicense = isThai ? 'ใบขับขี่' : 'Driver License',
+      docPassbook = isThai ? 'สมุดบัญชี' : 'Passbook',
+      docAttached = isThai ? 'แนบแล้ว' : 'Attached',
+      docNotAttached = isThai ? 'ยังไม่แนบ' : 'Not attached',
+      bankTitle = isThai ? 'ข้อมูลธนาคาร' : 'Bank Account';
+}
+
+// ──────────────────────────────────────────────
 // 6. CustomerLoginStrings — customer_login_screen
 // ──────────────────────────────────────────────
 class CustomerLoginStrings {
@@ -390,6 +562,7 @@ class GuardRegistrationStrings {
   final String accountNumberHint;
   final String accountName;
   final String accountNameHint;
+  final String accountNameMustMatch;
   final String passbookPhoto;
 
   // Step 4 - Review / Submitted
@@ -473,6 +646,9 @@ class GuardRegistrationStrings {
       accountNumberHint = isThai ? 'กรอกเลขบัญชี' : 'Enter account number',
       accountName = isThai ? 'ชื่อบัญชี *' : 'Account Name *',
       accountNameHint = isThai ? 'กรอกชื่อบัญชี' : 'Enter account name',
+      accountNameMustMatch = isThai
+          ? 'ชื่อบัญชีต้องตรงกับชื่อ-นามสกุลที่กรอกในขั้นตอนแรก'
+          : 'Account name must match the full name entered in step 1',
       passbookPhoto = isThai ? 'รูปสมุดบัญชีธนาคาร *' : 'Bank Passbook Photo *',
 
       // Step 4 - Review / Submitted

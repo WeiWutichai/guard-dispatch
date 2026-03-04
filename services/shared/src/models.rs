@@ -33,6 +33,38 @@ impl std::str::FromStr for UserRole {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "approval_status", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum ApprovalStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+impl std::fmt::Display for ApprovalStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApprovalStatus::Pending => write!(f, "pending"),
+            ApprovalStatus::Approved => write!(f, "approved"),
+            ApprovalStatus::Rejected => write!(f, "rejected"),
+        }
+    }
+}
+
+impl std::str::FromStr for ApprovalStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "pending" => Ok(ApprovalStatus::Pending),
+            "approved" => Ok(ApprovalStatus::Approved),
+            "rejected" => Ok(ApprovalStatus::Rejected),
+            other => Err(format!("Unknown approval status: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub success: bool,

@@ -5,7 +5,7 @@ import '../theme/colors.dart';
 import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
-import 'phone_input_screen.dart';
+import 'role_selection_screen.dart';
 
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
@@ -14,8 +14,19 @@ enum _PinSetupStep { create, confirm, biometricOpt }
 
 class PinSetupScreen extends StatefulWidget {
   final PinStorageService pinService;
+  /// If set, PIN setup is part of the registration flow.
+  /// After PIN + biometric → go to RoleSelectionScreen.
+  final String? phone;
+  /// Short-lived profile_token returned by SetPasswordScreen → registerWithOtp().
+  /// Passed through to RoleSelectionScreen → GuardRegistrationScreen.
+  final String? profileToken;
 
-  const PinSetupScreen({super.key, required this.pinService});
+  const PinSetupScreen({
+    super.key,
+    required this.pinService,
+    this.phone,
+    this.profileToken,
+  });
 
   @override
   State<PinSetupScreen> createState() => _PinSetupScreenState();
@@ -76,12 +87,20 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
   Future<void> _finishSetup({required bool enableBiometric}) async {
     await widget.pinService.savePin(_firstPin);
     await widget.pinService.setBiometricEnabled(enableBiometric);
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const PhoneInputScreen()),
-      );
-    }
+    if (!mounted) return;
+
+    // registerWithOtp() was already called in SetPasswordScreen.
+    // profileToken was returned from there and passed through here.
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RoleSelectionScreen(
+          phone: widget.phone,
+          profileToken: widget.profileToken,
+        ),
+      ),
+      (route) => false,
+    );
   }
 
   @override
@@ -114,7 +133,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               height: 260,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.teal.withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
               ),
             ),
           ),
@@ -319,64 +338,64 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
           const Spacer(),
           // Buttons
           Row(
-            children: [
-              // Skip
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => _finishSetup(enableBiometric: false),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: AppColors.border, width: 1.5),
-                    ),
-                    child: Center(
-                      child: Text(
-                        strings.skip,
-                        style: GoogleFonts.inter(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
+              children: [
+                // Skip
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => _finishSetup(enableBiometric: false),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppColors.border, width: 1.5),
+                      ),
+                      child: Center(
+                        child: Text(
+                          strings.skip,
+                          style: GoogleFonts.inter(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary,
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 14),
-              // Enable
-              Expanded(
-                flex: 2,
-                child: GestureDetector(
-                  onTap: () => _finishSetup(enableBiometric: true),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.3),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Center(
-                      child: Text(
-                        strings.enable,
-                        style: GoogleFonts.inter(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                const SizedBox(width: 14),
+                // Enable
+                Expanded(
+                  flex: 2,
+                  child: GestureDetector(
+                    onTap: () => _finishSetup(enableBiometric: true),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(alpha: 0.3),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Center(
+                        child: Text(
+                          strings.enable,
+                          style: GoogleFonts.inter(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
           const SizedBox(height: 32),
         ],
       ),

@@ -1,0 +1,358 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../theme/colors.dart';
+import '../services/language_service.dart';
+import '../services/auth_service.dart';
+import '../l10n/app_strings.dart';
+import 'role_selection_screen.dart';
+
+class RegistrationPendingScreen extends StatefulWidget {
+  const RegistrationPendingScreen({super.key});
+
+  @override
+  State<RegistrationPendingScreen> createState() =>
+      _RegistrationPendingScreenState();
+}
+
+class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
+  Map<String, dynamic>? _profile;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    final data = await AuthService.getPendingProfile();
+    if (mounted && data != null) {
+      setState(() => _profile = data);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isThai = LanguageProvider.of(context).isThai;
+    final strings = RegistrationPendingStrings(isThai: isThai);
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Stack(
+        children: [
+          Positioned(
+            top: -100,
+            right: -80,
+            child: Container(
+              width: 240,
+              height: 240,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.primary.withValues(alpha: 0.06),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -80,
+            left: -60,
+            child: Container(
+              width: 200,
+              height: 200,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.primary.withValues(alpha: 0.05),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Column(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 32),
+                          // Hourglass icon
+                          Container(
+                            width: 88,
+                            height: 88,
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.hourglass_top_rounded,
+                              size: 44,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                          const SizedBox(height: 28),
+                          Text(
+                            strings.title,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.inter(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            strings.subtitle,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.inter(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          // Detail card
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 18,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.surface,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: AppColors.primary.withValues(alpha: 0.15),
+                              ),
+                            ),
+                            child: Text(
+                              strings.detail,
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                height: 1.6,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ),
+                          // Profile data cards (shown after guard form submission)
+                          if (_profile != null) ...[
+                            const SizedBox(height: 14),
+                            _buildProfileCard(strings),
+                          ],
+                          const SizedBox(height: 24),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Back to home button (does NOT logout — pending state preserved)
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const RoleSelectionScreen(),
+                        ),
+                        (route) => false,
+                      );
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(alpha: 0.3),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        strings.backToLogin,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileCard(RegistrationPendingStrings strings) {
+    final p = _profile!;
+    String? s(String key) {
+      final v = p[key] as String?;
+      return (v != null && v.isNotEmpty) ? v : null;
+    }
+
+    return Column(
+      children: [
+        // ── Personal info ──
+        _buildSection(strings.appDataTitle, Icons.person_outline_rounded, [
+          if (s('full_name') != null)
+            _ProfileRow(Icons.badge_outlined, strings.fieldName, s('full_name')!),
+          if (s('gender') != null)
+            _ProfileRow(Icons.wc_rounded, strings.fieldGender, s('gender')!),
+          if (s('years_of_experience') != null)
+            _ProfileRow(Icons.work_outline_rounded, strings.fieldExperience,
+                '${s('years_of_experience')} ${strings.years}'),
+          if (s('previous_workplace') != null)
+            _ProfileRow(Icons.business_outlined, strings.fieldWorkplace, s('previous_workplace')!),
+        ]),
+        const SizedBox(height: 10),
+        // ── Documents ──
+        _buildDocSection(strings, p),
+        const SizedBox(height: 10),
+        // ── Bank account ──
+        _buildSection(strings.bankTitle, Icons.account_balance_outlined, [
+          if (s('bank_name') != null)
+            _ProfileRow(Icons.account_balance_outlined, strings.fieldBank, s('bank_name')!),
+          if (s('account_number') != null)
+            _ProfileRow(Icons.credit_card_outlined, strings.fieldAccountNumber,
+                _maskAccount(s('account_number')!)),
+          if (s('account_name') != null)
+            _ProfileRow(Icons.person_outline_rounded, strings.fieldAccountName, s('account_name')!),
+        ]),
+      ],
+    );
+  }
+
+  String _maskAccount(String acc) {
+    if (acc.length <= 4) return acc;
+    return '${'*' * (acc.length - 4)}${acc.substring(acc.length - 4)}';
+  }
+
+  Widget _buildSection(String title, IconData icon, List<_ProfileRow> rows) {
+    if (rows.isEmpty) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(icon, title),
+          const SizedBox(height: 10),
+          ...rows.map((row) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Icon(row.icon, size: 15, color: AppColors.textSecondary),
+                const SizedBox(width: 8),
+                Text('${row.label}: ',
+                    style: GoogleFonts.inter(fontSize: 13, color: AppColors.textSecondary)),
+                Expanded(
+                  child: Text(row.value,
+                      style: GoogleFonts.inter(
+                          fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                      overflow: TextOverflow.ellipsis),
+                ),
+              ],
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDocSection(RegistrationPendingStrings strings, Map<String, dynamic> p) {
+    final docs = [
+      _DocRow(strings.docIdCard, p['doc_id_card'] as String?),
+      _DocRow(strings.docSecurityLicense, p['doc_security_license'] as String?),
+      _DocRow(strings.docTrainingCert, p['doc_training_cert'] as String?),
+      _DocRow(strings.docCriminalCheck, p['doc_criminal_check'] as String?),
+      _DocRow(strings.docDriverLicense, p['doc_driver_license'] as String?),
+      _DocRow(strings.docPassbook, p['doc_passbook'] as String?),
+    ];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(Icons.folder_outlined, strings.documentsTitle),
+          const SizedBox(height: 10),
+          ...docs.map((doc) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Icon(
+                  doc.filename != null
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  size: 15,
+                  color: doc.filename != null ? AppColors.primary : AppColors.border,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(doc.label,
+                      style: GoogleFonts.inter(fontSize: 13, color: AppColors.textSecondary)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: doc.filename != null
+                        ? AppColors.primary.withValues(alpha: 0.1)
+                        : AppColors.border.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    doc.filename != null ? strings.docAttached : strings.docNotAttached,
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: doc.filename != null ? AppColors.primary : AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionHeader(IconData icon, String title) => Row(
+    children: [
+      Icon(icon, size: 15, color: AppColors.primary),
+      const SizedBox(width: 6),
+      Text(title,
+          style: GoogleFonts.inter(
+              fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.primary)),
+    ],
+  );
+}
+
+class _ProfileRow {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _ProfileRow(this.icon, this.label, this.value);
+}
+
+class _DocRow {
+  final String label;
+  final String? filename;
+  const _DocRow(this.label, this.filename);
+}

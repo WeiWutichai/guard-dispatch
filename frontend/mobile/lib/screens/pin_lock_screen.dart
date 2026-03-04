@@ -4,7 +4,7 @@ import '../theme/colors.dart';
 import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
-import 'phone_input_screen.dart';
+import 'role_selection_screen.dart';
 
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
@@ -87,9 +87,10 @@ class _PinLockScreenState extends State<PinLockScreen> {
   }
 
   void _navigateToApp() {
-    Navigator.pushReplacement(
+    Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (context) => const PhoneInputScreen()),
+      MaterialPageRoute(builder: (context) => const RoleSelectionScreen()),
+      (route) => false,
     );
   }
 
@@ -123,7 +124,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
               height: 260,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.teal.withValues(alpha: 0.05),
+                color: AppColors.primary.withValues(alpha: 0.05),
               ),
             ),
           ),

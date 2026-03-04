@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../services/auth_service.dart';
 import '../services/api_client.dart';
@@ -12,6 +15,10 @@ enum AuthStatus {
 
   /// User is not authenticated.
   unauthenticated,
+
+  /// User has registered but is waiting for admin approval.
+  /// No tokens are stored — login is blocked until approved.
+  pendingApproval,
 }
 
 /// Centralized authentication state using ChangeNotifier (Provider pattern).
@@ -19,6 +26,7 @@ enum AuthStatus {
 /// Provides:
 /// - Current auth status
 /// - Login / logout actions
+/// - OTP request, verify, and register flows
 /// - Current user role
 /// - Access to the shared ApiClient (with JWT interceptor)
 ///
@@ -35,9 +43,18 @@ class AuthProvider extends ChangeNotifier {
   String? get role => _role;
   ApiClient get apiClient => _apiClient;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
+  bool get isPendingApproval => _status == AuthStatus.pendingApproval;
 
-  /// Check if user has a stored access token on app startup.
+  /// Check persisted auth state on app startup.
+  ///
+  /// Priority: pendingApproval flag > stored access token > unauthenticated.
   Future<void> checkAuthStatus() async {
+    if (await AuthService.isPendingApproval()) {
+      _status = AuthStatus.pendingApproval;
+      _role = await AuthService.getPendingRole();
+      notifyListeners();
+      return;
+    }
     final token = await AuthService.getAccessToken();
     if (token != null) {
       _status = AuthStatus.authenticated;
@@ -60,21 +77,121 @@ class AuthProvider extends ChangeNotifier {
     return success;
   }
 
-  /// Verify OTP and authenticate.
+  /// Request OTP from the backend for phone verification.
   ///
-  /// TODO: When backend is ready, tokens are stored by AuthService.verifyOtp.
-  Future<bool> verifyOtp(String phone, String otp) async {
-    final success = await AuthService.verifyOtp(phone, otp);
-    if (success) {
-      _status = AuthStatus.authenticated;
-      notifyListeners();
-    }
-    return success;
+  /// Calls POST /auth/otp/request with the phone number.
+  /// Throws [DioException] on network error or server-side rate limiting.
+  Future<void> requestOtp(String phone) async {
+    await _apiClient.dio.post('/auth/otp/request', data: {'phone': phone});
   }
 
-  /// Logout — clear tokens and reset state.
+  /// Verify OTP code against the backend.
+  ///
+  /// Calls POST /auth/otp/verify and returns a temporary `phone_verified_token`
+  /// that must be used in the registration step.
+  /// Throws [DioException] on invalid OTP or network error.
+  Future<String> verifyOtp(String phone, String code) async {
+    final response = await _apiClient.dio.post('/auth/otp/verify', data: {
+      'phone': phone,
+      'code': code,
+    });
+    return response.data['data']['phone_verified_token'] as String;
+  }
+
+  /// Register a new account using a verified phone token.
+  ///
+  /// Calls POST /auth/register/otp. On success (HTTP 202) the account is
+  /// created with `pending` approval status — no tokens are issued. The user
+  /// must wait for admin approval before they can log in.
+  ///
+  /// Returns a `profile_token` for guard registrations (non-null) that must be
+  /// used immediately to submit guard profile data via [submitGuardProfile].
+  /// Returns null for non-guard registrations.
+  ///
+  /// [role] is optional. When null the account is created without a role
+  /// ("ยังไม่ได้ระบุ" in admin UI) until the user selects one during onboarding.
+  Future<String?> registerWithOtp({
+    required String phoneVerifiedToken,
+    String? password,
+    String? fullName,
+    String? email,
+    String? role,
+  }) async {
+    final data = <String, dynamic>{
+      'phone_verified_token': phoneVerifiedToken,
+    };
+    if (role != null) data['role'] = role;
+    if (password != null) data['password'] = password;
+    if (fullName != null) data['full_name'] = fullName;
+    if (email != null) data['email'] = email;
+
+    final response = await _apiClient.dio.post('/auth/register/otp', data: data);
+
+    // Persist pending state so the correct screen shows on app restart.
+    await AuthService.setPendingApproval(role: role);
+    _status = AuthStatus.pendingApproval;
+    _role = role;
+    notifyListeners();
+
+    // Return the profile_token for guard registrations (null for other roles).
+    final raw = response.data['data']?['profile_token'];
+    return raw is String ? raw : null;
+  }
+
+  /// Submit guard profile data after registration.
+  ///
+  /// Calls POST /auth/profile/guard with multipart form data.
+  /// Requires the [profileToken] returned by [registerWithOtp] for guard role.
+  /// [files] maps document field name to the picked image file:
+  ///   "id_card", "security_license", "training_cert", "criminal_check",
+  ///   "driver_license", "passbook_photo"
+  Future<void> submitGuardProfile({
+    required String profileToken,
+    String? fullName,
+    String? gender,
+    String? dateOfBirth,
+    int? yearsOfExperience,
+    String? previousWorkplace,
+    String? bankName,
+    String? accountNumber,
+    String? accountName,
+    Map<String, File> files = const {},
+  }) async {
+    final formData = FormData();
+
+    if (fullName != null) formData.fields.add(MapEntry('full_name', fullName));
+    if (gender != null) formData.fields.add(MapEntry('gender', gender));
+    if (dateOfBirth != null) formData.fields.add(MapEntry('date_of_birth', dateOfBirth));
+    if (yearsOfExperience != null) {
+      formData.fields.add(MapEntry('years_of_experience', yearsOfExperience.toString()));
+    }
+    if (previousWorkplace != null) {
+      formData.fields.add(MapEntry('previous_workplace', previousWorkplace));
+    }
+    if (bankName != null) formData.fields.add(MapEntry('bank_name', bankName));
+    if (accountNumber != null) formData.fields.add(MapEntry('account_number', accountNumber));
+    if (accountName != null) formData.fields.add(MapEntry('account_name', accountName));
+
+    for (final entry in files.entries) {
+      formData.files.add(MapEntry(
+        entry.key,
+        await MultipartFile.fromFile(entry.value.path),
+      ));
+    }
+
+    await _apiClient.dio.post(
+      '/auth/profile/guard',
+      data: formData,
+      options: Options(headers: {'Authorization': 'Bearer $profileToken'}),
+    );
+  }
+
+  /// Logout — clear tokens, pending state, and reset auth status.
   Future<void> logout() async {
-    await AuthService.clearTokens();
+    await Future.wait([
+      AuthService.clearTokens(),
+      AuthService.clearPendingApproval(),
+    ]);
     _status = AuthStatus.unauthenticated;
     _role = null;
     notifyListeners();
