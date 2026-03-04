@@ -154,4 +154,24 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyPendingProfileJson);
   }
+
+  /// Clear all registration-related state so the user can start over.
+  /// Called from RegistrationPendingScreen "สมัครใหม่" action.
+  static Future<void> clearAllRegistrationData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      // Pending approval + role
+      prefs.remove(_keyPendingApproval),
+      prefs.remove(_keyPendingRole),
+      // Locally saved profile summary
+      prefs.remove(_keyPendingProfileJson),
+      // Phone verified data (SharedPreferences part)
+      prefs.remove(_keyVerifiedPhone),
+      // Phone verified token (secure storage)
+      _secureStorage.delete(key: _keyPhoneVerifiedToken),
+      // Access / refresh tokens (likely null in pending state, clear anyway)
+      _secureStorage.delete(key: _keyAccessToken),
+      _secureStorage.delete(key: _keyRefreshToken),
+    ]);
+  }
 }

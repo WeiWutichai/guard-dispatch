@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ใช้เพื่ออัปโหลดเอกสารและรูปถ่ายในการสมัครงาน</string>
+	<key>NSCameraUsageDescription</key>
+	<string>ใช้เพื่อถ่ายรูปเอกสารในการสมัครงาน</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>ใช้เพื่อบันทึกรูปถ่ายเอกสาร</string>
 </dict>
 </plist>

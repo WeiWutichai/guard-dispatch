@@ -94,22 +94,26 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     return '•••• ${acc.substring(acc.length - 4)}';
   }
 
-  Future<void> _pickFile(String key) async {
-    final xFile = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
-      maxWidth: 1920,
-      maxHeight: 1920,
-    );
-    if (xFile == null) return;
-    final file = File(xFile.path);
-    setState(() {
-      if (_documents.containsKey(key)) {
-        _documents[key] = file;
-      } else if (key == 'passbook') {
-        _passbookFile = file;
-      }
-    });
+  Future<void> _pickFile(String key, ImageSource source) async {
+    try {
+      final xFile = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
+      if (xFile == null) return;
+      final file = File(xFile.path);
+      setState(() {
+        if (_documents.containsKey(key)) {
+          _documents[key] = file;
+        } else if (key == 'passbook') {
+          _passbookFile = file;
+        }
+      });
+    } catch (_) {
+      // User denied permission or camera unavailable — ignore silently.
+    }
   }
 
   Future<void> _onSubmit() async {
@@ -571,6 +575,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
                 fileName: _documents[item.$1]?.path.split('/').last,
                 uploadLabel: s.uploadFile,
                 notAttachedLabel: s.notAttached,
+                previewFile: _documents[item.$1],
               )),
         ],
       ),
@@ -641,6 +646,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
             fileName: _passbookFile?.path.split('/').last,
             uploadLabel: s.uploadFile,
             notAttachedLabel: s.notAttached,
+            previewFile: _passbookFile,
           ),
         ],
       ),
@@ -989,6 +995,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     required String? fileName,
     required String uploadLabel,
     required String notAttachedLabel,
+    File? previewFile,
   }) {
     final isAttached = fileName != null;
 
@@ -1057,12 +1064,27 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
                     size: 20, color: AppColors.primary),
             ],
           ),
+          // Thumbnail preview of the picked image.
+          if (previewFile != null) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.file(
+                previewFile,
+                height: 140,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Row(
             children: [
+              // Gallery picker
               Expanded(
                 child: GestureDetector(
-                  onTap: () => _pickFile(key),
+                  onTap: () => _pickFile(key, ImageSource.gallery),
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     decoration: BoxDecoration(
@@ -1089,8 +1111,9 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
                 ),
               ),
               const SizedBox(width: 8),
+              // Camera picker
               GestureDetector(
-                onTap: () => _pickFile(key),
+                onTap: () => _pickFile(key, ImageSource.camera),
                 child: Container(
                   width: 40,
                   height: 40,

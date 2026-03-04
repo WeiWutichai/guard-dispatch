@@ -196,4 +196,13 @@ class AuthProvider extends ChangeNotifier {
     _role = null;
     notifyListeners();
   }
+
+  /// Clear all registration data so the user can re-apply from scratch.
+  /// Does NOT call a backend endpoint — only wipes local state.
+  Future<void> restartRegistration() async {
+    await AuthService.clearAllRegistrationData();
+    _status = AuthStatus.unauthenticated;
+    _role = null;
+    notifyListeners();
+  }
 }

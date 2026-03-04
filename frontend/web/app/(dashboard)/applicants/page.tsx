@@ -77,6 +77,9 @@ export default function ApplicantsPage() {
   const [guardProfile, setGuardProfile] = useState<GuardProfile | null>(null);
   const [isGuardProfileLoading, setIsGuardProfileLoading] = useState(false);
 
+  // Document preview lightbox
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
   // Fetch applicants from API
   const fetchApplicants = useCallback(async () => {
     setIsLoading(true);
@@ -128,6 +131,7 @@ export default function ApplicantsPage() {
     setIsApplicantModalOpen(false);
     setSelectedApplicant(null);
     setGuardProfile(null);
+    setPreviewUrl(null);
   };
 
   const handleApprove = async (userId: string) => {
@@ -665,15 +669,13 @@ export default function ApplicantsPage() {
                               <div key={field} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
                                 <span className="text-sm text-slate-700">{label}</span>
                                 {url ? (
-                                  <a
-                                    href={url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700"
+                                  <button
+                                    onClick={() => setPreviewUrl(url)}
+                                    className="flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 transition-colors"
                                   >
-                                    <ExternalLink className="h-3.5 w-3.5" />
+                                    <Eye className="h-3.5 w-3.5" />
                                     {t.applicants.modal.guardProfile.viewDocument}
-                                  </a>
+                                  </button>
                                 ) : (
                                   <span className="text-xs text-slate-400">{t.applicants.modal.guardProfile.notUploaded}</span>
                                 )}
@@ -789,6 +791,45 @@ export default function ApplicantsPage() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Document preview lightbox — z-[60] sits above the applicant modal (z-50) */}
+      {previewUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-150"
+          onClick={() => setPreviewUrl(null)}
+        >
+          <div
+            className="relative max-w-4xl w-full flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Controls */}
+            <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+              <a
+                href={previewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-lg p-2 transition-colors"
+                title="Open in new tab"
+              >
+                <ExternalLink className="h-4 w-4 text-white" />
+              </a>
+              <button
+                onClick={() => setPreviewUrl(null)}
+                className="bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-lg p-2 transition-colors"
+              >
+                <X className="h-4 w-4 text-white" />
+              </button>
+            </div>
+            {/* Image */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={previewUrl}
+              alt="Document preview"
+              className="max-w-full max-h-[85vh] rounded-xl object-contain shadow-2xl"
+            />
           </div>
         </div>
       )}

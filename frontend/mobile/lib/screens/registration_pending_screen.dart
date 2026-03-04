@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../services/language_service.dart';
 import '../services/auth_service.dart';
+import '../providers/auth_provider.dart';
 import '../l10n/app_strings.dart';
+import 'phone_input_screen.dart';
 import 'role_selection_screen.dart';
 
 class RegistrationPendingScreen extends StatefulWidget {
@@ -21,6 +24,39 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
   void initState() {
     super.initState();
     _loadProfile();
+  }
+
+  Future<void> _confirmRestart(RegistrationPendingStrings strings) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(strings.restartDialogTitle,
+            style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 17)),
+        content: Text(strings.restartDialogMessage,
+            style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary, height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(strings.restartDialogCancel,
+                style: GoogleFonts.inter(color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(strings.restartDialogConfirm,
+                style: GoogleFonts.inter(color: AppColors.danger, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await context.read<AuthProvider>().restartRegistration();
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+      (route) => false,
+    );
   }
 
   Future<void> _loadProfile() async {
@@ -175,6 +211,29 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Re-apply button — clears all local registration data
+                  GestureDetector(
+                    onTap: () => _confirmRestart(strings),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      decoration: BoxDecoration(
+                        color: Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.border, width: 1.5),
+                      ),
+                      child: Text(
+                        strings.restartButton,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
                         ),
                       ),
                     ),

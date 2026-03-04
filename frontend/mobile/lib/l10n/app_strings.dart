@@ -294,6 +294,11 @@ class RegistrationPendingStrings {
   final String docAttached;
   final String docNotAttached;
   final String bankTitle;
+  final String restartButton;
+  final String restartDialogTitle;
+  final String restartDialogMessage;
+  final String restartDialogConfirm;
+  final String restartDialogCancel;
 
   RegistrationPendingStrings({required bool isThai})
     : title = isThai ? 'รอการอนุมัติ' : 'Awaiting Approval',
@@ -323,7 +328,14 @@ class RegistrationPendingStrings {
       docPassbook = isThai ? 'สมุดบัญชี' : 'Passbook',
       docAttached = isThai ? 'แนบแล้ว' : 'Attached',
       docNotAttached = isThai ? 'ยังไม่แนบ' : 'Not attached',
-      bankTitle = isThai ? 'ข้อมูลธนาคาร' : 'Bank Account';
+      bankTitle = isThai ? 'ข้อมูลธนาคาร' : 'Bank Account',
+      restartButton = isThai ? 'สมัครใหม่' : 'Re-apply',
+      restartDialogTitle = isThai ? 'ยืนยันการสมัครใหม่' : 'Confirm Re-apply',
+      restartDialogMessage = isThai
+          ? 'ข้อมูลการสมัครทั้งหมดจะถูกลบและคุณต้องกรอกข้อมูลใหม่ทั้งหมด ต้องการดำเนินการต่อหรือไม่?'
+          : 'All registration data will be cleared and you will need to fill in everything again. Continue?',
+      restartDialogConfirm = isThai ? 'ใช่ สมัครใหม่' : 'Yes, Re-apply',
+      restartDialogCancel = isThai ? 'ยกเลิก' : 'Cancel';
 }
 
 // ──────────────────────────────────────────────
