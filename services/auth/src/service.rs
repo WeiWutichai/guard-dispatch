@@ -1049,6 +1049,8 @@ pub async fn get_guard_profile(
     db: &PgPool,
     s3_client: &aws_sdk_s3::Client,
     bucket: &str,
+    s3_endpoint: &str,
+    s3_public_url: &str,
     user_id: Uuid,
 ) -> Result<GuardProfileResponse, AppError> {
     let row = sqlx::query_as::<_, GuardProfileRow>(
@@ -1083,21 +1085,33 @@ pub async fn get_guard_profile(
         signed(s3_client, bucket, &row.passbook_photo_key),
     );
 
+    // Replace internal MinIO host with the public URL so browsers can load images.
+    // When s3_endpoint == s3_public_url (no env override) this is a no-op.
+    let rewrite = |url: Option<String>| -> Option<String> {
+        url.map(|u| {
+            if s3_endpoint != s3_public_url {
+                u.replacen(s3_endpoint, s3_public_url, 1)
+            } else {
+                u
+            }
+        })
+    };
+
     Ok(GuardProfileResponse {
         user_id: row.user_id,
         gender: row.gender,
         date_of_birth: row.date_of_birth.map(|d| d.format("%Y-%m-%d").to_string()),
         years_of_experience: row.years_of_experience,
         previous_workplace: row.previous_workplace,
-        id_card_url,
-        security_license_url,
-        training_cert_url,
-        criminal_check_url,
-        driver_license_url,
+        id_card_url: rewrite(id_card_url),
+        security_license_url: rewrite(security_license_url),
+        training_cert_url: rewrite(training_cert_url),
+        criminal_check_url: rewrite(criminal_check_url),
+        driver_license_url: rewrite(driver_license_url),
         bank_name: row.bank_name,
         account_number: row.account_number,
         account_name: row.account_name,
-        passbook_photo_url,
+        passbook_photo_url: rewrite(passbook_photo_url),
     })
 }
 

@@ -110,6 +110,10 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("S3_SECRET_KEY env var is required"))?;
     let s3_bucket = std::env::var("S3_BUCKET")
         .map_err(|_| anyhow::anyhow!("S3_BUCKET env var is required"))?;
+    // Public URL for presigned URLs. Defaults to S3_ENDPOINT when not set
+    // (useful when MinIO is directly accessible, e.g. in some CI environments).
+    // In Docker dev: set to http://localhost/minio-files so the browser can load images.
+    let s3_public_url = std::env::var("S3_PUBLIC_URL").unwrap_or_else(|_| s3_endpoint.clone());
 
     let s3_credentials = Credentials::new(&s3_access_key, &s3_secret_key, None, None, "env");
     let s3_config = S3Builder::new()
@@ -130,6 +134,8 @@ async fn main() -> anyhow::Result<()> {
         http_client,
         s3_client,
         s3_bucket,
+        s3_endpoint,
+        s3_public_url,
     });
 
     // Background task: clean up expired OTP codes every hour

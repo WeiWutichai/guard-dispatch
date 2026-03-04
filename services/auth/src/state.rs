@@ -18,6 +18,12 @@ pub struct AppState {
     /// S3/MinIO client for guard profile document storage.
     pub s3_client: aws_sdk_s3::Client,
     pub s3_bucket: String,
+    /// Internal S3 endpoint (e.g. http://minio:9000) — used for uploads.
+    pub s3_endpoint: String,
+    /// Public-facing URL for presigned URLs (e.g. http://localhost/minio-files).
+    /// Replaces s3_endpoint in generated URLs so browsers can reach them.
+    /// Defaults to s3_endpoint when S3_PUBLIC_URL env var is not set.
+    pub s3_public_url: String,
 }
 
 impl HasJwtSecret for AppState {

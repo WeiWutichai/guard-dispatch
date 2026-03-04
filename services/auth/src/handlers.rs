@@ -490,6 +490,8 @@ pub async fn get_guard_profile(
         &state.db,
         &state.s3_client,
         &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
         user_id,
     )
     .await?;
