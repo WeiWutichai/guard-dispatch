@@ -29,22 +29,26 @@ class PinStorageService {
 
   bool get isPinSet => _cachedPinHash != null;
 
+  /// Retrieve the stored SHA-256 PIN hash (for use as login password).
+  String? getStoredPinHash() => _cachedPinHash;
+
   bool get isBiometricEnabled => _prefs.getBool(_keyBiometric) ?? false;
 
-  static String _hashPin(String pin) {
+  /// Compute SHA-256 hash of a PIN. Public so registration can use it as password.
+  static String hashPin(String pin) {
     final bytes = utf8.encode(pin);
     return sha256.convert(bytes).toString();
   }
 
   Future<void> savePin(String pin) async {
-    final hash = _hashPin(pin);
+    final hash = hashPin(pin);
     await _secureStorage.write(key: _keyPinHash, value: hash);
     _cachedPinHash = hash;
   }
 
   bool validatePin(String pin) {
     if (_cachedPinHash == null) return false;
-    return _hashPin(pin) == _cachedPinHash;
+    return hashPin(pin) == _cachedPinHash;
   }
 
   Future<void> setBiometricEnabled(bool enabled) async {

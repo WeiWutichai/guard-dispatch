@@ -299,6 +299,9 @@ class RegistrationPendingStrings {
   final String editDialogMessage;
   final String editDialogConfirm;
   final String editDialogCancel;
+  final String checkStatus;
+  final String notYetApproved;
+  final String checkStatusError;
 
   RegistrationPendingStrings({required bool isThai})
     : title = isThai ? 'รอการอนุมัติ' : 'Awaiting Approval',
@@ -335,7 +338,10 @@ class RegistrationPendingStrings {
           ? 'คุณสามารถแก้ไขข้อมูลและส่งใหม่ได้\nเอกสารที่แนบแล้วจะยังคงอยู่หากไม่แนบใหม่'
           : 'You can edit and resubmit.\nPreviously attached documents will be preserved unless re-uploaded.',
       editDialogConfirm = isThai ? 'แก้ข้อมูล' : 'Edit',
-      editDialogCancel = isThai ? 'ยกเลิก' : 'Cancel';
+      editDialogCancel = isThai ? 'ยกเลิก' : 'Cancel',
+      checkStatus = isThai ? 'ตรวจสอบสถานะ' : 'Check Status',
+      notYetApproved = isThai ? 'ยังไม่ได้รับการอนุมัติ กรุณารอสักครู่' : 'Not yet approved. Please wait.',
+      checkStatusError = isThai ? 'ไม่สามารถตรวจสอบได้ กรุณาลงทะเบียนใหม่' : 'Unable to check. Please re-register.';
 }
 
 // ──────────────────────────────────────────────

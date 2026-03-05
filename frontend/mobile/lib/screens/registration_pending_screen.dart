@@ -1,12 +1,16 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
+import '../providers/auth_provider.dart';
 import '../services/language_service.dart';
 import '../services/auth_service.dart';
+import '../services/pin_storage_service.dart';
 import '../l10n/app_strings.dart';
-import 'role_selection_screen.dart';
 import 'guard_registration_screen.dart';
 import 'guard/guard_dashboard_screen.dart';
+import 'hirer/hirer_dashboard_screen.dart';
 
 class RegistrationPendingScreen extends StatefulWidget {
   const RegistrationPendingScreen({super.key});
@@ -18,11 +22,73 @@ class RegistrationPendingScreen extends StatefulWidget {
 
 class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
   Map<String, dynamic>? _profile;
+  bool _isChecking = false;
 
   @override
   void initState() {
     super.initState();
     _loadProfile();
+  }
+
+  /// Attempt login with stored phone + PIN hash.
+  /// If approved → navigate to dashboard. If still pending → show message.
+  Future<void> _checkApprovalStatus(RegistrationPendingStrings strings) async {
+    if (_isChecking) return;
+    setState(() => _isChecking = true);
+
+    // Capture providers before async gap
+    final pinService = context.read<PinStorageService>();
+    final authProvider = context.read<AuthProvider>();
+
+    try {
+      // Fall back to profile data for users registered before storePhone() was added.
+      var phone = await AuthService.getStoredPhone();
+      phone ??= _profile?['phone'] as String?;
+      final pinHash = pinService.getStoredPinHash();
+
+      if (phone == null || pinHash == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(strings.checkStatusError),
+              backgroundColor: AppColors.danger,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+        return;
+      }
+
+      await authProvider.loginWithPhone(phone, pinHash);
+
+      if (!mounted) return;
+
+      // Login succeeded — user is approved. Navigate to dashboard.
+      final role = authProvider.role;
+      final Widget dashboard = role == 'guard'
+          ? const GuardDashboardScreen()
+          : const HirerDashboardScreen();
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => dashboard),
+        (route) => false,
+      );
+    } on DioException {
+      // Login failed — still pending or rejected
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(strings.notYetApproved),
+            backgroundColor: Colors.orange.shade700,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isChecking = false);
+    }
   }
 
   Future<void> _navigateToEdit(RegistrationPendingStrings strings) async {
@@ -185,22 +251,14 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
                       ),
                     ),
                   ),
-                  // Back to home button (does NOT logout — pending state preserved)
+                  // Check approval status button — tries login with phone + PIN hash
                   GestureDetector(
-                    onTap: () {
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const RoleSelectionScreen(),
-                        ),
-                        (route) => false,
-                      );
-                    },
+                    onTap: _isChecking ? null : () => _checkApprovalStatus(strings),
                     child: Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       decoration: BoxDecoration(
-                        color: AppColors.primary,
+                        color: _isChecking ? AppColors.primary.withValues(alpha: 0.6) : AppColors.primary,
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
@@ -210,15 +268,26 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
                           ),
                         ],
                       ),
-                      child: Text(
-                        strings.backToLogin,
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                      ),
+                      child: _isChecking
+                          ? const Center(
+                              child: SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            )
+                          : Text(
+                              strings.checkStatus,
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.inter(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
                     ),
                   ),
                   const SizedBox(height: 12),

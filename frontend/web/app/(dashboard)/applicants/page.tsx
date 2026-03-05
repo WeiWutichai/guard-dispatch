@@ -64,7 +64,7 @@ export default function ApplicantsPage() {
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<ApplicantStatus | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<ApplicantStatus | "all">("pending");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>("all");
 

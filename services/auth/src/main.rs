@@ -30,6 +30,7 @@ use crate::state::AppState;
     paths(
         handlers::register,
         handlers::login,
+        handlers::phone_login,
         handlers::refresh_token,
         handlers::get_profile,
         handlers::update_profile,
@@ -46,6 +47,7 @@ use crate::state::AppState;
     components(schemas(
         models::RegisterRequest,
         models::LoginRequest,
+        models::PhoneLoginRequest,
         models::RefreshRequest,
         models::UpdateProfileRequest,
         models::AuthResponse,
@@ -171,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health_check))
         .route("/register", post(handlers::register))
         .route("/login", post(handlers::login))
+        .route("/login/phone", post(handlers::phone_login))
         .route("/otp/request", post(handlers::request_otp))
         .route("/otp/verify", post(handlers::verify_otp))
         .route("/register/otp", post(handlers::register_with_otp))

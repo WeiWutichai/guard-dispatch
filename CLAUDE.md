@@ -470,7 +470,7 @@ PinSetupScreen(phone, phoneVerifiedToken)
   ├─ ★ STEP 1: registerWithOtp(role=null)   POST /register/otp
   │   authProvider.registerWithOtp(     ──► ├─ Decode JWT → (phone, jti)
   │     phoneVerifiedToken)                 ├─ Redis GETDEL jti (single-use)
-  │                                         ├─ Argon2 hash (random password)
+  │                                         ├─ Argon2 hash PIN (password param = SHA-256 of PIN)
   │   ◄── 202 + user_id ──────────────────┤ ├─ UPSERT user (role=NULL, status=pending)
   │   (no profile_token — role unknown)     └─ Admin เห็น applicant ไม่มีประเภท
   └─ Navigate → RoleSelectionScreen(phone)  ← phoneVerifiedToken consumed
@@ -503,6 +503,11 @@ GuardRegistrationScreen(phone, profileToken)
       ★ ถ้า error → role ยังเป็น null (ไม่มี partial state)
   ▼
 RegistrationPendingScreen
+  ├─ "ตรวจสอบสถานะ" button → _checkApprovalStatus():
+  │     ├─ GET /auth/me (check approval_status via AuthService.getStoredPhone())
+  │     ├─ phone fallback: _profile?['phone'] (for users registered before storePhone())
+  │     ├─ If approved: loginWithPhone(phone, pinHash) → Dashboard
+  │     └─ If still pending: show "กำลังรอการอนุมัติ" message
   ├─ "Back to Login" → RoleSelectionScreen
   └─ "แก้ข้อมูล" → GuardRegistrationScreen(phone, initialProfile, dashboard)
       ├─ Pre-fills: full_name, gender, date_of_birth, experience, workplace, bank_name, account_name
@@ -512,7 +517,7 @@ RegistrationPendingScreen
 
 > **Design decision:** Registration returns **202 Accepted with no tokens**. The user cannot
 > access any protected endpoint until an admin approves the account. Only after approval
-> can the user log in normally via `/auth/login`.
+> can the user log in via `POST /auth/login/phone` (phone + PIN hash).
 >
 > **3-step progressive visibility:** Admin sees applicant at each step:
 > 1. After PIN: user appears with `role=null` ("ยังไม่ได้ระบุ")
@@ -534,11 +539,13 @@ RegistrationPendingScreen
 **Auth Service OTP & Profile Endpoints (main.rs):**
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
 - `POST /otp/verify` → `handlers::verify_otp` (public, no JWT)
-- `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`.
+- `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`. Password param = SHA-256 hash of user's PIN.
+- `POST /login/phone` → `handlers::login_with_phone` (public) — login with `{phone, password}` (PIN hash). Returns `{access_token, refresh_token, role}`. Used by mobile after admin approval.
 - `POST /profile/role` → `handlers::update_role` (public, no JWT) — guard: verify user + issue `profile_token` (**ไม่ set role**); customer: set role ทันที. Returns `profile_token` for guard, null for customer.
 - `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for pending guard (no OTP needed)
 - `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth — single-use)
 - `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT)
+- `GET /me` → `handlers::get_me` (JWT required) — returns `UserResponse { id, full_name, phone, email, role, avatar_url, approval_status }`. Used by `AuthProvider.fetchProfile()` for dashboard real data.
 
 **Shared Modules:**
 - `shared::otp` — `OtpConfig`, `validate_thai_phone()`, `generate_otp()`, `to_international_format()`, `format_otp_message()`
@@ -553,22 +560,29 @@ RegistrationPendingScreen
 - file_key format for guard docs: `profiles/guard/{user_id}/{doc_type}.{ext}`
 
 **Flutter Mobile:**
-- `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for guard), `reissueProfileToken(phone)`, `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`
+- `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for guard), `reissueProfileToken(phone)`, `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`, `loginWithPhone(phone, pinHash)`, `fetchProfile()`
   - `AuthStatus` enum: `unknown` | `authenticated` | `unauthenticated` | `pendingApproval`
   - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
   - `updateRole()` calls `POST /auth/profile/role`, updates local pending state with role
-  - `checkAuthStatus()`: checks `isPendingApproval()` flag first → then access token → else unauthenticated
+  - `loginWithPhone(phone, pinHash)` calls `POST /auth/login/phone` → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval.
+  - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_avatarUrl`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
+  - `checkAuthStatus()`: checks `isPendingApproval()` flag first → then access token (+ `fetchProfile()`) → else unauthenticated
+  - Profile fields: `fullName`, `phone`, `avatarUrl` (getters) — used by dashboard screens instead of hardcoded mock data
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
-- `AuthService`: `storeTokens()`, `markRegistered()`, `getPhone()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
+- `AuthService`: `storeTokens()`, `storePhone()`, `getStoredPhone()`, `storeRole()`, `getRole()`, `clearRole()`, `markRegistered()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
   - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only; also stores `phone` and `date_of_birth` (ISO format) for edit flow
   - `getPendingProfile()` retrieves stored profile for pre-filling edit form
-- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`
+- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/login/phone`
 - `main.dart` `home`: `Consumer<AuthProvider>` — routes to `RegistrationPendingScreen` when `status == pendingApproval` (handles app-restart while pending)
 - `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed).
 - `RoleSelectionScreen._onRoleTap()`: calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path → `RegistrationPendingScreen`
 - `GuardRegistrationScreen`: accepts optional `initialProfile` param for edit mode — `_prefillForm()` restores text fields, gender, DOB, bank from stored profile. Back button uses `canPop()` check to handle edit flow (no route to pop → navigate to `RegistrationPendingScreen`).
 - `GuardRegistrationScreen._onSubmit()`: only calls `submitGuardProfile(profileToken)` — no `registerWithOtp()`. Uses `reissueProfileToken()` fallback if profileToken is null/expired.
+- **Dashboard real data:** After login, dashboard screens use `AuthProvider` profile fields (`fullName`, `phone`, `avatarUrl`) from `GET /auth/me` instead of hardcoded mock data:
+  - `GuardHomeTab`: greeting uses `authProvider.fullName ?? strings.sampleGuardName`; registration check uses `authProvider.isAuthenticated` (not `AuthService.isRegistered()`)
+  - `GuardProfileTab`: real name, formatted phone as ID (`086-320-8235`), avatar from URL or person icon fallback, "ยืนยันแล้ว" badge only (no "ยังไม่ได้ลงทะเบียน")
+  - `HirerProfileScreen`: real name, formatted phone as ID, avatar icon fallback
 
 **Nginx Rate Limit:**
 - `otp_limit` zone: 3 req/min per IP — applied to `location /auth/otp/`
@@ -831,3 +845,6 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามแสดงหน้า map โดยไม่ตรวจ role — ต้อง gate ด้วย `AuthProvider` (admin/customer เท่านั้น)
 - ❌ ห้าม set `AuthStatus.authenticated` หลัง `registerWithOtp()` — ต้อง set `AuthStatus.pendingApproval` เท่านั้น ห้ามเก็บ token ที่ registration
 - ❌ ห้าม navigate ไปหน้า dashboard หรือ PinSetupScreen หลัง registration — ต้องไป `RegistrationPendingScreen` เสมอ
+- ❌ ห้ามใช้ `AuthService.isRegistered('guard')` เพื่อตรวจสอบว่าควรแสดง Dashboard — ใช้ `context.watch<AuthProvider>().isAuthenticated` แทน (SharedPreferences key อาจไม่ถูก set ในทุก flow)
+- ❌ ห้ามใช้ hardcoded mock data ใน Dashboard screens (ชื่อ, avatar, รหัส) — ใช้ `AuthProvider.fullName`, `AuthProvider.phone`, `AuthProvider.avatarUrl` จาก `GET /auth/me`
+- ❌ ห้าม login ด้วย email-based endpoint จาก mobile — ใช้ `POST /auth/login/phone` (phone + PIN hash) เท่านั้น

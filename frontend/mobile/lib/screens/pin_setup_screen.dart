@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../providers/auth_provider.dart';
+import '../services/auth_service.dart';
 import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
@@ -95,13 +96,19 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     // Step 1 of 3-step registration: register user with no role right after PIN.
     // This creates the user in backend (approval_status=pending, role=null).
     // Admin sees the applicant immediately with "ยังไม่ได้ระบุ" (no type).
+    // Send the PIN's SHA-256 hash as the password so the user can login after approval.
     if (widget.phoneVerifiedToken != null) {
       try {
         final authProvider = context.read<AuthProvider>();
+        final pinHash = PinStorageService.hashPin(_firstPin);
         await authProvider.registerWithOtp(
           phoneVerifiedToken: widget.phoneVerifiedToken!,
-          // No role, no fullName — role is chosen next, guard form collects name later.
+          password: pinHash,
         );
+        // Store phone for post-approval login (loginWithPhone needs it).
+        if (widget.phone != null) {
+          await AuthService.storePhone(widget.phone!);
+        }
       } on DioException catch (e) {
         if (!mounted) return;
         final message = e.response?.data?['error']?['message'] as String?;

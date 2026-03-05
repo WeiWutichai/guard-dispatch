@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/colors.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
 import '../guard_registration_screen.dart';
-import '../../../services/auth_service.dart';
 
 class GuardHomeTab extends StatefulWidget {
   const GuardHomeTab({super.key});
@@ -15,23 +16,8 @@ class GuardHomeTab extends StatefulWidget {
 
 class _GuardHomeTabState extends State<GuardHomeTab> {
   bool _isReady = false;
-  bool _isRegistered = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadStatus();
-  }
-
-  Future<void> _loadStatus() async {
-    final registered = await AuthService.isRegistered('guard');
-    setState(() {
-      _isRegistered = registered;
-    });
-  }
 
   Future<void> _onRefresh() async {
-    await _loadStatus();
     // Simulate some loading time for better UX
     await Future.delayed(const Duration(milliseconds: 500));
   }
@@ -40,6 +26,8 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = GuardHomeStrings(isThai: isThai);
+    // User reached this screen via approved login — always show dashboard content.
+    final isRegistered = context.watch<AuthProvider>().isAuthenticated;
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -55,7 +43,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                 _buildHeader(strings),
                 Padding(
                   padding: const EdgeInsets.all(20.0),
-                  child: _isRegistered
+                  child: isRegistered
                       ? _buildRegisteredContent(strings)
                       : _buildNotRegisteredContent(strings),
                 ),
@@ -131,7 +119,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                 MaterialPageRoute(
                   builder: (_) => const GuardRegistrationScreen(),
                 ),
-              ).then((_) => _loadStatus());
+              );
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
@@ -201,7 +189,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                     ),
                   ),
                   Text(
-                    strings.sampleGuardName,
+                    context.watch<AuthProvider>().fullName ?? strings.sampleGuardName,
                     style: GoogleFonts.inter(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,

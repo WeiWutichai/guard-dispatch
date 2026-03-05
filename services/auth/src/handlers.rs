@@ -14,7 +14,7 @@ use shared::models::ApiResponse;
 
 use crate::models::{
     AuthResponse, GuardProfileFormData, GuardProfileResponse, ListUsersQuery, LoginRequest,
-    PaginatedUsers, RefreshRequest, RegisterRequest, RegisterWithOtpRequest,
+    PaginatedUsers, PhoneLoginRequest, RefreshRequest, RegisterRequest, RegisterWithOtpRequest,
     RegisterWithOtpResponse, ReissueProfileTokenRequest, ReissueProfileTokenResponse,
     RequestOtpRequest, RequestOtpResponse, UpdateApprovalStatusRequest,
     UpdateProfileRequest, UpdateRoleRequest, UpdateRoleResponse, UserResponse,
@@ -100,6 +100,44 @@ pub async fn login(
         .map(|s| s.to_string());
 
     let auth = crate::service::login(
+        &state.db,
+        &state.redis,
+        &state.jwt_config,
+        req,
+        ip_address,
+        device_info,
+    )
+    .await?;
+
+    let cookie_headers = auth_cookie_headers(&auth);
+    Ok((cookie_headers, Json(ApiResponse::success(auth))))
+}
+
+#[utoipa::path(
+    post,
+    path = "/login/phone",
+    tag = "Auth",
+    request_body = PhoneLoginRequest,
+    responses(
+        (status = 200, description = "Login successful, tokens returned", body = AuthResponse),
+        (status = 401, description = "Invalid credentials", body = ErrorBody),
+    ),
+)]
+pub async fn phone_login(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<PhoneLoginRequest>,
+) -> Result<(HeaderMap, Json<ApiResponse<AuthResponse>>), AppError> {
+    let ip_address = headers
+        .get("X-Real-IP")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let device_info = headers
+        .get("User-Agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let auth = crate::service::login_with_phone(
         &state.db,
         &state.redis,
         &state.jwt_config,

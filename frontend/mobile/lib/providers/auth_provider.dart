@@ -37,10 +37,16 @@ enum AuthStatus {
 class AuthProvider extends ChangeNotifier {
   AuthStatus _status = AuthStatus.unknown;
   String? _role;
+  String? _fullName;
+  String? _phone;
+  String? _avatarUrl;
   final ApiClient _apiClient = ApiClient();
 
   AuthStatus get status => _status;
   String? get role => _role;
+  String? get fullName => _fullName;
+  String? get phone => _phone;
+  String? get avatarUrl => _avatarUrl;
   ApiClient get apiClient => _apiClient;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
   bool get isPendingApproval => _status == AuthStatus.pendingApproval;
@@ -58,10 +64,28 @@ class AuthProvider extends ChangeNotifier {
     final token = await AuthService.getAccessToken();
     if (token != null) {
       _status = AuthStatus.authenticated;
+      _role = await AuthService.getRole();
+      notifyListeners();
+      await fetchProfile();
+      return;
     } else {
       _status = AuthStatus.unauthenticated;
     }
     notifyListeners();
+  }
+
+  /// Fetch the authenticated user's profile from GET /auth/me.
+  Future<void> fetchProfile() async {
+    try {
+      final response = await _apiClient.dio.get('/auth/me');
+      final data = response.data['data'];
+      _fullName = data['full_name'] as String?;
+      _phone = data['phone'] as String?;
+      _avatarUrl = data['avatar_url'] as String?;
+      notifyListeners();
+    } catch (_) {
+      // Silently fail — dashboard will show fallback values.
+    }
   }
 
   /// Login as guard with credentials.
@@ -219,14 +243,46 @@ class AuthProvider extends ChangeNotifier {
     );
   }
 
+  /// Login with phone + PIN hash after admin approval.
+  ///
+  /// Calls POST /auth/login/phone with phone number and the SHA-256 hashed PIN
+  /// (which was stored as the password during registration).
+  /// On success: stores tokens + role, clears pending state, sets authenticated.
+  Future<bool> loginWithPhone(String phone, String pinHash) async {
+    final response = await _apiClient.dio.post('/auth/login/phone', data: {
+      'phone': phone,
+      'password': pinHash,
+    });
+    final data = response.data['data'];
+    final accessToken = data['access_token'] as String;
+    final refreshToken = data['refresh_token'] as String;
+    final role = data['role'] as String;
+
+    await Future.wait([
+      AuthService.storeTokens(accessToken, refreshToken),
+      AuthService.storeRole(role),
+      AuthService.clearPendingApproval(),
+    ]);
+
+    _status = AuthStatus.authenticated;
+    _role = role;
+    notifyListeners();
+    await fetchProfile();
+    return true;
+  }
+
   /// Logout — clear tokens, pending state, and reset auth status.
   Future<void> logout() async {
     await Future.wait([
       AuthService.clearTokens(),
       AuthService.clearPendingApproval(),
+      AuthService.clearRole(),
     ]);
     _status = AuthStatus.unauthenticated;
     _role = null;
+    _fullName = null;
+    _phone = null;
+    _avatarUrl = null;
     notifyListeners();
   }
 

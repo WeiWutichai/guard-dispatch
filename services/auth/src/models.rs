@@ -29,6 +29,12 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub struct PhoneLoginRequest {
+    pub phone: String,
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RefreshRequest {
     #[serde(default)]
     pub refresh_token: String,
@@ -51,6 +57,8 @@ pub struct AuthResponse {
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: i64,
+    /// The authenticated user's role (e.g. "guard", "customer", "admin").
+    pub role: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]

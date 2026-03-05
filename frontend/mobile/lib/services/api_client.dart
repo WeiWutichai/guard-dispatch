@@ -47,7 +47,7 @@ class _AuthInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     // Skip auth header for public endpoints
-    final publicPaths = ['/auth/login', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role'];
+    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role'];
     final isPublic = publicPaths.any((p) => options.path.contains(p));
 
     if (!isPublic) {

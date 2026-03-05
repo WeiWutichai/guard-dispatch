@@ -44,7 +44,7 @@ export default function ProfilePage() {
                 lastName: parts.slice(1).join(" ") || "",
                 email: user.email,
                 phone: user.phone,
-                position: user.role === "admin" ? "System Administrator" : user.role,
+                position: user.role === "admin" ? "System Administrator" : user.role || "",
                 department: "Security Operations",
             }));
         }

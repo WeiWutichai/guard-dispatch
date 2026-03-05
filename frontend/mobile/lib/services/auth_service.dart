@@ -10,6 +10,8 @@ class AuthService {
   static const _keyPhoneVerifiedToken = 'phone_verified_token';
   static const _keyPendingApproval = 'pending_approval';
   static const _keyPendingRole = 'pending_role';
+  static const _keyRole = 'user_role';
+  static const _keyPhone = 'user_phone';
 
   static const _secureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -74,6 +76,40 @@ class AuthService {
   static Future<void> clearTokens() async {
     await _secureStorage.delete(key: _keyAccessToken);
     await _secureStorage.delete(key: _keyRefreshToken);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Role & phone storage (non-sensitive — SharedPreferences)
+  // ---------------------------------------------------------------------------
+
+  /// Store the authenticated user's role after successful login.
+  static Future<void> storeRole(String role) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyRole, role);
+  }
+
+  /// Retrieve stored user role.
+  static Future<String?> getRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyRole);
+  }
+
+  /// Clear stored role (on logout).
+  static Future<void> clearRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyRole);
+  }
+
+  /// Store the user's phone number (persisted across app restarts).
+  static Future<void> storePhone(String phone) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyPhone, phone);
+  }
+
+  /// Retrieve stored phone number.
+  static Future<String?> getStoredPhone() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyPhone);
   }
 
   // ---------------------------------------------------------------------------
@@ -163,6 +199,9 @@ class AuthService {
       // Pending approval + role
       prefs.remove(_keyPendingApproval),
       prefs.remove(_keyPendingRole),
+      // Authenticated role + phone
+      prefs.remove(_keyRole),
+      prefs.remove(_keyPhone),
       // Locally saved profile summary
       prefs.remove(_keyPendingProfileJson),
       // Phone verified data (SharedPreferences part)

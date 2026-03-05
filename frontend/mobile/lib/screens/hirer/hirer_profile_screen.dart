@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 import '../phone_input_screen.dart';
@@ -119,48 +121,56 @@ class HirerProfileScreen extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFFE5E5EA), width: 1),
-                  image: const DecorationImage(
-                    image: NetworkImage('https://i.pravatar.cc/150?u=customer'),
-                    fit: BoxFit.cover,
+              Builder(builder: (context) {
+                final avatarUrl = context.watch<AuthProvider>().avatarUrl;
+                return Container(
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFFE5E5EA), width: 1),
+                    color: avatarUrl == null ? AppColors.primary.withValues(alpha: 0.1) : null,
+                    image: avatarUrl != null
+                        ? DecorationImage(
+                            image: NetworkImage(avatarUrl),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
                   ),
-                ),
-              ),
+                  child: avatarUrl == null
+                      ? const Icon(Icons.person_rounded, size: 32, color: AppColors.primary)
+                      : null,
+                );
+              }),
               const SizedBox(width: 14),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      s.sampleHirerName,
-                      style: GoogleFonts.inter(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black,
+                child: Builder(builder: (context) {
+                  final auth = context.watch<AuthProvider>();
+                  final phoneDisplay = auth.phone != null
+                      ? 'ID: ${auth.phone!.replaceAllMapped(RegExp(r'(\d{3})(\d{3})(\d{4})'), (m) => '${m[1]}-${m[2]}-${m[3]}')}'
+                      : s.sampleHirerCode;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        auth.fullName ?? s.sampleHirerName,
+                        style: GoogleFonts.inter(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      s.sampleCompany,
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        color: const Color(0xFF8E8E93),
+                      const SizedBox(height: 2),
+                      Text(
+                        phoneDisplay,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: const Color(0xFF8E8E93),
+                        ),
                       ),
-                    ),
-                    Text(
-                      s.sampleHirerCode,
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        color: const Color(0xFF8E8E93),
-                      ),
-                    ),
-                  ],
-                ),
+                    ],
+                  );
+                }),
               ),
               const Icon(
                 Icons.chevron_right_rounded,

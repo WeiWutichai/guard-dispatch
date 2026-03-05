@@ -21,7 +21,7 @@ use shared::models::ApprovalStatus;
 
 use crate::models::{
     AuthResponse, GuardProfileFormData, GuardProfileResponse, GuardProfileRow,
-    ListUsersQuery, LoginRequest, OtpRow, PaginatedUsers, RegisterRequest,
+    ListUsersQuery, LoginRequest, OtpRow, PaginatedUsers, PhoneLoginRequest, RegisterRequest,
     RegisterWithOtpRequest, RegisterWithOtpResponse, RequestOtpResponse, SessionRow,
     UpdateApprovalStatusRequest, UpdateProfileRequest, UserResponse, UserRow, VerifyOtpResponse,
 };
@@ -244,6 +244,7 @@ pub async fn login(
     .execute(db)
     .await?;
 
+    let role_str = role.to_string();
     let user_response = UserResponse::from(user);
     cache_user(redis, &user_response).await?;
 
@@ -252,6 +253,98 @@ pub async fn login(
         refresh_token,
         token_type: "Bearer".to_string(),
         expires_in: jwt_config.expiry_hours * 3600,
+        role: role_str,
+    })
+}
+
+// =============================================================================
+// Login (Phone-based — for mobile app)
+// =============================================================================
+
+pub async fn login_with_phone(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+    jwt_config: &JwtConfig,
+    req: PhoneLoginRequest,
+    ip_address: Option<String>,
+    device_info: Option<String>,
+) -> Result<AuthResponse, AppError> {
+    let user = sqlx::query_as::<_, UserRow>(
+        r#"
+        SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
+        FROM auth.users
+        WHERE phone = $1
+        "#,
+    )
+    .bind(&req.phone)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
+
+    let valid = verify_password(&req.password, &user.password_hash).await?;
+    if !valid || !user.is_active || user.approval_status != ApprovalStatus::Approved {
+        // Combine inactive, pending/rejected, and wrong-password into same error to prevent user enumeration
+        return Err(AppError::Unauthorized("Invalid phone or password".to_string()));
+    }
+
+    // Null role means the user hasn't completed onboarding — treat as unauthorized
+    // using the same generic message to avoid leaking account state.
+    let role = user.role.as_ref().ok_or_else(|| {
+        AppError::Unauthorized("Invalid phone or password".to_string())
+    })?;
+
+    let access_token = encode_jwt_with_key(
+        user.id,
+        &role.to_string(),
+        &jwt_config.encoding_key,
+        jwt_config.expiry_hours,
+    )?;
+
+    // Enforce max sessions per user — evict oldest sessions beyond limit
+    sqlx::query(
+        r#"
+        DELETE FROM auth.sessions
+        WHERE user_id = $1
+        AND id NOT IN (
+            SELECT id FROM auth.sessions
+            WHERE user_id = $1
+            ORDER BY expires_at DESC
+            LIMIT $2
+        )
+        "#,
+    )
+    .bind(user.id)
+    .bind(MAX_SESSIONS_PER_USER - 1) // Leave room for the new session
+    .execute(db)
+    .await?;
+
+    let refresh_token = Uuid::new_v4().to_string();
+    let expires_at = Utc::now() + chrono::TimeDelta::days(REFRESH_TOKEN_DAYS);
+
+    sqlx::query(
+        r#"
+        INSERT INTO auth.sessions (user_id, refresh_token, device_info, ip_address, expires_at)
+        VALUES ($1, $2, $3, $4::inet, $5)
+        "#,
+    )
+    .bind(user.id)
+    .bind(&refresh_token)
+    .bind(&device_info)
+    .bind(&ip_address)
+    .bind(expires_at)
+    .execute(db)
+    .await?;
+
+    let role_str = role.to_string();
+    let user_response = UserResponse::from(user);
+    cache_user(redis, &user_response).await?;
+
+    Ok(AuthResponse {
+        access_token,
+        refresh_token,
+        token_type: "Bearer".to_string(),
+        expires_in: jwt_config.expiry_hours * 3600,
+        role: role_str,
     })
 }
 
@@ -312,6 +405,7 @@ pub async fn refresh_token(
         jwt_config.expiry_hours,
     )?;
 
+    let role_str = role.to_string();
     let user_response = UserResponse::from(user);
     cache_user(redis, &user_response).await?;
 
@@ -320,6 +414,7 @@ pub async fn refresh_token(
         refresh_token: new_refresh_token,
         token_type: "Bearer".to_string(),
         expires_in: jwt_config.expiry_hours * 3600,
+        role: role_str,
     })
 }
 

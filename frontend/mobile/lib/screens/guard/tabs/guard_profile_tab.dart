@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/colors.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
 import '../guard_registration_screen.dart';
@@ -109,6 +111,12 @@ class GuardProfileTab extends StatelessWidget {
   }
 
   Widget _buildProfileCard(BuildContext context, GuardProfileStrings strings) {
+    final auth = context.watch<AuthProvider>();
+    final avatarUrl = auth.avatarUrl;
+    final phoneDisplay = auth.phone != null
+        ? 'ID: ${auth.phone!.replaceAllMapped(RegExp(r'(\d{3})(\d{3})(\d{4})'), (m) => '${m[1]}-${m[2]}-${m[3]}')}'
+        : strings.sampleGuardCode;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: GestureDetector(
@@ -127,11 +135,17 @@ class GuardProfileTab extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(color: const Color(0xFFE5E5EA), width: 1),
-                  image: const DecorationImage(
-                    image: NetworkImage('https://i.pravatar.cc/300'),
-                    fit: BoxFit.cover,
-                  ),
+                  color: avatarUrl == null ? AppColors.primary.withValues(alpha: 0.1) : null,
+                  image: avatarUrl != null
+                      ? DecorationImage(
+                          image: NetworkImage(avatarUrl),
+                          fit: BoxFit.cover,
+                        )
+                      : null,
                 ),
+                child: avatarUrl == null
+                    ? const Icon(Icons.person_rounded, size: 32, color: AppColors.primary)
+                    : null,
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -139,7 +153,7 @@ class GuardProfileTab extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      strings.sampleGuardName,
+                      auth.fullName ?? strings.sampleGuardName,
                       style: GoogleFonts.inter(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
@@ -148,7 +162,7 @@ class GuardProfileTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      strings.sampleGuardCode,
+                      phoneDisplay,
                       style: GoogleFonts.inter(
                         fontSize: 13,
                         color: const Color(0xFF8E8E93),
@@ -158,11 +172,6 @@ class GuardProfileTab extends StatelessWidget {
                     Row(
                       children: [
                         _buildBadge(strings.verified, const Color(0xFF34C759)),
-                        const SizedBox(width: 6),
-                        _buildBadge(
-                          strings.notRegistered,
-                          const Color(0xFF8E8E93),
-                        ),
                       ],
                     ),
                   ],
