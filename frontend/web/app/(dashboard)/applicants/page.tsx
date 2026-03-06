@@ -759,13 +759,23 @@ export default function ApplicantsPage() {
                         {t.applicants.modal.customerProfile.companyInfo}
                       </h4>
                       <div className="grid grid-cols-2 gap-3">
-                        {customerProfile.company_name && (
-                          <div className="p-3 bg-slate-50 rounded-xl">
-                            <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.companyName}</p>
-                            <p className="text-sm font-medium text-slate-800">{customerProfile.company_name}</p>
-                          </div>
-                        )}
-                        <div className={cn("p-3 bg-slate-50 rounded-xl", !customerProfile.company_name && "col-span-2")}>
+                        <div className="p-3 bg-slate-50 rounded-xl">
+                          <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.fullName}</p>
+                          <p className="text-sm font-medium text-slate-800">{customerProfile.full_name || "—"}</p>
+                        </div>
+                        <div className="p-3 bg-slate-50 rounded-xl">
+                          <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.contactPhone}</p>
+                          <p className="text-sm font-medium text-slate-800">{customerProfile.contact_phone || "—"}</p>
+                        </div>
+                        <div className="p-3 bg-slate-50 rounded-xl">
+                          <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.email}</p>
+                          <p className="text-sm font-medium text-slate-800">{customerProfile.email || "—"}</p>
+                        </div>
+                        <div className="p-3 bg-slate-50 rounded-xl">
+                          <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.companyName}</p>
+                          <p className="text-sm font-medium text-slate-800">{customerProfile.company_name || "—"}</p>
+                        </div>
+                        <div className="p-3 bg-slate-50 rounded-xl col-span-2">
                           <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.address}</p>
                           <p className="text-sm font-medium text-slate-800">{customerProfile.address}</p>
                         </div>

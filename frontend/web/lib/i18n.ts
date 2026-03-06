@@ -154,6 +154,9 @@ export const translations = {
         },
         customerProfile: {
           companyInfo: "ข้อมูลบริษัท/ลูกค้า",
+          fullName: "ชื่อ-นามสกุล",
+          contactPhone: "เบอร์ติดต่อ",
+          email: "อีเมล",
           companyName: "ชื่อบริษัท",
           address: "ที่อยู่",
           loadingProfile: "กำลังโหลดข้อมูลโปรไฟล์...",
@@ -258,6 +261,9 @@ export const translations = {
         close: "ปิด",
         customerProfile: {
           companyInfo: "ข้อมูลบริษัท/ลูกค้า",
+          fullName: "ชื่อ-นามสกุล",
+          contactPhone: "เบอร์ติดต่อ",
+          email: "อีเมล",
           companyName: "ชื่อบริษัท",
           address: "ที่อยู่",
           loadingProfile: "กำลังโหลดข้อมูลโปรไฟล์...",
@@ -581,6 +587,9 @@ export const translations = {
         },
         customerProfile: {
           companyInfo: "Company / Customer Info",
+          fullName: "Full Name",
+          contactPhone: "Contact Phone",
+          email: "Email",
           companyName: "Company Name",
           address: "Address",
           loadingProfile: "Loading profile...",
@@ -685,6 +694,9 @@ export const translations = {
         close: "Close",
         customerProfile: {
           companyInfo: "Company / Customer Info",
+          fullName: "Full Name",
+          contactPhone: "Contact Phone",
+          email: "Email",
           companyName: "Company Name",
           address: "Address",
           loadingProfile: "Loading profile...",

@@ -372,7 +372,7 @@ export default function CustomersPage() {
                 </div>
               </div>
 
-              {/* Customer Profile — Company & Address */}
+              {/* Customer Profile — Full details */}
               {isProfileLoading ? (
                 <div className="flex items-center gap-2 text-slate-400 text-sm">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -384,12 +384,22 @@ export default function CustomersPage() {
                     {t.customers.modal.customerProfile.companyInfo}
                   </h4>
                   <div className="space-y-3">
-                    {customerProfile.company_name && (
-                      <div>
-                        <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.companyName}</p>
-                        <p className="text-sm font-medium text-slate-800">{customerProfile.company_name}</p>
-                      </div>
-                    )}
+                    <div>
+                      <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.fullName}</p>
+                      <p className="text-sm font-medium text-slate-800">{customerProfile.full_name || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.contactPhone}</p>
+                      <p className="text-sm font-medium text-slate-800">{customerProfile.contact_phone || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.email}</p>
+                      <p className="text-sm font-medium text-slate-800">{customerProfile.email || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.companyName}</p>
+                      <p className="text-sm font-medium text-slate-800">{customerProfile.company_name || "—"}</p>
+                    </div>
                     <div>
                       <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.address}</p>
                       <p className="text-sm font-medium text-slate-800">{customerProfile.address}</p>

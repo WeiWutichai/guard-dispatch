@@ -65,8 +65,8 @@ export interface GuardProfile {
 export interface CustomerProfile {
   user_id: string;
   full_name: string;
-  phone: string;
-  email: string;
+  contact_phone: string | null;
+  email: string | null;
   company_name: string | null;
   address: string;
   approval_status: "pending" | "approved" | "rejected";
