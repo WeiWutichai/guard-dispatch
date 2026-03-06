@@ -1,16 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
+import '../../providers/booking_provider.dart';
 
-class RatingsReviewsScreen extends StatelessWidget {
+class RatingsReviewsScreen extends StatefulWidget {
   const RatingsReviewsScreen({super.key});
+
+  @override
+  State<RatingsReviewsScreen> createState() => _RatingsReviewsScreenState();
+}
+
+class _RatingsReviewsScreenState extends State<RatingsReviewsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      if (!mounted) return;
+      context.read<BookingProvider>().fetchRatings();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = RatingsReviewsStrings(isThai: isThai);
+    final provider = context.watch<BookingProvider>();
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -27,22 +44,29 @@ class RatingsReviewsScreen extends StatelessWidget {
         ),
         centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            _buildOverallRating(strings),
-            const SizedBox(height: 20),
-            _buildRatingBreakdown(strings),
-            const SizedBox(height: 20),
-            _buildRecentReviews(strings),
-          ],
-        ),
-      ),
+      body: provider.isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  _buildOverallRating(strings, provider.ratings),
+                  const SizedBox(height: 20),
+                  _buildRatingBreakdown(strings, provider.ratings),
+                  const SizedBox(height: 20),
+                  _buildRecentReviews(strings, provider.ratings),
+                ],
+              ),
+            ),
     );
   }
 
-  Widget _buildOverallRating(RatingsReviewsStrings strings) {
+  Widget _buildOverallRating(RatingsReviewsStrings strings, Map<String, dynamic>? ratings) {
+    final overall = (ratings?['overall_rating'] as num?)?.toDouble() ?? 0.0;
+    final totalReviews = (ratings?['total_reviews'] as num?)?.toInt() ?? 0;
+    final fullStars = overall.floor();
+    final hasHalf = (overall - fullStars) >= 0.3;
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -57,7 +81,7 @@ class RatingsReviewsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '4.8',
+            totalReviews > 0 ? overall.toStringAsFixed(1) : '-',
             style: GoogleFonts.inter(
               fontSize: 56,
               fontWeight: FontWeight.bold,
@@ -68,16 +92,21 @@ class RatingsReviewsScreen extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: List.generate(5, (i) {
-              return Icon(
-                i < 4 ? Icons.star_rounded : Icons.star_half_rounded,
-                color: Colors.amber,
-                size: 28,
-              );
+              if (i < fullStars) {
+                return const Icon(Icons.star_rounded, color: Colors.amber, size: 28);
+              } else if (i == fullStars && hasHalf) {
+                return const Icon(Icons.star_half_rounded, color: Colors.amber, size: 28);
+              }
+              return Icon(Icons.star_outline_rounded, color: Colors.amber.withValues(alpha: 0.4), size: 28);
             }),
           ),
           const SizedBox(height: 8),
           Text(
-            strings.basedOnReviews,
+            totalReviews > 0
+                ? (LanguageProvider.of(context).isThai
+                    ? 'จาก $totalReviews รีวิว'
+                    : 'Based on $totalReviews reviews')
+                : (LanguageProvider.of(context).isThai ? 'ยังไม่มีรีวิว' : 'No reviews yet'),
             style: GoogleFonts.inter(fontSize: 13, color: Colors.white70),
           ),
         ],
@@ -85,13 +114,22 @@ class RatingsReviewsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildRatingBreakdown(RatingsReviewsStrings strings) {
-    final categories = [
-      {'label': strings.punctuality, 'rating': 4.9},
-      {'label': strings.professionalism, 'rating': 4.8},
-      {'label': strings.communication, 'rating': 4.6},
-      {'label': strings.appearance, 'rating': 4.9},
+  Widget _buildRatingBreakdown(RatingsReviewsStrings strings, Map<String, dynamic>? ratings) {
+    final punctuality = (ratings?['avg_punctuality'] as num?)?.toDouble();
+    final professionalism = (ratings?['avg_professionalism'] as num?)?.toDouble();
+    final communication = (ratings?['avg_communication'] as num?)?.toDouble();
+    final appearance = (ratings?['avg_appearance'] as num?)?.toDouble();
+
+    final categories = <Map<String, dynamic>>[
+      if (punctuality != null) {'label': strings.punctuality, 'rating': punctuality},
+      if (professionalism != null) {'label': strings.professionalism, 'rating': professionalism},
+      if (communication != null) {'label': strings.communication, 'rating': communication},
+      if (appearance != null) {'label': strings.appearance, 'rating': appearance},
     ];
+
+    if (categories.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -161,27 +199,8 @@ class RatingsReviewsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildRecentReviews(RatingsReviewsStrings strings) {
-    final reviews = [
-      {
-        'name': strings.sampleReview1Name,
-        'text': strings.sampleReview1Text,
-        'date': strings.sampleReview1Date,
-        'rating': 5.0,
-      },
-      {
-        'name': strings.sampleReview2Name,
-        'text': strings.sampleReview2Text,
-        'date': strings.sampleReview2Date,
-        'rating': 4.5,
-      },
-      {
-        'name': strings.sampleReview3Name,
-        'text': strings.sampleReview3Text,
-        'date': strings.sampleReview3Date,
-        'rating': 5.0,
-      },
-    ];
+  Widget _buildRecentReviews(RatingsReviewsStrings strings, Map<String, dynamic>? ratings) {
+    final reviews = (ratings?['recent_reviews'] as List<dynamic>?) ?? [];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -191,12 +210,38 @@ class RatingsReviewsScreen extends StatelessWidget {
           style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
         ),
         const SizedBox(height: 16),
-        ...reviews.map((review) => _buildReviewCard(
-              review['name'] as String,
-              review['text'] as String,
-              review['date'] as String,
-              review['rating'] as double,
-            )),
+        if (reviews.isEmpty)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 40),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.rate_review_outlined,
+                    size: 48,
+                    color: AppColors.textSecondary.withValues(alpha: 0.3),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    LanguageProvider.of(context).isThai ? 'ยังไม่มีรีวิว' : 'No reviews yet',
+                    style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          ...reviews.map((review) {
+            final r = review as Map<String, dynamic>;
+            final createdAt = r['created_at'] as String? ?? '';
+            final dateStr = createdAt.length >= 10 ? createdAt.substring(0, 10) : createdAt;
+            return _buildReviewCard(
+              r['customer_name'] as String? ?? '-',
+              r['review_text'] as String? ?? '',
+              dateStr,
+              (r['overall_rating'] as num?)?.toDouble() ?? 0.0,
+            );
+          }),
       ],
     );
   }
@@ -252,11 +297,13 @@ class RatingsReviewsScreen extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Text(
-            text,
-            style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary, height: 1.4),
-          ),
+          if (text.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              text,
+              style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary, height: 1.4),
+            ),
+          ],
         ],
       ),
     );

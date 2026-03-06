@@ -1,57 +1,112 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
+import '../providers/chat_provider.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import 'chat_screen.dart';
 
-class ChatListScreen extends StatelessWidget {
+class ChatListScreen extends StatefulWidget {
   const ChatListScreen({super.key});
+
+  @override
+  State<ChatListScreen> createState() => _ChatListScreenState();
+}
+
+class _ChatListScreenState extends State<ChatListScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ChatProvider>().fetchConversations();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final s = ChatStrings(isThai: isThai);
+    final provider = context.watch<ChatProvider>();
 
     return Scaffold(
       backgroundColor: Colors.white,
       body: Column(
         children: [
           _buildHeader(isThai),
+          _buildSectionTitle(s.chatListTitle, s.chatListSubtitle),
+          const Divider(color: AppColors.border, height: 1),
           Expanded(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: [
-                _buildSectionTitle(s.chatListTitle, s.chatListSubtitle),
-                const Divider(color: AppColors.border, height: 1),
-                _buildChatItem(
-                  context,
-                  name: isThai ? 'สมชาย วีรชน' : 'Somchai Wirachon',
-                  message: isThai
-                      ? 'ได้รับครับ กำลังดำเนินการตามที่ขอ'
-                      : 'Received, proceeding as requested.',
-                  time: '14:33',
-                  isOnline: true,
-                  image: 'https://i.pravatar.cc/150?u=1',
-                  isThai: isThai,
-                ),
-                _buildChatItem(
-                  context,
-                  name: isThai ? 'นันทวัน ศรีสุข' : 'Nantawan Srisuk',
-                  message: isThai
-                      ? 'ขอบคุณครับ งานเสร็จเรียบร้อยแล้ว'
-                      : 'Thank you, the job is completed.',
-                  time: s.yesterday,
-                  isOnline: false,
-                  image: 'https://i.pravatar.cc/150?u=2',
-                  isThai: isThai,
-                ),
-              ],
-            ),
+            child: _buildConversationList(provider, isThai),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildConversationList(ChatProvider provider, bool isThai) {
+    if (provider.isLoading && provider.conversations.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (provider.conversations.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.chat_bubble_outline_rounded,
+              size: 64,
+              color: AppColors.textSecondary.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              isThai ? 'ยังไม่มีแชท' : 'No conversations yet',
+              style: GoogleFonts.inter(fontSize: 16, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => context.read<ChatProvider>().fetchConversations(),
+      child: ListView.builder(
+        padding: EdgeInsets.zero,
+        itemCount: provider.conversations.length,
+        itemBuilder: (context, index) {
+          final conv = provider.conversations[index];
+          return _buildChatItem(
+            context,
+            conversationId: conv['id'] as String? ?? '',
+            name: conv['participant_name'] as String? ?? (isThai ? 'ไม่ทราบชื่อ' : 'Unknown'),
+            message: conv['last_message'] as String? ?? '',
+            time: _formatTime(conv['last_message_at'] as String?),
+            avatarUrl: conv['participant_avatar'] as String?,
+            isThai: isThai,
+          );
+        },
+      ),
+    );
+  }
+
+  String _formatTime(String? dateTimeStr) {
+    if (dateTimeStr == null) return '';
+    try {
+      final dt = DateTime.parse(dateTimeStr);
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+      if (diff.inMinutes < 60) {
+        return '${diff.inMinutes}m';
+      } else if (diff.inHours < 24) {
+        return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      } else if (diff.inDays < 7) {
+        return '${diff.inDays}d';
+      }
+      return '${dt.day}/${dt.month}';
+    } catch (_) {
+      return '';
+    }
   }
 
   Widget _buildHeader(bool isThai) {
@@ -69,43 +124,19 @@ class ChatListScreen extends StatelessWidget {
               color: Colors.white.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(
-              Icons.shield_rounded,
-              color: Colors.white,
-              size: 24,
-            ),
+            child: const Icon(Icons.chat_rounded, color: Colors.white, size: 24),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'SecureGuard',
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                Text(
-                  isThai ? 'บริการรักษาความปลอดภัย' : 'Security Services',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: Colors.white.withValues(alpha: 0.9),
-                  ),
-                ),
-              ],
+            child: Text(
+              isThai ? 'แชท' : 'Chat',
+              style: GoogleFonts.inter(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
             ),
           ),
-          IconButton(
-            onPressed: () {},
-            icon: const Icon(
-              Icons.notifications_none_rounded,
-              color: Colors.white,
-            ),
-          ),
-          const Icon(Icons.person_outline_rounded, color: Colors.white),
         ],
       ),
     );
@@ -128,10 +159,7 @@ class ChatListScreen extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             subtitle,
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              color: AppColors.textSecondary,
-            ),
+            style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
           ),
         ],
       ),
@@ -140,11 +168,11 @@ class ChatListScreen extends StatelessWidget {
 
   Widget _buildChatItem(
     BuildContext context, {
+    required String conversationId,
     required String name,
     required String message,
     required String time,
-    required bool isOnline,
-    required String image,
+    required String? avatarUrl,
     required bool isThai,
   }) {
     return InkWell(
@@ -154,7 +182,7 @@ class ChatListScreen extends StatelessWidget {
           MaterialPageRoute(
             builder: (_) => ChatScreen(
               userName: name,
-              userRole: isThai ? 'เจ้าหน้าที่' : 'Security Guard',
+              userRole: isThai ? 'ลูกค้า' : 'Client',
             ),
           ),
         );
@@ -168,25 +196,20 @@ class ChatListScreen extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Stack(
-              children: [
-                CircleAvatar(radius: 28, backgroundImage: NetworkImage(image)),
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: isOnline
-                          ? AppColors.success
-                          : AppColors.textSecondary,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                  ),
-                ),
-              ],
+            CircleAvatar(
+              radius: 28,
+              backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+              backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+              child: avatarUrl == null
+                  ? Text(
+                      name.isNotEmpty ? name[0].toUpperCase() : '?',
+                      style: GoogleFonts.inter(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primary,
+                      ),
+                    )
+                  : null,
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -196,65 +219,34 @@ class ChatListScreen extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        name,
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      Text(
-                        time,
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
                       Expanded(
                         child: Text(
-                          message,
+                          name,
                           style: GoogleFonts.inter(
-                            fontSize: 14,
-                            color: AppColors.textSecondary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
+                      if (time.isNotEmpty)
+                        Text(
+                          time,
+                          style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary),
                         ),
-                        decoration: BoxDecoration(
-                          color:
-                              (isOnline ? AppColors.success : AppColors.border)
-                                  .withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          isOnline
-                              ? (isThai ? 'ออนไลน์' : 'Online')
-                              : (isThai ? 'ออฟไลน์' : 'Offline'),
-                          style: GoogleFonts.inter(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: isOnline
-                                ? AppColors.success
-                                : AppColors.textSecondary,
-                          ),
-                        ),
-                      ),
                     ],
                   ),
+                  if (message.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      message,
+                      style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ],
               ),
             ),

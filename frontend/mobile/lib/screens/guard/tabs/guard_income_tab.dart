@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/colors.dart';
+import '../../../providers/booking_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
 
@@ -15,6 +17,14 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
   int _activeSubTab = 0; // 0: Income, 1: Bonus, 2: Wallet
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<BookingProvider>().fetchEarnings();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = GuardIncomeStrings(isThai: isThai);
@@ -24,11 +34,7 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(
-          onPressed: () => Navigator.of(context).pop(),
-          icon: const Icon(Icons.arrow_back_ios_new_rounded),
-          color: AppColors.textPrimary,
-        ),
+        automaticallyImplyLeading: false,
         title: Text(
           strings.appBarTitle,
           style: GoogleFonts.inter(
@@ -42,14 +48,22 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
         children: [
           _buildSubTabNavigation(strings),
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: _buildActiveContent(strings),
-            ),
+            child: _buildActiveContent(strings, isThai),
           ),
         ],
       ),
     );
+  }
+
+  String _formatCurrency(num value) {
+    if (value >= 1000) {
+      final formatted = value.toStringAsFixed(0).replaceAllMapped(
+        RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+        (m) => '${m[1]},',
+      );
+      return '฿$formatted';
+    }
+    return '฿${value.toStringAsFixed(0)}';
   }
 
   Widget _buildSubTabNavigation(GuardIncomeStrings strings) {
@@ -96,55 +110,78 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
     );
   }
 
-  Widget _buildActiveContent(GuardIncomeStrings strings) {
+  Widget _buildActiveContent(GuardIncomeStrings strings, bool isThai) {
     switch (_activeSubTab) {
       case 0:
-        return _buildIncomeGoalsContent(strings);
+        return _buildIncomeContent(strings, isThai);
       case 1:
-        return _buildBonusPointsContent(strings);
+        return _buildComingSoon(isThai ? 'โบนัสและแต้ม' : 'Bonus & Points', isThai);
       case 2:
-        return _buildWalletContent(strings);
+        return _buildWalletContent(strings, isThai);
       default:
         return const SizedBox.shrink();
     }
   }
 
-  // --- Sub-Tab 1: Income & Goals ---
-  Widget _buildIncomeGoalsContent(GuardIncomeStrings strings) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSectionHeader(strings.trackIncome),
-        const SizedBox(height: 16),
-        _buildMonthlyGoalCard(strings),
-        const SizedBox(height: 24),
-        _buildWeeklyStatsCard(strings),
-        const SizedBox(height: 24),
-        _buildSectionHeader(strings.dailyIncome),
-        const SizedBox(height: 12),
-        _buildDailyIncomeItem(
-          strings.sampleDate1,
-          '฿1,450',
-          '2 งาน • 8 ชั่วโมง',
-          '฿181/ชม.',
+  Widget _buildIncomeContent(GuardIncomeStrings strings, bool isThai) {
+    final provider = context.watch<BookingProvider>();
+    final earnings = provider.earnings;
+
+    if (provider.isLoading && earnings == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final monthEarnings = (earnings?['month_earnings'] as num?) ?? 0;
+    final weekEarnings = (earnings?['week_earnings'] as num?) ?? 0;
+    final completedCount = (earnings?['completed_jobs_count'] as num?) ?? 0;
+    final dailyBreakdown = (earnings?['daily_breakdown'] as List<dynamic>?) ?? [];
+
+    final avgPerJob = completedCount > 0 ? monthEarnings / completedCount : 0;
+
+    return RefreshIndicator(
+      onRefresh: () => context.read<BookingProvider>().fetchEarnings(),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildSectionHeader(strings.trackIncome),
+            const SizedBox(height: 16),
+            _buildMonthlyCard(strings, monthEarnings, completedCount),
+            const SizedBox(height: 24),
+            _buildWeeklyStatsCard(strings, weekEarnings, avgPerJob, completedCount),
+            const SizedBox(height: 24),
+            _buildSectionHeader(strings.dailyIncome),
+            const SizedBox(height: 12),
+            if (dailyBreakdown.isEmpty)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    isThai ? 'ยังไม่มีข้อมูลรายวัน' : 'No daily data yet',
+                    style: GoogleFonts.inter(color: AppColors.textSecondary),
+                  ),
+                ),
+              )
+            else
+              ...dailyBreakdown.map((day) {
+                final date = day['date'] as String? ?? '';
+                final amount = (day['amount'] as num?) ?? 0;
+                final jobsCount = (day['jobs_count'] as num?) ?? 0;
+                return _buildDailyIncomeItem(
+                  date,
+                  _formatCurrency(amount),
+                  '$jobsCount ${isThai ? "งาน" : "jobs"}',
+                );
+              }),
+          ],
         ),
-        _buildDailyIncomeItem(
-          strings.sampleDate2,
-          '฿1,200',
-          '1 งาน • 8 ชั่วโมง',
-          '฿150/ชม.',
-        ),
-        _buildDailyIncomeItem(
-          strings.sampleDate3,
-          '฿960',
-          '1 งาน • 8 ชั่วโมง',
-          '฿120/ชม.',
-        ),
-      ],
+      ),
     );
   }
 
-  Widget _buildMonthlyGoalCard(GuardIncomeStrings strings) {
+  Widget _buildMonthlyCard(GuardIncomeStrings strings, num monthEarnings, num completedCount) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -155,91 +192,29 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                strings.monthlyGoal,
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.success.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  strings.onTrack,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.success,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                '฿18,750',
-                style: GoogleFonts.inter(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              Text(
-                '/ ฿25,000',
-                style: GoogleFonts.inter(color: AppColors.textSecondary),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: LinearProgressIndicator(
-              value: 18750 / 25000,
-              minHeight: 10,
-              backgroundColor: AppColors.border,
-              valueColor: const AlwaysStoppedAnimation<Color>(
-                AppColors.primary,
-              ),
+          Text(
+            strings.monthlyGoal,
+            style: GoogleFonts.inter(
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
             ),
           ),
           const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                strings.completedThisMonth,
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              Text(
-                strings.daysLeft,
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
+          Text(
+            _formatCurrency(monthEarnings),
+            style: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$completedCount ${strings.completedThisMonth}',
+            style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildWeeklyStatsCard(GuardIncomeStrings strings) {
+  Widget _buildWeeklyStatsCard(GuardIncomeStrings strings, num weekEarnings, num avgPerJob, num completedCount) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -249,22 +224,10 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
       child: Column(
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 strings.thisWeek,
                 style: GoogleFonts.inter(color: Colors.white70),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white10,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  '+16.3%',
-                  style: GoogleFonts.inter(color: Colors.white, fontSize: 12),
-                ),
               ),
             ],
           ),
@@ -272,7 +235,7 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
           Row(
             children: [
               Text(
-                '฿8,900',
+                _formatCurrency(weekEarnings),
                 style: GoogleFonts.inter(
                   fontSize: 32,
                   fontWeight: FontWeight.bold,
@@ -284,9 +247,9 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
           const SizedBox(height: 20),
           Row(
             children: [
-              _buildCompactStat(strings.avgPerJob, '฿742'),
+              _buildCompactStat(strings.avgPerJob, _formatCurrency(avgPerJob)),
               const SizedBox(width: 24),
-              _buildCompactStat(strings.jobCount, strings.sampleJobCount),
+              _buildCompactStat(strings.jobCount, '$completedCount'),
             ],
           ),
         ],
@@ -298,28 +261,16 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: GoogleFonts.inter(fontSize: 12, color: Colors.white60),
-        ),
+        Text(label, style: GoogleFonts.inter(fontSize: 12, color: Colors.white60)),
         Text(
           value,
-          style: GoogleFonts.inter(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
+          style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
         ),
       ],
     );
   }
 
-  Widget _buildDailyIncomeItem(
-    String date,
-    String amount,
-    String jobs,
-    String rate,
-  ) {
+  Widget _buildDailyIncomeItem(String date, String amount, String jobs) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -335,444 +286,120 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(date, style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
-              Text(
-                jobs,
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
+              Text(jobs, style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary)),
             ],
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                amount,
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.primary,
-                ),
-              ),
-              Text(
-                rate,
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Sub-Tab 2: Bonus & Points ---
-  Widget _buildBonusPointsContent(GuardIncomeStrings strings) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSectionHeader(strings.pointsProgress),
-        const SizedBox(height: 16),
-        _buildPointsProgressCard(strings),
-        const SizedBox(height: 24),
-        _buildSectionHeader(strings.performanceStats),
-        const SizedBox(height: 16),
-        _buildStatsGrid(strings),
-      ],
-    );
-  }
-
-  Widget _buildPointsProgressCard(GuardIncomeStrings strings) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: AppGradients.primaryGradient,
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                strings.pointsAccumulated,
-                style: GoogleFonts.inter(color: Colors.white),
-              ),
-              Text(
-                '120/200 แต้ม',
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: const LinearProgressIndicator(
-              value: 120 / 200,
-              minHeight: 12,
-              backgroundColor: Colors.white24,
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-            ),
-          ),
-          const SizedBox(height: 16),
           Text(
-            strings.nearBonus,
-            style: GoogleFonts.inter(
-              color: Colors.white,
-              fontWeight: FontWeight.w500,
-            ),
+            amount,
+            style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AppColors.primary),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStatsGrid(GuardIncomeStrings strings) {
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 16,
-      crossAxisSpacing: 16,
-      childAspectRatio: 1.3,
-      children: [
-        _buildPerformanceStat(
-          strings.performance,
-          '85%',
-          Icons.speed_rounded,
-          AppColors.warning,
-        ),
-        _buildPerformanceStat(
-          strings.completedJobs,
-          '12 งาน',
-          Icons.check_circle_rounded,
-          AppColors.success,
-        ),
-        _buildPerformanceStat(
-          strings.acceptRate,
-          '92%',
-          Icons.add_task_rounded,
-          AppColors.info,
-        ),
-        _buildPerformanceStat(
-          strings.workHours,
-          '48 ชม.',
-          Icons.timer_rounded,
-          AppColors.primary,
-        ),
-      ],
-    );
-  }
+  Widget _buildWalletContent(GuardIncomeStrings strings, bool isThai) {
+    final earnings = context.watch<BookingProvider>().earnings;
+    final totalEarned = (earnings?['total_earned'] as num?) ?? 0;
 
-  Widget _buildPerformanceStat(
-    String label,
-    String value,
-    IconData icon,
-    Color color,
-  ) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Icon(icon, color: color, size: 24),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: GoogleFonts.inter(
-                  fontSize: 10,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              Text(
-                value,
-                style: GoogleFonts.inter(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Sub-Tab 3: Wallet ---
-  Widget _buildWalletContent(GuardIncomeStrings strings) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSectionHeader(strings.walletTitle),
-        const SizedBox(height: 16),
-        _buildBalanceCard(strings),
-        const SizedBox(height: 24),
-        _buildWithdrawalForm(strings),
-        const SizedBox(height: 24),
-        _buildSectionHeader(strings.withdrawHistory),
-        const SizedBox(height: 12),
-        _buildWithdrawalHistoryItem(
-          strings: strings,
-          date: strings.sampleDate2,
-          amount: '฿2,000',
-          bank: strings.sampleBankInfo,
-          success: true,
-        ),
-        _buildWithdrawalHistoryItem(
-          strings: strings,
-          date: strings.sampleDate3, // Approx
-          amount: '฿1,500',
-          bank: strings.sampleBankInfo,
-          success: true,
-        ),
-        _buildWithdrawalHistoryItem(
-          strings: strings,
-          date:
-              '08 Dec', // I should have added sampleDate4 but let's use a generic for now or stick to what I added
-          amount: '฿3,000',
-          bank: strings.sampleBankInfo,
-          success: true,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBalanceCard(GuardIncomeStrings strings) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: AppColors.primary,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withValues(alpha: 0.3),
-            blurRadius: 15,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            strings.withdrawable,
-            style: GoogleFonts.inter(color: Colors.white70),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '฿5,420',
-            style: GoogleFonts.inter(
-              fontSize: 36,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(height: 20),
+          _buildSectionHeader(strings.walletTitle),
+          const SizedBox(height: 16),
           Container(
-            padding: const EdgeInsets.all(12),
+            width: double.infinity,
+            padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline, color: Colors.white, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        strings.pendingApproval,
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                      Text(
-                        strings.withdrawAfter,
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          color: Colors.white70,
-                        ),
-                      ),
-                    ],
-                  ),
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.3),
+                  blurRadius: 15,
+                  offset: const Offset(0, 8),
                 ),
               ],
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWithdrawalForm(GuardIncomeStrings strings) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            strings.withdrawTitle,
-            style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            strings.withdrawMin,
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            decoration: InputDecoration(
-              hintText: '0',
-              suffixText: 'บาท',
-              filled: true,
-              fillColor: AppColors.surface,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-            ),
-            keyboardType: TextInputType.number,
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              const Icon(
-                Icons.account_balance_rounded,
-                color: AppColors.primary,
-              ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    strings.sampleBankInfo,
-                    style: GoogleFonts.inter(fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    strings.accountMustMatch,
-                    style: GoogleFonts.inter(
-                      fontSize: 11,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () {},
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              minimumSize: const Size(double.infinity, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-            child: Text(strings.withdrawBtn),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            strings.withdrawFreeInfo,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.inter(
-              fontSize: 11,
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWithdrawalHistoryItem({
-    required GuardIncomeStrings strings,
-    required String date,
-    required String amount,
-    required String bank,
-    required bool success,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  amount,
+                  isThai ? 'รายได้รวมทั้งหมด' : 'Total Earned',
+                  style: GoogleFonts.inter(color: Colors.white70),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _formatCurrency(totalEarned),
                   style: GoogleFonts.inter(
-                    fontSize: 16,
+                    fontSize: 36,
                     fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Text(
-                  date,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-                Text(
-                  bank,
-                  style: GoogleFonts.inter(
-                    fontSize: 11,
-                    color: AppColors.textSecondary,
+                    color: Colors.white,
                   ),
                 ),
               ],
             ),
           ),
-          Chip(
-            label: Text(
-              success ? strings.success : strings.failed,
-              style: GoogleFonts.inter(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-              ),
+          const SizedBox(height: 24),
+          _buildComingSoonCard(
+            isThai ? 'ระบบถอนเงิน' : 'Withdrawal System',
+            isThai ? 'ฟีเจอร์ถอนเงินจะเปิดให้บริการเร็วๆ นี้' : 'Withdrawal feature coming soon',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComingSoon(String title, bool isThai) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.construction_rounded,
+            size: 64,
+            color: AppColors.textSecondary.withValues(alpha: 0.5),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: GoogleFonts.inter(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
             ),
-            backgroundColor: success
-                ? AppColors.success.withValues(alpha: 0.1)
-                : AppColors.danger.withValues(alpha: 0.1),
-            side: BorderSide.none,
-            labelStyle: TextStyle(
-              color: success ? AppColors.success : AppColors.danger,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isThai ? 'เร็วๆ นี้' : 'Coming Soon',
+            style: GoogleFonts.inter(fontSize: 16, color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComingSoonCard(String title, String subtitle) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.construction_rounded, color: AppColors.warning, size: 32),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
+                Text(subtitle, style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary)),
+              ],
             ),
           ),
         ],

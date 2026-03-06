@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 
@@ -12,8 +14,8 @@ class ProfileSettingsScreen extends StatefulWidget {
 }
 
 class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
-  final _nameController = TextEditingController(text: 'สมชาย รักษาดี');
-  final _phoneController = TextEditingController(text: '089-123-4567');
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
   final _addressController = TextEditingController();
   final _emergencyNameController = TextEditingController();
@@ -23,6 +25,18 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   bool _pushNotif = true;
   bool _smsNotif = false;
   bool _jobAlerts = true;
+  bool _initialized = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_initialized) {
+      final auth = context.read<AuthProvider>();
+      _nameController.text = auth.fullName ?? '';
+      _phoneController.text = auth.phone ?? '';
+      _initialized = true;
+    }
+  }
 
   @override
   void dispose() {
@@ -77,6 +91,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   Widget _buildProfilePhotoSection(ProfileSettingsStrings strings) {
+    final avatarUrl = context.watch<AuthProvider>().avatarUrl;
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -93,10 +108,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                 height: 96,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.primary.withValues(alpha: 0.1),
+                  color: avatarUrl == null ? AppColors.primary.withValues(alpha: 0.1) : null,
                   border: Border.all(color: AppColors.primary.withValues(alpha: 0.3), width: 3),
+                  image: avatarUrl != null
+                      ? DecorationImage(image: NetworkImage(avatarUrl), fit: BoxFit.cover)
+                      : null,
                 ),
-                child: const Icon(Icons.person, size: 48, color: AppColors.primary),
+                child: avatarUrl == null
+                    ? const Icon(Icons.person, size: 48, color: AppColors.primary)
+                    : null,
               ),
               Positioned(
                 bottom: 0,

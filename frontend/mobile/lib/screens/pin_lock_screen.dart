@@ -6,8 +6,7 @@ import '../providers/auth_provider.dart';
 import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
-import 'guard/guard_dashboard_screen.dart';
-import 'hirer/hirer_dashboard_screen.dart';
+import 'role_selection_screen.dart';
 
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
@@ -90,13 +89,10 @@ class _PinLockScreenState extends State<PinLockScreen> {
   }
 
   void _navigateToApp() {
-    final role = context.read<AuthProvider>().role;
-    final Widget dashboard = role == 'guard'
-        ? const GuardDashboardScreen()
-        : const HirerDashboardScreen();
+    final phone = context.read<AuthProvider>().phone;
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (_) => dashboard),
+      MaterialPageRoute(builder: (_) => RoleSelectionScreen(phone: phone)),
       (route) => false,
     );
   }

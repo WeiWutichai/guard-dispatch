@@ -88,19 +88,6 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// Login as guard with credentials.
-  ///
-  /// TODO: When backend is ready, call actual API and store tokens.
-  Future<bool> loginGuard(String guardId, String password) async {
-    final success = await AuthService.loginGuard(guardId, password);
-    if (success) {
-      _status = AuthStatus.authenticated;
-      _role = 'guard';
-      notifyListeners();
-    }
-    return success;
-  }
-
   /// Request OTP from the backend for phone verification.
   ///
   /// Calls POST /auth/otp/request with the phone number.

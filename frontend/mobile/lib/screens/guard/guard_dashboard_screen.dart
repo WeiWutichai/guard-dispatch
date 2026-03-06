@@ -31,7 +31,9 @@ class _GuardDashboardScreenState extends State<GuardDashboardScreen> {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = GuardDashboardStrings(isThai: isThai);
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
       body: IndexedStack(index: _currentIndex, children: _tabs),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
@@ -92,6 +94,7 @@ class _GuardDashboardScreenState extends State<GuardDashboardScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 }

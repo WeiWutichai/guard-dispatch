@@ -30,6 +30,16 @@ class RoleSelectionScreen extends StatefulWidget {
 
 class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   Future<void> _onRoleTap(String role, Widget dashboard) async {
+    // If user is already authenticated (approved), go directly to dashboard.
+    final auth = context.read<AuthProvider>();
+    if (auth.status == AuthStatus.authenticated) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => dashboard),
+      );
+      return;
+    }
+
     // Check if already registered (approved) → go to dashboard directly.
     final results = await Future.wait([
       AuthService.isPendingApproval(),

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
+import '../../providers/booking_provider.dart';
 
 class WorkHistoryScreen extends StatefulWidget {
   const WorkHistoryScreen({super.key});
@@ -15,9 +17,38 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
   int _selectedTabIndex = 0;
 
   @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      if (!mounted) return;
+      context.read<BookingProvider>().fetchWorkHistory();
+    });
+  }
+
+  /// Map tab index to API status filter.
+  String? _statusForTab(int index) {
+    switch (index) {
+      case 1:
+        return 'ongoing'; // assigned, en_route, arrived
+      case 2:
+        return 'completed';
+      case 3:
+        return 'cancelled';
+      default:
+        return null; // all
+    }
+  }
+
+  void _onTabChanged(int index) {
+    setState(() => _selectedTabIndex = index);
+    context.read<BookingProvider>().fetchWorkHistory(status: _statusForTab(index));
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = WorkHistoryStrings(isThai: isThai);
+    final provider = context.watch<BookingProvider>();
 
     final tabs = [
       isThai ? 'ทั้งหมด' : 'All',
@@ -65,7 +96,7 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
                   final isSelected = _selectedTabIndex == index;
                   return Expanded(
                     child: GestureDetector(
-                      onTap: () => setState(() => _selectedTabIndex = index),
+                      onTap: () => _onTabChanged(index),
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         decoration: BoxDecoration(
@@ -93,82 +124,41 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
             ),
           ),
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildSummaryCards(strings),
-                  const SizedBox(height: 24),
-                  Text(
-                    strings.jobHistory,
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
+            child: provider.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : SingleChildScrollView(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildSummaryCards(strings, provider.workHistory),
+                        const SizedBox(height: 24),
+                        Text(
+                          strings.jobHistory,
+                          style: GoogleFonts.inter(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        ..._buildJobsList(strings, provider.workHistory),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  ..._buildFilteredJobs(strings),
-                ],
-              ),
-            ),
           ),
         ],
       ),
     );
   }
 
-  List<Widget> _buildFilteredJobs(WorkHistoryStrings strings) {
-    // Dummy data with type
-    final allJobs = [
-      _JobData(
-        client: strings.sampleJob1Client,
-        location: strings.sampleJob1Location,
-        date: strings.sampleJob1Date,
-        duration: strings.sampleJob1Duration,
-        earning: '฿800',
-        rating: 5.0,
-        statusLabel: strings.completed,
-        type: 2, // Completed
-      ),
-      _JobData(
-        client: strings.sampleJob2Client,
-        location: strings.sampleJob2Location,
-        date: strings.sampleJob2Date,
-        duration: strings.sampleJob2Duration,
-        earning: '฿1,600',
-        rating: 4.5,
-        statusLabel: strings.completed,
-        type: 2, // Completed
-      ),
-      _JobData(
-        client: strings.sampleJob3Client,
-        location: strings.sampleJob3Location,
-        date: strings.sampleJob3Date,
-        duration: strings.sampleJob3Duration,
-        earning: '฿1,200',
-        rating: 5.0,
-        statusLabel: strings.completed,
-        type: 2, // Completed
-      ),
-      _JobData(
-        client: strings.sampleJob4Client,
-        location: strings.sampleJob4Location,
-        date: strings.sampleJob4Date,
-        duration: strings.sampleJob4Duration,
-        earning: '฿1,000',
-        rating: 4.0,
-        statusLabel: strings.completed,
-        type: 2, // Completed
-      ),
-    ];
+  List<Widget> _buildJobsList(
+    WorkHistoryStrings strings,
+    Map<String, dynamic>? workHistory,
+  ) {
+    final jobs = (workHistory?['jobs'] as List<dynamic>?) ?? [];
 
-    final filtered = _selectedTabIndex == 0
-        ? allJobs
-        : allJobs.where((job) => job.type == _selectedTabIndex).toList();
-
-    if (filtered.isEmpty) {
+    if (jobs.isEmpty) {
       return [
         Center(
           child: Padding(
@@ -197,39 +187,99 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
       ];
     }
 
-    return filtered.map((job) {
+    return jobs.map<Widget>((job) {
+      final j = job as Map<String, dynamic>;
+      final status = j['assignment_status'] as String? ?? '';
+      final statusLabel = _localizedStatus(status);
+      final statusColor = _statusColor(status);
+
+      final durationMin = (j['duration_minutes'] as num?)?.toInt();
+      final durationStr = durationMin != null
+          ? '${(durationMin / 60).floor()} ${LanguageProvider.of(context).isThai ? "ชม." : "hrs"} ${durationMin % 60} ${LanguageProvider.of(context).isThai ? "นาที" : "min"}'
+          : '-';
+
+      final price = j['offered_price'] as num?;
+      final priceStr = price != null ? '฿${price.toStringAsFixed(0)}' : '-';
+
+      final rating = (j['rating'] as num?)?.toDouble();
+
+      final createdAt = j['created_at'] as String? ?? '';
+      final dateStr = createdAt.length >= 10 ? createdAt.substring(0, 10) : createdAt;
+
       return _buildJobCard(
-        client: job.client,
-        location: job.location,
-        date: job.date,
-        duration: job.duration,
-        earning: job.earning,
-        rating: job.rating,
-        statusLabel: job.statusLabel,
+        client: j['customer_name'] as String? ?? '-',
+        location: j['address'] as String? ?? '-',
+        date: dateStr,
+        duration: durationStr,
+        earning: priceStr,
+        rating: rating,
+        statusLabel: statusLabel,
+        statusColor: statusColor,
       );
     }).toList();
   }
 
-  Widget _buildSummaryCards(WorkHistoryStrings strings) {
+  String _localizedStatus(String status) {
+    final isThai = LanguageProvider.of(context).isThai;
+    switch (status) {
+      case 'assigned':
+        return isThai ? 'ได้รับมอบหมาย' : 'Assigned';
+      case 'en_route':
+        return isThai ? 'กำลังเดินทาง' : 'En Route';
+      case 'arrived':
+        return isThai ? 'ถึงแล้ว' : 'Arrived';
+      case 'completed':
+        return isThai ? 'เสร็จสิ้น' : 'Completed';
+      case 'cancelled':
+        return isThai ? 'ยกเลิก' : 'Cancelled';
+      default:
+        return status;
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'completed':
+        return AppColors.success;
+      case 'cancelled':
+        return AppColors.danger;
+      case 'en_route':
+      case 'arrived':
+        return AppColors.info;
+      case 'assigned':
+        return Colors.amber.shade700;
+      default:
+        return AppColors.textSecondary;
+    }
+  }
+
+  Widget _buildSummaryCards(
+    WorkHistoryStrings strings,
+    Map<String, dynamic>? workHistory,
+  ) {
+    final totalJobs = (workHistory?['total_jobs'] as num?)?.toInt() ?? 0;
+    final totalHours = (workHistory?['total_hours'] as num?)?.toDouble() ?? 0;
+    final avgRating = (workHistory?['avg_rating'] as num?)?.toDouble();
+
     return Row(
       children: [
         _buildSummaryItem(
           strings.totalJobs,
-          '156',
+          '$totalJobs',
           Icons.work_outline_rounded,
           AppColors.info,
         ),
         const SizedBox(width: 12),
         _buildSummaryItem(
           strings.totalHours,
-          '624',
+          totalHours.toStringAsFixed(0),
           Icons.access_time_rounded,
           AppColors.primary,
         ),
         const SizedBox(width: 12),
         _buildSummaryItem(
           strings.avgRating,
-          '4.8',
+          avgRating != null ? avgRating.toStringAsFixed(1) : '-',
           Icons.star_rounded,
           Colors.amber,
         ),
@@ -284,8 +334,9 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
     required String date,
     required String duration,
     required String earning,
-    required double rating,
+    required double? rating,
     required String statusLabel,
+    required Color statusColor,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -356,7 +407,7 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
                   vertical: 4,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.success.withValues(alpha: 0.1),
+                  color: statusColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -364,7 +415,7 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
                   style: GoogleFonts.inter(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.success,
+                    color: statusColor,
                   ),
                 ),
               ),
@@ -378,20 +429,23 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
             children: [
               _buildJobDetail(Icons.calendar_today_outlined, date),
               _buildJobDetail(Icons.access_time_rounded, duration),
-              Row(
-                children: [
-                  const Icon(Icons.star_rounded, color: Colors.amber, size: 16),
-                  const SizedBox(width: 4),
-                  Text(
-                    rating.toStringAsFixed(1),
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+              if (rating != null)
+                Row(
+                  children: [
+                    const Icon(Icons.star_rounded, color: Colors.amber, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      rating.toStringAsFixed(1),
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                )
+              else
+                const SizedBox.shrink(),
               Text(
                 earning,
                 style: GoogleFonts.inter(
@@ -422,26 +476,4 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
       ],
     );
   }
-}
-
-class _JobData {
-  final String client;
-  final String location;
-  final String date;
-  final String duration;
-  final String earning;
-  final double rating;
-  final String statusLabel;
-  final int type; // 1: In progress, 2: Completed, 3: Cancelled
-
-  _JobData({
-    required this.client,
-    required this.location,
-    required this.date,
-    required this.duration,
-    required this.earning,
-    required this.rating,
-    required this.statusLabel,
-    required this.type,
-  });
 }

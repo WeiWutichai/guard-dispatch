@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/colors.dart';
+import '../../../providers/booking_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
-import '../../chat_screen.dart';
-import '../../call_screen.dart';
 
 class GuardJobsTab extends StatefulWidget {
   const GuardJobsTab({super.key});
@@ -14,6 +14,14 @@ class GuardJobsTab extends StatefulWidget {
 }
 
 class _GuardJobsTabState extends State<GuardJobsTab> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<BookingProvider>().fetchJobs();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
@@ -26,11 +34,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         appBar: AppBar(
           backgroundColor: Colors.white,
           elevation: 0,
-          leading: IconButton(
-            onPressed: () => Navigator.of(context).pop(),
-            icon: const Icon(Icons.arrow_back_ios_new_rounded),
-            color: AppColors.textPrimary,
-          ),
+          automaticallyImplyLeading: false,
           title: Text(
             strings.appBarTitle,
             style: GoogleFonts.inter(
@@ -61,74 +65,118 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         body: TabBarView(
           children: [
             _buildCurrentJobs(strings, isThai),
-            _buildCompletedJobs(strings),
+            _buildCompletedJobs(strings, isThai),
           ],
         ),
       ),
     );
   }
 
+  String _formatCurrency(dynamic value) {
+    if (value == null) return '-';
+    final num amount = value is num ? value : 0;
+    if (amount >= 1000) {
+      final formatted = amount.toStringAsFixed(0).replaceAllMapped(
+        RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+        (m) => '${m[1]},',
+      );
+      return '฿$formatted';
+    }
+    return '฿${amount.toStringAsFixed(0)}';
+  }
+
   Widget _buildCurrentJobs(GuardJobsStrings strings, bool isThai) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: _buildJobCard(
-        strings: strings,
-        isThai: isThai,
-        status: strings.statusWorking,
-        time: '14:00 - 18:00',
-        client: strings.sampleClient,
-        location: strings.sampleLocation,
-        reward: '฿800',
-        bonus: '฿100',
-        description: strings.jobDesc,
-        details: [
-          {'title': strings.detailPet, 'content': strings.detailPetContent},
-          {
-            'title': strings.detailPlants,
-            'content': strings.detailPlantsContent,
-          },
-          {
-            'title': strings.detailUtilities,
-            'content': strings.detailUtilitiesContent,
-          },
-        ],
-        equipment: strings.sampleEquipment,
+    final provider = context.watch<BookingProvider>();
+    final jobs = provider.currentJobs;
+
+    if (provider.isLoading && jobs.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (jobs.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.assignment_outlined, size: 64, color: AppColors.textSecondary.withValues(alpha: 0.5)),
+            const SizedBox(height: 16),
+            Text(
+              isThai ? 'ยังไม่มีงานปัจจุบัน' : 'No current jobs',
+              style: GoogleFonts.inter(fontSize: 16, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => context.read<BookingProvider>().fetchJobs(),
+      child: ListView.builder(
+        padding: const EdgeInsets.all(20),
+        itemCount: jobs.length,
+        itemBuilder: (context, index) => Padding(
+          padding: EdgeInsets.only(bottom: index < jobs.length - 1 ? 16 : 0),
+          child: _buildJobCard(jobs[index], strings, isThai),
+        ),
       ),
     );
   }
 
-  Widget _buildCompletedJobs(GuardJobsStrings strings) {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        _buildCompletedJobItem(
-          strings.sampleClient,
-          '${strings.sampleDate2} 2023',
-          '฿1,200',
+  Widget _buildCompletedJobs(GuardJobsStrings strings, bool isThai) {
+    final provider = context.watch<BookingProvider>();
+    final jobs = provider.completedJobs;
+
+    if (provider.isLoading && jobs.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (jobs.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.check_circle_outline, size: 64, color: AppColors.textSecondary.withValues(alpha: 0.5)),
+            const SizedBox(height: 16),
+            Text(
+              isThai ? 'ยังไม่มีงานที่เสร็จสิ้น' : 'No completed jobs yet',
+              style: GoogleFonts.inter(fontSize: 16, color: AppColors.textSecondary),
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
-        _buildCompletedJobItem(
-          'คุณวิชัย นามสมมุติ',
-          '${strings.sampleDate3} 2023',
-          '฿960',
-        ),
-      ],
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => context.read<BookingProvider>().fetchJobs(),
+      child: ListView.builder(
+        padding: const EdgeInsets.all(20),
+        itemCount: jobs.length,
+        itemBuilder: (context, index) {
+          final job = jobs[index];
+          return Padding(
+            padding: EdgeInsets.only(bottom: index < jobs.length - 1 ? 12 : 0),
+            child: _buildCompletedJobItem(
+              job['customer_name'] as String? ?? '-',
+              job['completed_at'] as String? ?? '',
+              _formatCurrency(job['offered_price']),
+            ),
+          );
+        },
+      ),
     );
   }
 
-  Widget _buildJobCard({
-    required GuardJobsStrings strings,
-    required bool isThai,
-    required String status,
-    required String time,
-    required String client,
-    required String location,
-    required String reward,
-    required String bonus,
-    required String description,
-    required List<Map<String, String>> details,
-    required String equipment,
-  }) {
+  Widget _buildJobCard(Map<String, dynamic> job, GuardJobsStrings strings, bool isThai) {
+    final customerName = job['customer_name'] as String? ?? '-';
+    final address = job['address'] as String? ?? '-';
+    final price = _formatCurrency(job['offered_price']);
+    final description = job['description'] as String? ?? '';
+    final specialInstructions = job['special_instructions'] as String?;
+    final assignmentStatus = job['assignment_status'] as String? ?? 'assigned';
+
+    final statusLabel = _getStatusLabel(assignmentStatus, isThai);
+    final statusColor = _getStatusColor(assignmentStatus);
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -143,42 +191,39 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: AppColors.success.withValues(alpha: 0.1),
+                  color: statusColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.circle, color: AppColors.success, size: 8),
+                    Icon(Icons.circle, color: statusColor, size: 8),
                     const SizedBox(width: 8),
                     Text(
-                      status,
+                      statusLabel,
                       style: GoogleFonts.inter(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: AppColors.success,
+                        color: statusColor,
                       ),
                     ),
                   ],
                 ),
               ),
               Text(
-                time,
+                price,
                 style: GoogleFonts.inter(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
           Text(
-            client,
+            customerName,
             style: GoogleFonts.inter(
               fontSize: 20,
               fontWeight: FontWeight.bold,
@@ -188,242 +233,112 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
           const SizedBox(height: 4),
           Row(
             children: [
-              const Icon(
-                Icons.location_on_rounded,
-                color: AppColors.primary,
-                size: 16,
-              ),
+              const Icon(Icons.location_on_rounded, color: AppColors.primary, size: 16),
               const SizedBox(width: 4),
-              Text(
-                location,
-                style: GoogleFonts.inter(
-                  fontSize: 14,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _buildRewardBadge(reward),
-              const SizedBox(width: 12),
-              _buildBonusBadge(strings, bonus),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Divider(color: AppColors.border),
-          const SizedBox(height: 16),
-          Text(
-            description,
-            style: GoogleFonts.inter(
-              fontSize: 15,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 20),
-          Text(
-            strings.additionalDetails,
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 12),
-          ...details.map(
-            (detail) => _buildDetailItem(detail['title']!, detail['content']!),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            strings.securityEquipment,
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          Text(
-            equipment,
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 24),
-          _buildCheckInCard(strings),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: _buildActionButton(
-                  Icons.call_rounded,
-                  strings.callClient,
-                  AppColors.primary,
-                  () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            CallScreen(userName: strings.sampleClient),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildActionButton(
-                  Icons.chat_bubble_rounded,
-                  strings.chat,
-                  AppColors.info,
-                  () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          userName: strings.sampleClient,
-                          userRole: isThai ? 'ลูกค้า' : 'Client',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRewardBadge(String amount) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        amount,
-        style: GoogleFonts.inter(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          color: AppColors.primary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBonusBadge(GuardJobsStrings strings, String amount) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.warning.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        '💰 ${strings.sampleBonusLabel} $amount',
-        style: GoogleFonts.inter(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: AppColors.warning,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDetailItem(String title, String content) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          Text(
-            content,
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCheckInCard(GuardJobsStrings strings) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.location_searching_rounded,
-                color: AppColors.primary,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  strings.checkInRange,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
+                  address,
+                  style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: () {},
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              minimumSize: const Size(double.infinity, 45),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+          if (description.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Divider(color: AppColors.border),
+            const SizedBox(height: 12),
+            Text(
+              description,
+              style: GoogleFonts.inter(fontSize: 15, color: AppColors.textPrimary),
+            ),
+          ],
+          if (specialInstructions != null && specialInstructions.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              isThai ? 'คำสั่งพิเศษ' : 'Special Instructions',
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
               ),
             ),
-            child: Text(strings.checkIn),
-          ),
+            const SizedBox(height: 4),
+            Text(
+              specialInstructions,
+              style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+            ),
+          ],
+          if (assignmentStatus == 'assigned' || assignmentStatus == 'en_route') ...[
+            const SizedBox(height: 20),
+            _buildStatusActionButton(job, isThai),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildActionButton(
-    IconData icon,
-    String label,
-    Color color,
-    VoidCallback onTap,
-  ) {
-    return OutlinedButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon, size: 18),
-      label: Text(label),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: color,
-        side: BorderSide(color: color.withValues(alpha: 0.3)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        padding: const EdgeInsets.symmetric(vertical: 12),
+  Widget _buildStatusActionButton(Map<String, dynamic> job, bool isThai) {
+    final assignmentId = job['assignment_id'] as String? ?? '';
+    final status = job['assignment_status'] as String? ?? 'assigned';
+
+    String buttonLabel;
+    String nextStatus;
+    if (status == 'assigned') {
+      buttonLabel = isThai ? 'เริ่มเดินทาง' : 'Start Route';
+      nextStatus = 'en_route';
+    } else {
+      buttonLabel = isThai ? 'ถึงจุดหมาย' : 'Arrived';
+      nextStatus = 'arrived';
+    }
+
+    return ElevatedButton(
+      onPressed: () {
+        context.read<BookingProvider>().updateAssignmentStatus(assignmentId, nextStatus);
+      },
+      style: ElevatedButton.styleFrom(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        minimumSize: const Size(double.infinity, 48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      child: Text(
+        buttonLabel,
+        style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold),
       ),
     );
+  }
+
+  String _getStatusLabel(String status, bool isThai) {
+    switch (status) {
+      case 'assigned':
+        return isThai ? 'ได้รับมอบหมาย' : 'Assigned';
+      case 'en_route':
+        return isThai ? 'กำลังเดินทาง' : 'En Route';
+      case 'arrived':
+        return isThai ? 'ถึงจุดหมาย' : 'Arrived';
+      case 'completed':
+        return isThai ? 'เสร็จสิ้น' : 'Completed';
+      default:
+        return status;
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'assigned':
+        return AppColors.info;
+      case 'en_route':
+        return AppColors.warning;
+      case 'arrived':
+        return AppColors.success;
+      case 'completed':
+        return AppColors.textSecondary;
+      default:
+        return AppColors.textSecondary;
+    }
   }
 
   Widget _buildCompletedJobItem(String client, String date, String amount) {
@@ -437,28 +352,22 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                client,
-                style: GoogleFonts.inter(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                date,
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(client, style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
+                if (date.isNotEmpty)
+                  Text(
+                    date,
+                    style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary),
+                  ),
+              ],
+            ),
           ),
           Text(
             amount,
-            style: GoogleFonts.inter(
-              fontWeight: FontWeight.bold,
-              color: AppColors.primary,
-            ),
+            style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AppColors.primary),
           ),
         ],
       ),

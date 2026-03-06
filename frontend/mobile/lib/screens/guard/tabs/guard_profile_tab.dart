@@ -5,8 +5,6 @@ import '../../../theme/colors.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
-import '../guard_registration_screen.dart';
-import '../application_status_screen.dart';
 import '../profile_settings_screen.dart';
 import '../ratings_reviews_screen.dart';
 import '../work_history_screen.dart';
@@ -45,25 +43,6 @@ class GuardProfileTab extends StatelessWidget {
 
             // Profile card
             _buildProfileCard(context, strings),
-            const SizedBox(height: 24),
-
-            // Account & Registration
-            _buildSettingsGroup(context, [
-              _SettingsItem(
-                icon: Icons.description_rounded,
-                iconBg: const Color(0xFF5856D6),
-                title: strings.menuAppStatus,
-                onTap: () =>
-                    _navigateTo(context, const ApplicationStatusScreen()),
-              ),
-              _SettingsItem(
-                icon: Icons.app_registration_rounded,
-                iconBg: const Color(0xFFFF9500),
-                title: isThai ? 'สมัครเจ้าหน้าที่' : 'Register as Guard',
-                onTap: () =>
-                    _navigateTo(context, const GuardRegistrationScreen()),
-              ),
-            ]),
             const SizedBox(height: 24),
 
             // Settings & Reviews
@@ -282,7 +261,9 @@ class GuardProfileTab extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: GestureDetector(
-        onTap: () {
+        onTap: () async {
+          await context.read<AuthProvider>().logout();
+          if (!context.mounted) return;
           Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute(builder: (_) => const PhoneInputScreen()),

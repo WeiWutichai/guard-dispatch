@@ -1,28 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/auth_service.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 
-class ApplicationStatusScreen extends StatelessWidget {
+class ApplicationStatusScreen extends StatefulWidget {
   const ApplicationStatusScreen({super.key});
+
+  @override
+  State<ApplicationStatusScreen> createState() => _ApplicationStatusScreenState();
+}
+
+class _ApplicationStatusScreenState extends State<ApplicationStatusScreen> {
+  Map<String, dynamic>? _profile;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    final profile = await AuthService.getPendingProfile();
+    if (mounted) setState(() { _profile = profile; _loading = false; });
+  }
 
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = AppStatusStrings(isThai: isThai);
+    final auth = context.watch<AuthProvider>();
 
-    // Sample data — replace with actual registration data from backend
-    final status = 'pending'; // pending, approved, rejected
-    final submittedDate = '13 ${isThai ? "กุมภาพันธ์ 2569" : "February 2026"}, 12:07${isThai ? " น." : ""}';
-    final sampleName = isThai ? 'สมชาย รักษาดี' : 'Somchai Raksadee';
-    final sampleGender = isThai ? 'ชาย' : 'Male';
-    final sampleDob = '15/03/1990';
-    final sampleExp = '3';
-    final sampleWorkplace = isThai ? 'บริษัท เอส.ที.การ์ด จำกัด' : 'S.T. Guard Co., Ltd.';
-    final sampleBank = isThai ? 'ธนาคารกรุงเทพ' : 'Bangkok Bank';
-    final sampleAccountNum = '***-*-*4567';
-    final sampleAccountName = sampleName;
+    final p = _profile ?? {};
+    final name = auth.fullName ?? p['full_name'] as String? ?? '-';
+    final gender = p['gender'] as String? ?? '-';
+    final dob = p['date_of_birth'] as String? ?? '-';
+    final exp = p['years_of_experience'] as String? ?? '-';
+    final workplace = p['previous_workplace'] as String? ?? '-';
+    final bank = p['bank_name'] as String? ?? '-';
+    final accountNum = p['account_number'] as String? ?? '-';
+    final accountName = p['account_name'] as String? ?? name;
+
+    // Derive status from AuthProvider — approved users are authenticated
+    final String status;
+    if (auth.isAuthenticated) {
+      status = 'approved';
+    } else if (auth.isPendingApproval) {
+      status = 'pending';
+    } else {
+      status = 'pending';
+    }
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -39,25 +70,27 @@ class ApplicationStatusScreen extends StatelessWidget {
         ),
         centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            _buildStatusHeader(strings, status, submittedDate),
-            Padding(
-              padding: const EdgeInsets.all(20),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
               child: Column(
                 children: [
-                  _buildPersonalInfoCard(strings, sampleName, sampleGender, sampleDob, sampleExp, sampleWorkplace),
-                  const SizedBox(height: 16),
-                  _buildDocumentsCard(strings),
-                  const SizedBox(height: 16),
-                  _buildBankCard(strings, sampleBank, sampleAccountNum, sampleAccountName),
+                  _buildStatusHeader(strings, status, ''),
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      children: [
+                        _buildPersonalInfoCard(strings, name, gender, dob, exp, workplace),
+                        const SizedBox(height: 16),
+                        _buildDocumentsCard(strings),
+                        const SizedBox(height: 16),
+                        _buildBankCard(strings, bank, accountNum, accountName),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
     );
   }
 

@@ -259,7 +259,9 @@ class HirerProfileScreen extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: GestureDetector(
-        onTap: () {
+        onTap: () async {
+          await context.read<AuthProvider>().logout();
+          if (!context.mounted) return;
           Navigator.pushAndRemoveUntil(
             context,
             MaterialPageRoute(builder: (_) => const PhoneInputScreen()),

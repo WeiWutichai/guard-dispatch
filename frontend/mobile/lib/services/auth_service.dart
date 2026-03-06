@@ -34,29 +34,7 @@ class AuthService {
     return prefs.getString('phone_$role');
   }
 
-  /// Authenticate guard with the backend auth service.
-  ///
-  /// SECURITY WARNING: This is a STUB — accepts ANY non-empty credentials
-  /// without server verification. MUST be replaced before production.
-  /// See: POST /auth/login
-  // ignore: todo
-  // TODO(CRITICAL-SECURITY): Replace stub with real API call via ApiClient
-  static Future<bool> loginGuard(String guardId, String password) async {
-    assert(() {
-      // ignore: avoid_print
-      print('[SECURITY] loginGuard is a STUB — accepts any credentials!');
-      return true;
-    }());
-
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    // STUB: reject empty credentials, accept any non-empty pair
-    if (guardId.isEmpty || password.isEmpty) return false;
-    return true;
-  }
-
-  /// Store JWT tokens securely (for future API integration).
+  /// Store JWT tokens securely.
   static Future<void> storeTokens(String accessToken, String refreshToken) async {
     await _secureStorage.write(key: _keyAccessToken, value: accessToken);
     await _secureStorage.write(key: _keyRefreshToken, value: refreshToken);
