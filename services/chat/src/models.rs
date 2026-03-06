@@ -65,6 +65,17 @@ pub struct ConversationResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct EnrichedConversationResponse {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub last_message: Option<String>,
+    pub last_message_at: Option<DateTime<Utc>>,
+    pub participant_name: Option<String>,
+    pub participant_avatar: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MessageResponse {
     pub id: Uuid,
     pub conversation_id: Uuid,
@@ -102,6 +113,31 @@ impl From<ConversationRow> for ConversationResponse {
             id: row.id,
             request_id: row.request_id,
             created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct EnrichedConversationRow {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub last_message: Option<String>,
+    pub last_message_at: Option<DateTime<Utc>>,
+    pub participant_name: Option<String>,
+    pub participant_avatar: Option<String>,
+}
+
+impl From<EnrichedConversationRow> for EnrichedConversationResponse {
+    fn from(row: EnrichedConversationRow) -> Self {
+        Self {
+            id: row.id,
+            request_id: row.request_id,
+            created_at: row.created_at,
+            last_message: row.last_message,
+            last_message_at: row.last_message_at,
+            participant_name: row.participant_name,
+            participant_avatar: row.participant_avatar,
         }
     }
 }

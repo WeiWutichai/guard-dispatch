@@ -6,7 +6,8 @@ use shared::error::AppError;
 
 use crate::models::{
     AttachmentResponse, AttachmentRow, ConversationResponse, ConversationRow,
-    CreateConversationRequest, IncomingChatMessage, ListMessagesQuery, MessageResponse, MessageRow,
+    CreateConversationRequest, EnrichedConversationResponse, EnrichedConversationRow,
+    IncomingChatMessage, ListMessagesQuery, MessageResponse, MessageRow,
     MessageType, OutgoingChatMessage,
 };
 
@@ -61,21 +62,35 @@ pub async fn create_conversation(
 pub async fn list_conversations(
     db: &PgPool,
     user_id: Uuid,
-) -> Result<Vec<ConversationResponse>, AppError> {
-    let rows = sqlx::query_as::<_, ConversationRow>(
+) -> Result<Vec<EnrichedConversationResponse>, AppError> {
+    let rows = sqlx::query_as::<_, EnrichedConversationRow>(
         r#"
-        SELECT c.id, c.request_id, c.created_at
+        SELECT c.id, c.request_id, c.created_at,
+            (SELECT m.content FROM chat.messages m
+             WHERE m.conversation_id = c.id
+             ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+            (SELECT m.created_at FROM chat.messages m
+             WHERE m.conversation_id = c.id
+             ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
+            (SELECT u.full_name FROM chat.conversation_participants cp2
+             INNER JOIN auth.users u ON u.id = cp2.user_id
+             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1
+             LIMIT 1) AS participant_name,
+            (SELECT u.avatar_url FROM chat.conversation_participants cp2
+             INNER JOIN auth.users u ON u.id = cp2.user_id
+             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1
+             LIMIT 1) AS participant_avatar
         FROM chat.conversations c
         INNER JOIN chat.conversation_participants cp ON cp.conversation_id = c.id
         WHERE cp.user_id = $1
-        ORDER BY c.created_at DESC
+        ORDER BY last_message_at DESC NULLS LAST
         "#,
     )
     .bind(user_id)
     .fetch_all(db)
     .await?;
 
-    Ok(rows.into_iter().map(ConversationResponse::from).collect())
+    Ok(rows.into_iter().map(EnrichedConversationResponse::from).collect())
 }
 
 // =============================================================================

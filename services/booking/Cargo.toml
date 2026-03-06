@@ -26,4 +26,5 @@ anyhow          = { workspace = true }
 dotenvy         = { workspace = true }
 utoipa          = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
+rust_decimal    = { workspace = true }
 shared          = { workspace = true }

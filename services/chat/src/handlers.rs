@@ -21,8 +21,8 @@ pub struct AttachmentUploadForm {
 }
 
 use crate::models::{
-    AttachmentResponse, ConversationResponse, CreateConversationRequest, IncomingChatMessage,
-    ListMessagesQuery, MessageResponse,
+    AttachmentResponse, ConversationResponse, CreateConversationRequest,
+    EnrichedConversationResponse, IncomingChatMessage, ListMessagesQuery, MessageResponse,
 };
 use crate::state::AppState;
 
@@ -131,14 +131,14 @@ pub async fn create_conversation(
     tag = "Conversations",
     security(("bearer" = [])),
     responses(
-        (status = 200, description = "List of conversations", body = Vec<ConversationResponse>),
+        (status = 200, description = "List of conversations with last message and participant info", body = Vec<EnrichedConversationResponse>),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     ),
 )]
 pub async fn list_conversations(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
-) -> Result<Json<ApiResponse<Vec<ConversationResponse>>>, AppError> {
+) -> Result<Json<ApiResponse<Vec<EnrichedConversationResponse>>>, AppError> {
     let conversations = crate::service::list_conversations(&state.db, user.user_id).await?;
     Ok(Json(ApiResponse::success(conversations)))
 }

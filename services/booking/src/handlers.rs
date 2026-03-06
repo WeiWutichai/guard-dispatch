@@ -7,8 +7,9 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AssignGuardDto, AssignmentResponse, CreateRequestDto, GuardRequestResponse,
-    ListRequestsQuery, UpdateAssignmentStatusDto,
+    AssignGuardDto, AssignmentResponse, CreateRequestDto, GuardDashboardSummary,
+    GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
+    ListRequestsQuery, UpdateAssignmentStatusDto, WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -192,4 +193,147 @@ pub async fn get_assignments(
 
     let assignments = crate::service::get_assignments(&state.db, id).await?;
     Ok(Json(ApiResponse::success(assignments)))
+}
+
+// =============================================================================
+// Guard-specific endpoints
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/guard/dashboard",
+    tag = "Guard",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Guard dashboard summary", body = GuardDashboardSummary),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guard only", body = ErrorBody),
+    ),
+)]
+pub async fn guard_dashboard(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<GuardDashboardSummary>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let summary =
+        crate::service::get_guard_dashboard_summary(&state.db, user.user_id).await?;
+    Ok(Json(ApiResponse::success(summary)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/guard/jobs",
+    tag = "Guard",
+    security(("bearer" = [])),
+    params(ListRequestsQuery),
+    responses(
+        (status = 200, description = "Guard enriched jobs list", body = Vec<GuardJobResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guard only", body = ErrorBody),
+    ),
+)]
+pub async fn guard_jobs(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<ListRequestsQuery>,
+) -> Result<Json<ApiResponse<Vec<GuardJobResponse>>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let status_str = query.status.as_ref().map(|s| {
+        serde_json::to_value(s)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "assigned".to_string())
+    });
+    let limit = query.limit.unwrap_or(20).min(100);
+    let offset = query.offset.unwrap_or(0);
+    let jobs = crate::service::get_guard_jobs(
+        &state.db,
+        user.user_id,
+        status_str.as_deref(),
+        limit,
+        offset,
+    )
+    .await?;
+    Ok(Json(ApiResponse::success(jobs)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/guard/earnings",
+    tag = "Guard",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Guard earnings breakdown", body = GuardEarnings),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guard only", body = ErrorBody),
+    ),
+)]
+pub async fn guard_earnings(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<GuardEarnings>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let earnings = crate::service::get_guard_earnings(&state.db, user.user_id).await?;
+    Ok(Json(ApiResponse::success(earnings)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/guard/work-history",
+    tag = "Guard",
+    security(("bearer" = [])),
+    params(GuardJobsQuery),
+    responses(
+        (status = 200, description = "Guard work history", body = WorkHistoryResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guard only", body = ErrorBody),
+    ),
+)]
+pub async fn guard_work_history(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<GuardJobsQuery>,
+) -> Result<Json<ApiResponse<WorkHistoryResponse>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let limit = query.limit.unwrap_or(50).min(100);
+    let offset = query.offset.unwrap_or(0);
+    let history = crate::service::get_guard_work_history(
+        &state.db,
+        user.user_id,
+        query.status.as_deref(),
+        limit,
+        offset,
+    )
+    .await?;
+    Ok(Json(ApiResponse::success(history)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/guard/ratings",
+    tag = "Guard",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Guard ratings summary", body = GuardRatingsSummary),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guard only", body = ErrorBody),
+    ),
+)]
+pub async fn guard_ratings(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<GuardRatingsSummary>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let ratings = crate::service::get_guard_ratings(&state.db, user.user_id).await?;
+    Ok(Json(ApiResponse::success(ratings)))
 }

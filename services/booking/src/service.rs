@@ -1,4 +1,5 @@
 use chrono::Utc;
+use rust_decimal::prelude::ToPrimitive;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -6,8 +7,10 @@ use shared::error::AppError;
 
 use crate::models::{
     AssignGuardDto, AssignmentResponse, AssignmentRow, AssignmentStatus, CreateRequestDto,
-    GuardRequestResponse, GuardRequestRow, ListRequestsQuery, RequestStatus,
-    UpdateAssignmentStatusDto,
+    DailyEarning, GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobRow,
+    GuardRatingsSummary, GuardRequestResponse, GuardRequestRow, ListRequestsQuery, RatingSummaryRow,
+    RequestStatus, ReviewItem, ReviewRow, UpdateAssignmentStatusDto, WorkHistoryItem,
+    WorkHistoryResponse, WorkHistoryRow,
 };
 
 // =============================================================================
@@ -29,11 +32,15 @@ pub async fn create_request(
         .unwrap_or("medium")
         .to_string();
 
+    let price = req
+        .offered_price
+        .map(|p| rust_decimal::Decimal::try_from(p).unwrap_or_default());
+
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        INSERT INTO booking.guard_requests (customer_id, location_lat, location_lng, address, description, urgency)
-        VALUES ($1, $2, $3, $4, $5, $6::urgency_level)
-        RETURNING id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+        INSERT INTO booking.guard_requests (customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, urgency)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::urgency_level)
+        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
         "#,
     )
     .bind(customer_id)
@@ -41,6 +48,8 @@ pub async fn create_request(
     .bind(req.location_lng)
     .bind(&req.address)
     .bind(&req.description)
+    .bind(price)
+    .bind(&req.special_instructions)
     .bind(&urgency_str)
     .fetch_one(db)
     .await?;
@@ -72,7 +81,7 @@ pub async fn list_requests(
                     .to_string();
                 sqlx::query_as::<_, GuardRequestRow>(
                     r#"
-                    SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+                    SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
                     FROM booking.guard_requests
                     WHERE status = $1::request_status
                     ORDER BY created_at DESC
@@ -88,7 +97,7 @@ pub async fn list_requests(
             None => {
                 sqlx::query_as::<_, GuardRequestRow>(
                     r#"
-                    SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+                    SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
                     FROM booking.guard_requests
                     ORDER BY created_at DESC
                     LIMIT $1 OFFSET $2
@@ -104,7 +113,7 @@ pub async fn list_requests(
         // Guard sees assigned requests
         sqlx::query_as::<_, GuardRequestRow>(
             r#"
-            SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address, gr.description, gr.status, gr.urgency, gr.created_at, gr.updated_at
+            SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address, gr.description, gr.offered_price, gr.special_instructions, gr.status, gr.urgency, gr.created_at, gr.updated_at
             FROM booking.guard_requests gr
             INNER JOIN booking.assignments a ON a.request_id = gr.id
             WHERE a.guard_id = $1
@@ -121,7 +130,7 @@ pub async fn list_requests(
         // Customer sees their own requests
         sqlx::query_as::<_, GuardRequestRow>(
             r#"
-            SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+            SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
             FROM booking.guard_requests
             WHERE customer_id = $1
             ORDER BY created_at DESC
@@ -148,7 +157,7 @@ pub async fn get_request(
 ) -> Result<GuardRequestResponse, AppError> {
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         "#,
@@ -175,7 +184,7 @@ pub async fn cancel_request(
 
     let existing = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         FOR UPDATE
@@ -242,7 +251,7 @@ pub async fn assign_guard(
     // Verify request exists and is pending (lock row)
     let request = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         FOR UPDATE
@@ -451,4 +460,405 @@ pub async fn is_guard_assigned(
     .await?;
 
     Ok(exists.unwrap_or(false))
+}
+
+// =============================================================================
+// Guard Jobs (enriched with customer name + assignment info)
+// =============================================================================
+
+pub async fn get_guard_jobs(
+    db: &PgPool,
+    guard_id: Uuid,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<GuardJobResponse>, AppError> {
+    let rows = match status {
+        Some(s) => {
+            sqlx::query_as::<_, GuardJobRow>(
+                r#"
+                SELECT gr.id, gr.customer_id, u.full_name AS customer_name,
+                       gr.address, gr.description, gr.special_instructions,
+                       gr.status, gr.urgency, gr.offered_price,
+                       gr.created_at, gr.updated_at,
+                       a.id AS assignment_id, a.status AS assignment_status,
+                       a.assigned_at, a.arrived_at, a.completed_at
+                FROM booking.guard_requests gr
+                INNER JOIN booking.assignments a ON a.request_id = gr.id
+                INNER JOIN auth.users u ON u.id = gr.customer_id
+                WHERE a.guard_id = $1 AND a.status = $2::assignment_status
+                ORDER BY gr.created_at DESC
+                LIMIT $3 OFFSET $4
+                "#,
+            )
+            .bind(guard_id)
+            .bind(s)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(db)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, GuardJobRow>(
+                r#"
+                SELECT gr.id, gr.customer_id, u.full_name AS customer_name,
+                       gr.address, gr.description, gr.special_instructions,
+                       gr.status, gr.urgency, gr.offered_price,
+                       gr.created_at, gr.updated_at,
+                       a.id AS assignment_id, a.status AS assignment_status,
+                       a.assigned_at, a.arrived_at, a.completed_at
+                FROM booking.guard_requests gr
+                INNER JOIN booking.assignments a ON a.request_id = gr.id
+                INNER JOIN auth.users u ON u.id = gr.customer_id
+                WHERE a.guard_id = $1
+                ORDER BY gr.created_at DESC
+                LIMIT $2 OFFSET $3
+                "#,
+            )
+            .bind(guard_id)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(db)
+            .await?
+        }
+    };
+
+    Ok(rows.into_iter().map(GuardJobResponse::from).collect())
+}
+
+// =============================================================================
+// Guard Dashboard Summary (home tab)
+// =============================================================================
+
+pub async fn get_guard_dashboard_summary(
+    db: &PgPool,
+    guard_id: Uuid,
+) -> Result<GuardDashboardSummary, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct CountRow {
+        count: Option<i64>,
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct SumRow {
+        total: Option<rust_decimal::Decimal>,
+    }
+
+    let (today_count, today_earnings, week_earnings, active_job) = tokio::join!(
+        // Today's assigned jobs
+        sqlx::query_as::<_, CountRow>(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM booking.assignments a
+            WHERE a.guard_id = $1 AND DATE(a.assigned_at) = CURRENT_DATE
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        // Today's completed earnings
+        sqlx::query_as::<_, SumRow>(
+            r#"
+            SELECT COALESCE(SUM(gr.offered_price), 0) AS total
+            FROM booking.assignments a
+            INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
+            WHERE a.guard_id = $1 AND a.status = 'completed' AND DATE(a.completed_at) = CURRENT_DATE
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        // This week's completed earnings
+        sqlx::query_as::<_, SumRow>(
+            r#"
+            SELECT COALESCE(SUM(gr.offered_price), 0) AS total
+            FROM booking.assignments a
+            INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
+            WHERE a.guard_id = $1 AND a.status = 'completed' AND a.completed_at >= date_trunc('week', NOW())
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        // Active job (assigned/en_route/arrived)
+        sqlx::query_as::<_, GuardJobRow>(
+            r#"
+            SELECT gr.id, gr.customer_id, u.full_name AS customer_name,
+                   gr.address, gr.description, gr.special_instructions,
+                   gr.status, gr.urgency, gr.offered_price,
+                   gr.created_at, gr.updated_at,
+                   a.id AS assignment_id, a.status AS assignment_status,
+                   a.assigned_at, a.arrived_at, a.completed_at
+            FROM booking.guard_requests gr
+            INNER JOIN booking.assignments a ON a.request_id = gr.id
+            INNER JOIN auth.users u ON u.id = gr.customer_id
+            WHERE a.guard_id = $1 AND a.status IN ('assigned', 'en_route', 'arrived')
+            ORDER BY a.assigned_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_optional(db),
+    );
+
+    Ok(GuardDashboardSummary {
+        today_jobs_count: today_count
+            .map_err(AppError::from)?
+            .count
+            .unwrap_or(0),
+        today_earnings: today_earnings
+            .map_err(AppError::from)?
+            .total
+            .and_then(|d| d.to_f64())
+            .unwrap_or(0.0),
+        week_earnings: week_earnings
+            .map_err(AppError::from)?
+            .total
+            .and_then(|d| d.to_f64())
+            .unwrap_or(0.0),
+        active_job: active_job
+            .map_err(AppError::from)?
+            .map(GuardJobResponse::from),
+    })
+}
+
+// =============================================================================
+// Guard Earnings (income tab)
+// =============================================================================
+
+pub async fn get_guard_earnings(
+    db: &PgPool,
+    guard_id: Uuid,
+) -> Result<GuardEarnings, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct EarningSummaryRow {
+        total_earned: Option<rust_decimal::Decimal>,
+        month_earnings: Option<rust_decimal::Decimal>,
+        week_earnings: Option<rust_decimal::Decimal>,
+        completed_jobs_count: Option<i64>,
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct DailyEarningRow {
+        date: chrono::NaiveDate,
+        amount: Option<rust_decimal::Decimal>,
+        jobs_count: Option<i64>,
+    }
+
+    let (summary, daily) = tokio::join!(
+        sqlx::query_as::<_, EarningSummaryRow>(
+            r#"
+            SELECT
+                COALESCE(SUM(gr.offered_price), 0) AS total_earned,
+                COALESCE(SUM(CASE WHEN a.completed_at >= date_trunc('month', NOW()) THEN gr.offered_price ELSE 0 END), 0) AS month_earnings,
+                COALESCE(SUM(CASE WHEN a.completed_at >= date_trunc('week', NOW()) THEN gr.offered_price ELSE 0 END), 0) AS week_earnings,
+                COUNT(*) AS completed_jobs_count
+            FROM booking.assignments a
+            INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
+            WHERE a.guard_id = $1 AND a.status = 'completed'
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        sqlx::query_as::<_, DailyEarningRow>(
+            r#"
+            SELECT DATE(a.completed_at) AS date,
+                   COALESCE(SUM(gr.offered_price), 0) AS amount,
+                   COUNT(*) AS jobs_count
+            FROM booking.assignments a
+            INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
+            WHERE a.guard_id = $1 AND a.status = 'completed'
+                  AND a.completed_at >= NOW() - INTERVAL '30 days'
+            GROUP BY DATE(a.completed_at)
+            ORDER BY date DESC
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_all(db),
+    );
+
+    let summary = summary.map_err(AppError::from)?;
+    let daily = daily.map_err(AppError::from)?;
+
+    Ok(GuardEarnings {
+        total_earned: summary
+            .total_earned
+            .and_then(|d| d.to_f64())
+            .unwrap_or(0.0),
+        month_earnings: summary
+            .month_earnings
+            .and_then(|d| d.to_f64())
+            .unwrap_or(0.0),
+        week_earnings: summary
+            .week_earnings
+            .and_then(|d| d.to_f64())
+            .unwrap_or(0.0),
+        completed_jobs_count: summary.completed_jobs_count.unwrap_or(0),
+        daily_breakdown: daily
+            .into_iter()
+            .map(|r| DailyEarning {
+                date: r.date,
+                amount: r.amount.and_then(|d| d.to_f64()).unwrap_or(0.0),
+                jobs_count: r.jobs_count.unwrap_or(0),
+            })
+            .collect(),
+    })
+}
+
+// =============================================================================
+// Guard Work History (profile → work history screen)
+// =============================================================================
+
+pub async fn get_guard_work_history(
+    db: &PgPool,
+    guard_id: Uuid,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<WorkHistoryResponse, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct StatsRow {
+        total_jobs: Option<i64>,
+        total_minutes: Option<i64>,
+        avg_rating: Option<rust_decimal::Decimal>,
+    }
+
+    let (stats, jobs) = tokio::join!(
+        sqlx::query_as::<_, StatsRow>(
+            r#"
+            SELECT
+                COUNT(*) AS total_jobs,
+                COALESCE(SUM(
+                    EXTRACT(EPOCH FROM (a.completed_at - a.arrived_at))::bigint / 60
+                ), 0) AS total_minutes,
+                (SELECT AVG(r.overall_rating)
+                 FROM reviews.guard_reviews r WHERE r.guard_id = $1) AS avg_rating
+            FROM booking.assignments a
+            WHERE a.guard_id = $1 AND a.status = 'completed'
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        {
+            match status {
+                Some(s) => {
+                    sqlx::query_as::<_, WorkHistoryRow>(
+                        r#"
+                        SELECT gr.id, a.id AS assignment_id,
+                               u.full_name AS customer_name, gr.address, gr.description,
+                               gr.offered_price, a.status AS assignment_status,
+                               a.assigned_at, a.arrived_at, a.completed_at,
+                               EXTRACT(EPOCH FROM (a.completed_at - a.arrived_at))::bigint / 60 AS duration_minutes,
+                               rv.overall_rating AS rating
+                        FROM booking.guard_requests gr
+                        INNER JOIN booking.assignments a ON a.request_id = gr.id
+                        INNER JOIN auth.users u ON u.id = gr.customer_id
+                        LEFT JOIN reviews.guard_reviews rv ON rv.assignment_id = a.id
+                        WHERE a.guard_id = $1 AND a.status = $2::assignment_status
+                        ORDER BY a.assigned_at DESC
+                        LIMIT $3 OFFSET $4
+                        "#,
+                    )
+                    .bind(guard_id)
+                    .bind(s)
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(db)
+                }
+                None => {
+                    sqlx::query_as::<_, WorkHistoryRow>(
+                        r#"
+                        SELECT gr.id, a.id AS assignment_id,
+                               u.full_name AS customer_name, gr.address, gr.description,
+                               gr.offered_price, a.status AS assignment_status,
+                               a.assigned_at, a.arrived_at, a.completed_at,
+                               EXTRACT(EPOCH FROM (a.completed_at - a.arrived_at))::bigint / 60 AS duration_minutes,
+                               rv.overall_rating AS rating
+                        FROM booking.guard_requests gr
+                        INNER JOIN booking.assignments a ON a.request_id = gr.id
+                        INNER JOIN auth.users u ON u.id = gr.customer_id
+                        LEFT JOIN reviews.guard_reviews rv ON rv.assignment_id = a.id
+                        WHERE a.guard_id = $1
+                        ORDER BY a.assigned_at DESC
+                        LIMIT $2 OFFSET $3
+                        "#,
+                    )
+                    .bind(guard_id)
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(db)
+                }
+            }
+        },
+    );
+
+    let stats = stats.map_err(AppError::from)?;
+    let jobs = jobs.map_err(AppError::from)?;
+    let total_minutes = stats.total_minutes.unwrap_or(0);
+
+    Ok(WorkHistoryResponse {
+        total_jobs: stats.total_jobs.unwrap_or(0),
+        total_hours: total_minutes as f64 / 60.0,
+        avg_rating: stats.avg_rating.and_then(|d| d.to_f64()),
+        jobs: jobs.into_iter().map(WorkHistoryItem::from).collect(),
+    })
+}
+
+// =============================================================================
+// Guard Ratings Summary (profile → ratings screen)
+// =============================================================================
+
+pub async fn get_guard_ratings(
+    db: &PgPool,
+    guard_id: Uuid,
+) -> Result<GuardRatingsSummary, AppError> {
+    let (summary, recent_reviews) = tokio::join!(
+        sqlx::query_as::<_, RatingSummaryRow>(
+            r#"
+            SELECT
+                AVG(overall_rating) AS overall_rating,
+                COUNT(*) AS total_reviews,
+                AVG(punctuality) AS punctuality,
+                AVG(professionalism) AS professionalism,
+                AVG(communication) AS communication,
+                AVG(appearance) AS appearance
+            FROM reviews.guard_reviews
+            WHERE guard_id = $1
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        sqlx::query_as::<_, ReviewRow>(
+            r#"
+            SELECT r.id, u.full_name AS customer_name,
+                   r.overall_rating, r.review_text, r.created_at
+            FROM reviews.guard_reviews r
+            INNER JOIN auth.users u ON u.id = r.customer_id
+            WHERE r.guard_id = $1
+            ORDER BY r.created_at DESC
+            LIMIT 20
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_all(db),
+    );
+
+    let summary = summary.map_err(AppError::from)?;
+    let recent_reviews = recent_reviews.map_err(AppError::from)?;
+
+    Ok(GuardRatingsSummary {
+        overall_rating: summary.overall_rating.and_then(|d| d.to_f64()),
+        total_reviews: summary.total_reviews.unwrap_or(0),
+        punctuality: summary.punctuality.and_then(|d| d.to_f64()),
+        professionalism: summary.professionalism.and_then(|d| d.to_f64()),
+        communication: summary.communication.and_then(|d| d.to_f64()),
+        appearance: summary.appearance.and_then(|d| d.to_f64()),
+        recent_reviews: recent_reviews
+            .into_iter()
+            .map(|r| ReviewItem {
+                id: r.id,
+                customer_name: r.customer_name.unwrap_or_else(|| "-".to_string()),
+                overall_rating: r.overall_rating.to_f64().unwrap_or(0.0),
+                review_text: r.review_text,
+                created_at: r.created_at,
+            })
+            .collect(),
+    })
 }

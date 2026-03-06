@@ -38,6 +38,7 @@ use crate::state::AppState;
         models::OutgoingChatMessage,
         models::CreateConversationRequest,
         models::ConversationResponse,
+        models::EnrichedConversationResponse,
         models::MessageResponse,
         models::AttachmentResponse,
         handlers::AttachmentUploadForm,

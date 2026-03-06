@@ -30,6 +30,11 @@ use crate::state::AppState;
         handlers::assign_guard,
         handlers::update_assignment_status,
         handlers::get_assignments,
+        handlers::guard_dashboard,
+        handlers::guard_jobs,
+        handlers::guard_earnings,
+        handlers::guard_work_history,
+        handlers::guard_ratings,
     ),
     components(schemas(
         models::RequestStatus,
@@ -40,6 +45,14 @@ use crate::state::AppState;
         models::UpdateAssignmentStatusDto,
         models::GuardRequestResponse,
         models::AssignmentResponse,
+        models::GuardJobResponse,
+        models::GuardDashboardSummary,
+        models::GuardEarnings,
+        models::DailyEarning,
+        models::WorkHistoryResponse,
+        models::WorkHistoryItem,
+        models::GuardRatingsSummary,
+        models::ReviewItem,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
@@ -47,6 +60,7 @@ use crate::state::AppState;
     tags(
         (name = "Requests", description = "Guard request management"),
         (name = "Assignments", description = "Guard assignment management"),
+        (name = "Guard", description = "Guard-specific endpoints (dashboard, jobs, earnings)"),
     ),
 )]
 struct ApiDoc;
@@ -84,6 +98,12 @@ async fn main() -> anyhow::Result<()> {
             "/assignments/{id}/status",
             put(handlers::update_assignment_status),
         )
+        // Guard-specific endpoints
+        .route("/guard/dashboard", get(handlers::guard_dashboard))
+        .route("/guard/jobs", get(handlers::guard_jobs))
+        .route("/guard/earnings", get(handlers::guard_earnings))
+        .route("/guard/work-history", get(handlers::guard_work_history))
+        .route("/guard/ratings", get(handlers::guard_ratings))
         .merge({
             let swagger = SwaggerUi::new("/swagger-ui")
                 .url("/api-docs/openapi.json", ApiDoc::openapi());
