@@ -2,6 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
+import 'providers/booking_provider.dart';
+import 'providers/chat_provider.dart';
+import 'providers/tracking_provider.dart';
+import 'services/booking_service.dart';
+import 'services/chat_service.dart';
+import 'services/tracking_service.dart';
 import 'screens/phone_input_screen.dart';
 import 'screens/pin_lock_screen.dart';
 import 'screens/registration_pending_screen.dart';
@@ -37,6 +43,19 @@ class MyApp extends StatelessWidget {
           create: (_) => AuthProvider()..checkAuthStatus(),
         ),
         Provider<PinStorageService>.value(value: pinService),
+        ChangeNotifierProxyProvider<AuthProvider, BookingProvider>(
+          create: (_) => BookingProvider(BookingService(AuthProvider().apiClient)),
+          update: (_, auth, prev) =>
+              prev ?? BookingProvider(BookingService(auth.apiClient)),
+        ),
+        ChangeNotifierProxyProvider<AuthProvider, ChatProvider>(
+          create: (_) => ChatProvider(ChatService(AuthProvider().apiClient)),
+          update: (_, auth, prev) =>
+              prev ?? ChatProvider(ChatService(auth.apiClient)),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => TrackingProvider(TrackingService()),
+        ),
       ],
       child: LanguageProvider(
         notifier: langNotifier,

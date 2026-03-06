@@ -1,18 +1,10 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { MapContainer, TileLayer, Marker } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-
-// ─── Demo guard positions (same as full map page) ────────────────────────────
-
-const guards = [
-  { id: "G001", lat: 13.7563, lng: 100.5018, status: "active" },
-  { id: "G002", lat: 13.7466, lng: 100.5347, status: "active" },
-  { id: "G003", lat: 13.7378, lng: 100.5604, status: "idle" },
-  { id: "G004", lat: 13.7268, lng: 100.51, status: "alert" },
-  { id: "G005", lat: 13.6614, lng: 100.684, status: "active" },
-];
+import { trackingApi, type GuardLocationWithName } from "@/lib/api";
 
 const statusHex: Record<string, string> = {
   active: "#10b981",
@@ -52,9 +44,39 @@ const icons: Record<string, L.DivIcon> = {
   alert: createDotIcon("alert"),
 };
 
+function getStatus(recordedAt: string): string {
+  const minutesAgo =
+    (Date.now() - new Date(recordedAt).getTime()) / 60000;
+  if (minutesAgo > 30) return "alert";
+  if (minutesAgo > 10) return "idle";
+  return "active";
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function DashboardMiniMap() {
+  const [guards, setGuards] = useState<
+    { id: string; lat: number; lng: number; status: string }[]
+  >([]);
+
+  useEffect(() => {
+    trackingApi
+      .getAllLocations()
+      .then((locations: GuardLocationWithName[]) => {
+        setGuards(
+          locations.map((loc) => ({
+            id: loc.guard_id,
+            lat: loc.lat,
+            lng: loc.lng,
+            status: getStatus(loc.recorded_at),
+          }))
+        );
+      })
+      .catch(() => {
+        // API not available — show empty map
+      });
+  }, []);
+
   return (
     <MapContainer
       center={[13.7363, 100.5318]}

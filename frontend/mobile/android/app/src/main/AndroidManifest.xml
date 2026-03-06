@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- geolocator: GPS location for guard tracking -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <!-- image_picker: camera and photo library access -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- READ_MEDIA_IMAGES for Android 13+, READ_EXTERNAL_STORAGE for older -->

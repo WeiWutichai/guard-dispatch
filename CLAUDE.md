@@ -217,8 +217,13 @@ CREATE TABLE chat.attachments (
   - Security Headers: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
   - **Global `client_max_body_size 1m;`** ที่ http block — override เฉพาะ endpoint ที่ต้องการ (เช่น chat attachments: 10m)
   - **Swagger UI rate limiting:** ทุก Swagger location (`/swagger-ui`, `/api-docs`, `/docs`) ต้องมี `limit_req zone=api_limit burst=10 nodelay`
-- **WebSocket Auth:** ใช้ cookie (ส่งอัตโนมัติตอน upgrade) — ห้ามส่ง token ใน URL query params
+- **WebSocket Auth:** Web ใช้ cookie (ส่งอัตโนมัติตอน upgrade); Mobile ใช้ Bearer token ใน `Authorization` header ตอน WS upgrade (ผ่าน `IOWebSocketChannel.connect(headers:)`) — ห้ามส่ง token ใน URL query params
 - **WebSocket Data:** ห้ามส่ง conversation_id หรือ sensitive data ใน URL query params — ส่งเป็น message หลัง connection open
+- **GPS Tracking Security:**
+  - `ws_handler` ต้องตรวจ `user.role == "guard"` ก่อน upgrade — ห้ามให้ admin/customer ส่ง GPS
+  - `GpsUpdate::validate()` ต้องตรวจ lat (-90..90), lng (-180..180), reject (0,0), accuracy (0..10000), heading (0..360), speed (0..500)
+  - Server-side rate limit: max 1 GPS update/second per connection — drop excess messages
+  - `list_all_locations` ต้อง restrict เฉพาะ admin — ห้ามให้ customer เห็น bulk guard locations (TODO: เพิ่ม booking-based filtering สำหรับ customer)
 - **Audit Middleware:** ต้อง validate JWT signature ด้วย real secret ก่อน trust user_id — ห้ามใช้ `insecure_disable_signature_validation()`
   - ใช้ `middleware::from_fn_with_state(state.clone(), audit_middleware::<Arc<AppState>>)` — ต้อง turbofish type annotation เพราะ `HasJwtSecret` implement ทั้ง `AppState` และ `Arc<T>`
   - **ทุก service ต้องมี audit middleware** — ปัจจุบัน 5 services (auth, booking, tracking, notification, chat) ทั้งหมดมีแล้ว
@@ -364,11 +369,13 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       ├── lib/
 │       │   ├── main.dart               ← Entry point (MultiProvider wrap)
 │       │   ├── providers/
-│       │   │   └── auth_provider.dart   ← Centralized auth state (Provider)
+│       │   │   ├── auth_provider.dart    ← Centralized auth state (Provider)
+│       │   │   └── tracking_provider.dart ← GPS tracking on/off state (Provider)
 │       │   ├── services/
 │       │   │   ├── api_client.dart      ← Dio HTTP client + JWT interceptor
 │       │   │   ├── auth_service.dart    ← Token storage + login/OTP
 │       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
+│       │   │   ├── tracking_service.dart  ← WebSocket GPS streaming to backend
 │       │   │   └── language_service.dart
 │       │   ├── screens/                ← 31+ screens (guard/customer/common)
 │       │   │   ├── phone_input_screen.dart           ← OTP: กรอกเบอร์โทร
@@ -535,6 +542,8 @@ RegistrationPendingScreen
 - iOS Keychain persists across app reinstalls — `isPinSet` อาจเป็น `true` แม้หลัง uninstall
 - `main.dart` ต้องเช็ค `auth.status == AuthStatus.authenticated` **ก่อน** `pinService.isPinSet`
 - PinLockScreen แสดงเฉพาะ authenticated users เท่านั้น — fresh install/unregistered → PhoneInputScreen
+- **Post-PIN navigation:** `_navigateToApp()` → `RoleSelectionScreen(phone)` (ไม่ใช่ dashboard ตรง) — ให้ user เลือก role ทุกครั้งหลัง unlock
+- **RoleSelectionScreen สำหรับ authenticated users:** ถ้า `auth.status == authenticated` → tap role → `pushReplacement` ไป dashboard ทันที (ไม่ผ่าน registration flow)
 
 **Auth Service OTP & Profile Endpoints (main.rs):**
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
@@ -576,13 +585,35 @@ RegistrationPendingScreen
 - `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/login/phone`
 - `main.dart` `home`: `Consumer<AuthProvider>` — routes to `RegistrationPendingScreen` when `status == pendingApproval` (handles app-restart while pending)
 - `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed).
-- `RoleSelectionScreen._onRoleTap()`: calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path → `RegistrationPendingScreen`
+- `RoleSelectionScreen._onRoleTap()`: **authenticated users** → `pushReplacement` ไป dashboard ทันที (guard→GuardDashboard, customer→HirerDashboard) ไม่ต้องลงทะเบียนใหม่; **unauthenticated users** → calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path → `RegistrationPendingScreen`
 - `GuardRegistrationScreen`: accepts optional `initialProfile` param for edit mode — `_prefillForm()` restores text fields, gender, DOB, bank from stored profile. Back button uses `canPop()` check to handle edit flow (no route to pop → navigate to `RegistrationPendingScreen`).
 - `GuardRegistrationScreen._onSubmit()`: only calls `submitGuardProfile(profileToken)` — no `registerWithOtp()`. Uses `reissueProfileToken()` fallback if profileToken is null/expired.
 - **Dashboard real data:** After login, dashboard screens use `AuthProvider` profile fields (`fullName`, `phone`, `avatarUrl`) from `GET /auth/me` instead of hardcoded mock data:
-  - `GuardHomeTab`: greeting uses `authProvider.fullName ?? strings.sampleGuardName`; registration check uses `authProvider.isAuthenticated` (not `AuthService.isRegistered()`)
+  - `GuardHomeTab`: greeting uses `authProvider.fullName ?? strings.sampleGuardName`; registration check uses `authProvider.isAuthenticated` (not `AuthService.isRegistered()`); status toggle wired to `TrackingProvider` (not local `_isReady` state) — shows connecting/online/offline + GPS accuracy
   - `GuardProfileTab`: real name, formatted phone as ID (`086-320-8235`), avatar from URL or person icon fallback, "ยืนยันแล้ว" badge only (no "ยังไม่ได้ลงทะเบียน")
   - `HirerProfileScreen`: real name, formatted phone as ID, avatar icon fallback
+
+**GPS Tracking (Mobile → Backend):**
+- **TrackingService** (`tracking_service.dart`): WebSocket + GPS streaming
+  - Uses `IOWebSocketChannel.connect(uri, headers: {'Authorization': 'Bearer $token'})` — Bearer token for mobile WS auth
+  - Converts `API_URL` from `http://` → `ws://` for WebSocket endpoint `/ws/track`
+  - GPS: `Geolocator.getPositionStream(accuracy: high, distanceFilter: 10m)` — streams only when moved ≥10m
+  - Sends `GpsUpdate` JSON: `{"lat", "lng", "accuracy", "heading", "speed", "assignment_id": null}`
+  - GPS stream starts **only after** WebSocket connected (`_isConnected == true`) — never before
+  - Auto-reconnect with exponential backoff (2s, 4s, 6s, 8s, 10s), max 5 retries
+  - Reconnect cleans up old `_wsSub` before creating new one (prevents orphaned listeners)
+  - Reconnect restarts GPS stream after successful WS reconnect
+- **TrackingProvider** (`tracking_provider.dart`): `ChangeNotifier` state management
+  - States: `isOnline` (toggle), `isConnecting`, `isConnected` (WS), `lastPosition`, `error`
+  - `toggle()` → `goOnline()` / `goOffline()` — wired to `GuardHomeTab` switch
+  - Permission errors auto-revert toggle to OFF
+- **main.dart**: `ChangeNotifierProvider(create: (_) => TrackingProvider(TrackingService()))` registered in `MultiProvider`
+- **GuardHomeTab**: `context.watch<TrackingProvider>()` replaces local `_isReady` state; shows GPS accuracy when online
+
+**Web Admin Map (Reverse Geocoding):**
+- `reverseGeocode()` in `lib/api.ts` — Nominatim reverse geocode with ~500m grid cache (capped at 500 entries)
+- `batchReverseGeocode()` — deduplicates by grid key, 200ms delay between requests (Nominatim rate limit)
+- `MapArea` uses `mapKey` prop to prevent Leaflet "container reused" error on fullscreen toggle
 
 **Nginx Rate Limit:**
 - `otp_limit` zone: 3 req/min per IP — applied to `location /auth/otp/`
@@ -767,12 +798,14 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม hardcode credentials ในโค้ด
 - ❌ ห้าม run migration โดยตรงบน production database
 - ❌ ห้ามส่ง GPS data ผ่าน REST API
+- ❌ ห้าม accept GPS coordinates โดยไม่ validate — ต้องตรวจ lat (-90..90), lng (-180..180), reject (0,0), accuracy/heading/speed ranges ผ่าน `GpsUpdate::validate()`
+- ❌ ห้ามให้ non-guard roles (admin/customer) connect WebSocket GPS — `ws_handler` ต้องตรวจ `user.role == "guard"` ก่อน upgrade
 - ❌ ห้าม store binary/image ใน PostgreSQL
 - ❌ ห้าม expose MinIO/R2 bucket โดยตรง
 - ❌ ห้าม accept ไฟล์ที่ไม่ใช่ image/jpeg, image/png, image/webp
 - ❌ ห้ามเรียก fetch ตรงใน Frontend — ใช้ `lib/api.ts` (web) หรือ `ApiClient` (mobile) เท่านั้น
 - ❌ ห้ามเก็บ JWT ใน localStorage/sessionStorage — ใช้ httpOnly cookie (web) หรือ FlutterSecureStorage (mobile) เท่านั้น
-- ❌ ห้ามส่ง JWT token ใน WebSocket URL query params — ใช้ cookie auth
+- ❌ ห้ามส่ง JWT token ใน WebSocket URL query params — Web ใช้ cookie auth, Mobile ใช้ Bearer header
 - ❌ ห้าม expose port ของ service/DB/Redis/MinIO ไปยัง host — เฉพาะ Nginx 80/443 — ใช้ `expose` ไม่ใช่ `ports` ใน docker-compose
 - ❌ ห้ามเชื่อมต่อ Redis โดยไม่มี password
 - ❌ ห้าม validate file upload ด้วย MIME type อย่างเดียว — ต้องตรวจ **magic bytes** ด้วยเสมอ
@@ -816,6 +849,8 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามส่ง `phoneVerifiedToken` ไปยัง `RoleSelectionScreen` — token ถูก consume ใน `PinSetupScreen` แล้ว, ส่งแค่ `phone`
 - ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `SetPasswordScreen` — ต้อง navigate ไป `PinSetupScreen` โดยตรง (SetPasswordScreen ถูกลบออกจาก flow หลักแล้ว)
 - ❌ ห้ามแสดง `PinLockScreen` โดยตรวจเฉพาะ `pinService.isPinSet` — ต้องตรวจ `auth.status == AuthStatus.authenticated` ก่อนเสมอ (iOS Keychain persist ข้าม reinstall)
+- ❌ ห้าม navigate จาก `PinLockScreen` ไป dashboard ตรง — ต้องไป `RoleSelectionScreen(phone)` เสมอ เพื่อให้ user เลือก role (guard/customer) ทุกครั้งหลัง unlock
+- ❌ ห้ามบังคับ authenticated user ลงทะเบียนใหม่ใน `RoleSelectionScreen._onRoleTap()` — ถ้า `auth.status == authenticated` ต้อง `pushReplacement` ไป dashboard ทันที
 
 ### Web Admin (Next.js)
 - ❌ ห้าม hardcode ข้อความภาษาในหน้า — ต้องใช้ `t.xxx` จาก `useLanguage()` เสมอ
@@ -848,3 +883,6 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามใช้ `AuthService.isRegistered('guard')` เพื่อตรวจสอบว่าควรแสดง Dashboard — ใช้ `context.watch<AuthProvider>().isAuthenticated` แทน (SharedPreferences key อาจไม่ถูก set ในทุก flow)
 - ❌ ห้ามใช้ hardcoded mock data ใน Dashboard screens (ชื่อ, avatar, รหัส) — ใช้ `AuthProvider.fullName`, `AuthProvider.phone`, `AuthProvider.avatarUrl` จาก `GET /auth/me`
 - ❌ ห้าม login ด้วย email-based endpoint จาก mobile — ใช้ `POST /auth/login/phone` (phone + PIN hash) เท่านั้น
+- ❌ ห้าม start GPS stream ก่อน WebSocket connected — `_startGpsStream()` เรียกเฉพาะเมื่อ `_isConnected == true`
+- ❌ ห้ามสร้าง WS listener ใหม่โดยไม่ cancel อันเก่า — `_connectWebSocket()` ต้อง `await _wsSub?.cancel()` ก่อนเสมอ (ป้องกัน orphaned subscriptions)
+- ❌ ห้ามใช้ local state (`_isReady`) สำหรับ guard online toggle — ใช้ `context.watch<TrackingProvider>().isOnline` เท่านั้น

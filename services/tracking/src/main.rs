@@ -27,12 +27,14 @@ use crate::state::AppState;
         handlers::ws_handler,
         handlers::get_latest_location,
         handlers::get_location_history,
+        handlers::list_all_locations,
     ),
     components(schemas(
         models::GpsUpdate,
         models::GpsEvent,
         models::LocationResponse,
         models::LocationHistoryResponse,
+        models::GuardLocationWithName,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
@@ -83,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         // WebSocket — GPS data MUST flow through WebSocket only (per CLAUDE.md)
         .route("/ws/track", get(handlers::ws_handler))
         // REST — Location queries
+        .route("/locations", get(handlers::list_all_locations))
         .route("/locations/{guard_id}", get(handlers::get_latest_location))
         .route(
             "/locations/{guard_id}/history",

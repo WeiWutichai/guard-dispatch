@@ -9,7 +9,10 @@ use shared::auth::AuthUser;
 use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
-use crate::models::{GpsEvent, GpsUpdate, HistoryQuery, LocationHistoryResponse, LocationResponse};
+use crate::models::{
+    GpsEvent, GpsUpdate, GuardLocationWithName, HistoryQuery, LocationHistoryResponse,
+    LocationResponse,
+};
 use crate::state::AppState;
 
 #[utoipa::path(
@@ -26,12 +29,23 @@ pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
     user: AuthUser,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_gps_socket(socket, state, user))
+) -> Result<impl IntoResponse, AppError> {
+    // Only guards can stream GPS data
+    if user.role != "guard" {
+        return Err(AppError::Forbidden(
+            "Only guards can stream GPS data".to_string(),
+        ));
+    }
+
+    Ok(ws.on_upgrade(move |socket| handle_gps_socket(socket, state, user)))
 }
 
 async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
     tracing::info!("GPS WebSocket connected: guard_id={}", user.user_id);
+
+    // Server-side rate limiting: max 1 update per second per connection
+    let mut last_update = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    let min_interval = std::time::Duration::from_secs(1);
 
     while let Some(msg) = socket.recv().await {
         let msg = match msg {
@@ -44,6 +58,13 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             _ => continue,
         };
 
+        // Rate limit: drop messages that arrive too fast
+        let now = std::time::Instant::now();
+        if now.duration_since(last_update) < min_interval {
+            continue;
+        }
+        last_update = now;
+
         let update: GpsUpdate = match serde_json::from_str(&msg) {
             Ok(u) => u,
             Err(e) => {
@@ -55,6 +76,16 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
                 continue;
             }
         };
+
+        // Validate GPS coordinates
+        if let Err(e) = update.validate() {
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"error": e}).to_string().into(),
+                ))
+                .await;
+            continue;
+        }
 
         let event = GpsEvent {
             guard_id: user.user_id,
@@ -153,4 +184,30 @@ pub async fn get_location_history(
 
     let history = crate::service::get_location_history(&state.db, guard_id, query).await?;
     Ok(Json(ApiResponse::success(history)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/locations",
+    tag = "Locations",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "All active guard locations", body = Vec<GuardLocationWithName>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guards cannot access this endpoint", body = ErrorBody),
+    ),
+)]
+pub async fn list_all_locations(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<Vec<GuardLocationWithName>>>, AppError> {
+    // Only admins and customers can view the admin map overview
+    if user.role == "guard" {
+        return Err(AppError::Forbidden(
+            "Guards cannot access bulk location data".to_string(),
+        ));
+    }
+
+    let locations = crate::service::get_all_locations(&state.db).await?;
+    Ok(Json(ApiResponse::success(locations)))
 }

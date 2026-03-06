@@ -111,6 +111,17 @@ export interface LocationHistory {
   recorded_at: string;
 }
 
+export interface GuardLocationWithName {
+  guard_id: string;
+  full_name: string | null;
+  lat: number;
+  lng: number;
+  accuracy: number | null;
+  heading: number | null;
+  speed: number | null;
+  recorded_at: string;
+}
+
 // Notification types
 export interface NotificationLog {
   id: string;
@@ -433,10 +444,94 @@ export const bookingApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Reverse Geocoding (OpenStreetMap Nominatim)
+// ---------------------------------------------------------------------------
+
+const GEOCODE_CACHE_MAX = 500;
+const geocodeCache = new Map<string, string>();
+
+/** Reverse geocode lat/lng to a human-readable area name (Thai locale).
+ *  Results are cached by ~500m grid to reduce API calls. Capped at 500 entries. */
+export async function reverseGeocode(
+  lat: number,
+  lng: number
+): Promise<string> {
+  const key = `${lat.toFixed(3)},${lng.toFixed(3)}`;
+  const cached = geocodeCache.get(key);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=14&accept-language=th`,
+      { headers: { "User-Agent": "GuardDispatch/1.0" } }
+    );
+    if (!res.ok) throw new Error("geocode failed");
+    const data = await res.json();
+    const addr = data.address ?? {};
+    const name =
+      addr.suburb ??
+      addr.city_district ??
+      addr.subdistrict ??
+      addr.town ??
+      addr.city ??
+      data.display_name?.split(",")[0] ??
+      `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    // Evict oldest entries when cache exceeds max size
+    if (geocodeCache.size >= GEOCODE_CACHE_MAX) {
+      const oldest = geocodeCache.keys().next().value;
+      if (oldest !== undefined) geocodeCache.delete(oldest);
+    }
+    geocodeCache.set(key, name);
+    return name;
+  } catch {
+    const fallback = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    if (geocodeCache.size >= GEOCODE_CACHE_MAX) {
+      const oldest = geocodeCache.keys().next().value;
+      if (oldest !== undefined) geocodeCache.delete(oldest);
+    }
+    geocodeCache.set(key, fallback);
+    return fallback;
+  }
+}
+
+/** Batch reverse geocode multiple coordinates with rate-limit delay. */
+export async function batchReverseGeocode(
+  coords: { lat: number; lng: number }[]
+): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
+  const unique = new Map<string, { lat: number; lng: number }>();
+
+  for (const c of coords) {
+    const key = `${c.lat.toFixed(3)},${c.lng.toFixed(3)}`;
+    if (!geocodeCache.has(key) && !unique.has(key)) {
+      unique.set(key, c);
+    }
+  }
+
+  // Geocode unique coords with 200ms delay between requests (Nominatim rate limit)
+  for (const [, coord] of unique) {
+    await reverseGeocode(coord.lat, coord.lng);
+    if (unique.size > 1) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
+  for (const c of coords) {
+    const key = `${c.lat.toFixed(3)},${c.lng.toFixed(3)}`;
+    results.set(`${c.lat},${c.lng}`, geocodeCache.get(key) ?? `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`);
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Tracking API
 // ---------------------------------------------------------------------------
 
 export const trackingApi = {
+  getAllLocations: () =>
+    apiFetch<GuardLocationWithName[]>(`/tracking/locations`),
+
   getLatestLocation: (guardId: string) =>
     apiFetch<GuardLocation>(`/tracking/locations/${guardId}`),
 

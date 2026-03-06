@@ -154,39 +154,7 @@ class OtpStrings {
           : 'Registration successful!';
 }
 
-// ──────────────────────────────────────────────
-// 5b. RegistrationFormStrings — registration_form_screen
-// ──────────────────────────────────────────────
-class RegistrationFormStrings {
-  final String title;
-  final String subtitle;
-  final String fullNameLabel;
-  final String fullNameHint;
-  final String fullNameRequired;
-  final String emailLabel;
-  final String emailHint;
-  final String guardBadge;
-  final String customerBadge;
-  final String submitButton;
-  final String registering;
-  final String registerSuccess;
 
-  RegistrationFormStrings({required bool isThai})
-    : title = isThai ? 'สมัครสมาชิก' : 'Register',
-      subtitle = isThai
-          ? 'กรอกข้อมูลของคุณเพื่อเริ่มใช้งาน'
-          : 'Fill in your details to get started',
-      fullNameLabel = isThai ? 'ชื่อ-นามสกุล' : 'Full Name',
-      fullNameHint = isThai ? 'กรอกชื่อ-นามสกุล' : 'Enter your full name',
-      fullNameRequired = isThai ? 'กรุณากรอกชื่อ-นามสกุล' : 'Please enter your full name',
-      emailLabel = isThai ? 'อีเมล (ไม่บังคับ)' : 'Email (Optional)',
-      emailHint = isThai ? 'กรอกอีเมล' : 'Enter your email',
-      guardBadge = isThai ? 'สมัครเป็นเจ้าหน้าที่ รปภ.' : 'Register as Guard',
-      customerBadge = isThai ? 'สมัครเป็นผู้เรียกใช้บริการ' : 'Register as Customer',
-      submitButton = isThai ? 'สมัครสมาชิก' : 'Register',
-      registering = isThai ? 'กำลังสมัครสมาชิก...' : 'Registering...',
-      registerSuccess = isThai ? 'สมัครสมาชิกสำเร็จ!' : 'Registration successful!';
-}
 
 // ──────────────────────────────────────────────
 // 5b-old. RegistrationRoleStrings — registration_role_screen
@@ -363,33 +331,7 @@ class CustomerLoginStrings {
 }
 
 // ──────────────────────────────────────────────
-// 7. GuardLoginStrings — guard_login_screen
-// ──────────────────────────────────────────────
-class GuardLoginStrings {
-  final String appBarTitle;
-  final String guard;
-  final String securityGuard;
-  final String guardIdHint;
-  final String passwordHint;
-  final String loginButton;
-  final String fieldsRequired;
-  final String invalidCredentials;
-  final String loginError;
-
-  GuardLoginStrings({required bool isThai})
-    : appBarTitle = isThai ? 'เข้าสู่ระบบเจ้าหน้าที่' : 'Guard Login',
-      guard = isThai ? 'เจ้าหน้าที่' : 'Guard',
-      securityGuard = 'Security Guard',
-      guardIdHint = isThai ? 'รหัสเจ้าหน้าที่' : 'Guard ID',
-      passwordHint = isThai ? 'รหัสผ่าน' : 'Password',
-      loginButton = isThai ? 'เข้าสู่ระบบ' : 'Login',
-      fieldsRequired = isThai ? 'กรุณากรอกข้อมูลให้ครบ' : 'Please fill in all fields',
-      invalidCredentials = isThai ? 'รหัสเจ้าหน้าที่หรือรหัสผ่านไม่ถูกต้อง' : 'Invalid guard ID or password',
-      loginError = isThai ? 'เกิดข้อผิดพลาด กรุณาลองอีกครั้ง' : 'An error occurred. Please try again';
-}
-
-// ──────────────────────────────────────────────
-// 8. DashboardStrings — dashboard_screen
+// 7. DashboardStrings — dashboard_screen
 // ──────────────────────────────────────────────
 class DashboardStrings {
   final String headerTitle;
@@ -709,6 +651,11 @@ class GuardHomeStrings {
   final String registerToStart;
   final String registerNow;
 
+  // GPS tracking
+  final String connecting;
+  final String locationPermissionDenied;
+  final String gpsAccuracy;
+
   GuardHomeStrings({required bool isThai})
     : greeting = isThai ? 'สวัสดีตอนเย็น' : 'Good Evening',
       ready = isThai ? 'พร้อมให้บริการ' : 'Available',
@@ -731,7 +678,12 @@ class GuardHomeStrings {
       registerToStart = isThai
           ? 'กรุณาสมัครเพื่อเริ่มรับงาน'
           : 'Please register to start receiving jobs',
-      registerNow = isThai ? 'สมัครเลย' : 'Register Now';
+      registerNow = isThai ? 'สมัครเลย' : 'Register Now',
+      connecting = isThai ? 'กำลังเชื่อมต่อ...' : 'Connecting...',
+      locationPermissionDenied = isThai
+          ? 'กรุณาอนุญาตการเข้าถึงตำแหน่ง'
+          : 'Please allow location access',
+      gpsAccuracy = isThai ? 'ความแม่นยำ GPS' : 'GPS Accuracy';
 }
 
 // ──────────────────────────────────────────────

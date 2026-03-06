@@ -19,6 +19,8 @@ interface MapAreaProps {
   flyToRef: MutableRefObject<((lat: number, lng: number) => void) | null>;
   invalidateSizeRef?: MutableRefObject<(() => void) | null>;
   height?: string;
+  /** Unique key to prevent Leaflet container reuse across fullscreen/normal modes */
+  mapKey?: string;
 }
 
 // ─── Status colors ──────────────────────────────────────────────────────────
@@ -188,10 +190,12 @@ export default function MapArea({
   flyToRef,
   invalidateSizeRef,
   height,
+  mapKey,
 }: MapAreaProps) {
   return (
     <div className="relative" style={{ height: height ?? "500px" }}>
       <MapContainer
+        key={mapKey ?? "map"}
         center={[13.7363, 100.5318]}
         zoom={12}
         scrollWheelZoom={true}

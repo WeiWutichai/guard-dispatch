@@ -5,8 +5,8 @@ use uuid::Uuid;
 use shared::error::AppError;
 
 use crate::models::{
-    GpsEvent, GpsUpdate, GuardLocationRow, HistoryQuery, LocationHistoryResponse,
-    LocationHistoryRow, LocationResponse,
+    GpsEvent, GpsUpdate, GuardLocationRow, GuardLocationWithName, GuardLocationWithNameRow,
+    HistoryQuery, LocationHistoryResponse, LocationHistoryRow, LocationResponse,
 };
 
 // =============================================================================
@@ -167,4 +167,27 @@ pub async fn get_location_history(
     };
 
     Ok(rows.into_iter().map(LocationHistoryResponse::from).collect())
+}
+
+// =============================================================================
+// Get All Guard Locations (admin map view)
+// =============================================================================
+
+pub async fn get_all_locations(
+    db: &PgPool,
+) -> Result<Vec<GuardLocationWithName>, AppError> {
+    let rows = sqlx::query_as::<_, GuardLocationWithNameRow>(
+        r#"
+        SELECT gl.guard_id, u.full_name,
+               gl.lat, gl.lng, gl.accuracy, gl.heading, gl.speed, gl.recorded_at
+        FROM tracking.guard_locations gl
+        INNER JOIN auth.users u ON u.id = gl.guard_id
+        WHERE u.role = 'guard' AND u.is_active = true AND u.approval_status = 'approved'
+        ORDER BY gl.recorded_at DESC
+        "#,
+    )
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows.into_iter().map(GuardLocationWithName::from).collect())
 }

@@ -21,7 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
 import { useAuth } from "@/components/AuthProvider";
-import { type GuardLocation } from "@/lib/api";
+import { trackingApi, batchReverseGeocode, type GuardLocationWithName } from "@/lib/api";
 import { type DisplayGuard } from "./types";
 
 // Lazy-load the map component (Leaflet requires window/DOM)
@@ -48,16 +48,14 @@ const statusConfig = {
   },
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- will be used when backend is connected
-function getGuardStatus(location: GuardLocation): "active" | "idle" | "alert" {
+function getGuardStatus(recordedAt: string): "active" | "idle" | "alert" {
   const minutesAgo =
-    (Date.now() - new Date(location.recorded_at).getTime()) / 60000;
+    (Date.now() - new Date(recordedAt).getTime()) / 60000;
   if (minutesAgo > 30) return "alert";
   if (minutesAgo > 10) return "idle";
   return "active";
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- will be used when backend is connected
 function formatTimeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
   const minutes = Math.floor(diff / 60000);
@@ -66,54 +64,17 @@ function formatTimeAgo(dateStr: string): string {
   return `${Math.floor(minutes / 60)}h ago`;
 }
 
-// Demo data — will be replaced by real API data
-const DEMO_GUARDS: DisplayGuard[] = [
-  {
-    id: "G001",
-    name: "Somchai Prasert",
-    status: "active",
-    location: "Central Plaza - Main Entrance",
-    lat: 13.7563,
-    lng: 100.5018,
-    lastUpdate: "2 min ago",
-  },
-  {
-    id: "G002",
-    name: "Niran Thongchai",
-    status: "active",
-    location: "Siam Paragon - Parking B2",
-    lat: 13.7466,
-    lng: 100.5347,
-    lastUpdate: "1 min ago",
-  },
-  {
-    id: "G003",
-    name: "Kittisak Srisawat",
-    status: "idle",
-    location: "Terminal 21 - Floor 3",
-    lat: 13.7378,
-    lng: 100.5604,
-    lastUpdate: "8 min ago",
-  },
-  {
-    id: "G004",
-    name: "Wichai Kaewsai",
-    status: "alert",
-    location: "ICONSIAM - Waterfront",
-    lat: 13.7268,
-    lng: 100.51,
-    lastUpdate: "Just now",
-  },
-  {
-    id: "G005",
-    name: "Thanakorn Mee",
-    status: "active",
-    location: "Mega Bangna - East Wing",
-    lat: 13.6614,
-    lng: 100.684,
-    lastUpdate: "3 min ago",
-  },
-];
+function toDisplayGuard(loc: GuardLocationWithName): DisplayGuard {
+  return {
+    id: loc.guard_id,
+    name: loc.full_name ?? "Guard",
+    status: getGuardStatus(loc.recorded_at),
+    location: `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`,
+    lat: loc.lat,
+    lng: loc.lng,
+    lastUpdate: formatTimeAgo(loc.recorded_at),
+  };
+}
 
 export default function MapPage() {
   const { t } = useLanguage();
@@ -143,25 +104,35 @@ export default function MapPage() {
 
   const fetchLocations = useCallback(async () => {
     try {
-      // TODO: Replace with bulk location fetch from tracking API.
-      // The tracking API must enforce role-based filtering server-side:
-      // - admin/customer: returns all guard locations
-      // - guard: returns only their own location
-      setGuards([]);
+      const locations = await trackingApi.getAllLocations();
+      // Show immediately with coordinate strings
+      setGuards(locations.map(toDisplayGuard));
+
+      // Resolve area names in background
+      if (locations.length > 0) {
+        const nameMap = await batchReverseGeocode(
+          locations.map((l) => ({ lat: l.lat, lng: l.lng }))
+        );
+        setGuards(
+          locations.map((loc) => ({
+            ...toDisplayGuard(loc),
+            location: nameMap.get(`${loc.lat},${loc.lng}`) ?? `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`,
+          }))
+        );
+      }
     } catch {
-      // API not connected yet
+      // API not available — show empty map
     }
   }, []);
 
   useEffect(() => {
     void fetchLocations();
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(() => void fetchLocations(), 30_000);
+    return () => clearInterval(interval);
   }, [fetchLocations]);
 
-  // Use API data when available, otherwise demo data
-  const displayGuards = useMemo(
-    () => (guards.length > 0 ? guards : DEMO_GUARDS),
-    [guards]
-  );
+  const displayGuards = useMemo(() => guards, [guards]);
 
   const filteredGuards = useMemo(() => {
     const query = debouncedSearch.toLowerCase().trim();
@@ -285,6 +256,7 @@ export default function MapPage() {
         {/* Fullscreen map fills remaining space */}
         <div className="flex-1 relative">
           <MapArea
+            mapKey="fullscreen"
             guards={filteredGuards}
             selectedGuard={selectedGuard}
             onSelectGuard={handleGuardSelect}
@@ -440,6 +412,7 @@ export default function MapPage() {
 
           {/* Real Map via react-leaflet */}
           <MapArea
+            mapKey="normal"
             guards={filteredGuards}
             selectedGuard={selectedGuard}
             onSelectGuard={handleGuardSelect}

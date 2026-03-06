@@ -3,9 +3,11 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../../theme/colors.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/booking_provider.dart';
+import '../../../providers/tracking_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
-import '../guard_registration_screen.dart';
+import '../../role_selection_screen.dart';
 
 class GuardHomeTab extends StatefulWidget {
   const GuardHomeTab({super.key});
@@ -15,19 +17,22 @@ class GuardHomeTab extends StatefulWidget {
 }
 
 class _GuardHomeTabState extends State<GuardHomeTab> {
-  bool _isReady = false;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<BookingProvider>().fetchDashboard();
+    });
+  }
 
   Future<void> _onRefresh() async {
-    // Simulate some loading time for better UX
-    await Future.delayed(const Duration(milliseconds: 500));
+    await context.read<BookingProvider>().fetchDashboard();
   }
 
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = GuardHomeStrings(isThai: isThai);
-    // User reached this screen via approved login — always show dashboard content.
-    final isRegistered = context.watch<AuthProvider>().isAuthenticated;
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -43,103 +48,22 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                 _buildHeader(strings),
                 Padding(
                   padding: const EdgeInsets.all(20.0),
-                  child: isRegistered
-                      ? _buildRegisteredContent(strings)
-                      : _buildNotRegisteredContent(strings),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildStatusToggle(strings),
+                      const SizedBox(height: 24),
+                      _buildStatsGrid(strings),
+                      const SizedBox(height: 24),
+                      _buildAlertCard(strings),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildRegisteredContent(GuardHomeStrings strings) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildStatusToggle(strings),
-        const SizedBox(height: 24),
-        _buildStatsGrid(strings),
-        const SizedBox(height: 24),
-        _buildAlertCard(strings),
-      ],
-    );
-  }
-
-  Widget _buildNotRegisteredContent(GuardHomeStrings strings) {
-    return Column(
-      children: [
-        const SizedBox(height: 40),
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: AppColors.textSecondary.withValues(alpha: 0.08),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            Icons.access_time_rounded,
-            color: AppColors.textSecondary,
-            size: 48,
-          ),
-        ),
-        const SizedBox(height: 24),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Text(
-            strings.notRegistered,
-            style: GoogleFonts.inter(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          strings.registerToStart,
-          style: GoogleFonts.inter(
-            fontSize: 14,
-            color: AppColors.textSecondary,
-          ),
-        ),
-        const SizedBox(height: 40),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const GuardRegistrationScreen(),
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              minimumSize: const Size(double.infinity, 56),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-            child: Text(
-              strings.registerNow,
-              style: GoogleFonts.inter(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 
@@ -160,7 +84,13 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
             children: [
               IconButton(
                 onPressed: () {
-                  Navigator.of(context).pop();
+                  final phone = context.read<AuthProvider>().phone;
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RoleSelectionScreen(phone: phone),
+                    ),
+                  );
                 },
                 icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
                 color: AppColors.textPrimary,
@@ -211,52 +141,118 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
   }
 
   Widget _buildStatusToggle(GuardHomeStrings strings) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
+    final tracking = context.watch<TrackingProvider>();
+    final isOnline = tracking.isOnline;
+    final isConnecting = tracking.isConnecting;
+
+    // Status label
+    String statusText;
+    Color dotColor;
+    if (isConnecting) {
+      statusText = strings.connecting;
+      dotColor = AppColors.warning;
+    } else if (isOnline) {
+      statusText = strings.ready;
+      dotColor = AppColors.success;
+    } else {
+      statusText = strings.notReady;
+      dotColor = AppColors.danger;
+    }
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: _isReady ? AppColors.success : AppColors.danger,
-                  shape: BoxShape.circle,
-                ),
+              Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    statusText,
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              Text(
-                _isReady ? strings.ready : strings.notReady,
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
+              Switch.adaptive(
+                value: isOnline || isConnecting,
+                activeTrackColor: AppColors.primary,
+                onChanged: isConnecting
+                    ? null
+                    : (_) => context.read<TrackingProvider>().toggle(),
               ),
             ],
           ),
-          Switch.adaptive(
-            value: _isReady,
-            activeTrackColor: AppColors.primary,
-            onChanged: (value) {
-              setState(() {
-                _isReady = value;
-              });
-            },
+        ),
+        // GPS accuracy indicator when online
+        if (isOnline && tracking.lastPosition != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Icon(Icons.gps_fixed, size: 14, color: AppColors.success),
+                const SizedBox(width: 6),
+                Text(
+                  '${strings.gpsAccuracy}: ${tracking.lastPosition!.accuracy.toStringAsFixed(0)}m',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
+        // Error message
+        if (tracking.error != null && tracking.error!.contains('permission'))
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              strings.locationPermissionDenied,
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: AppColors.danger,
+              ),
+            ),
+          ),
+      ],
     );
   }
 
+  String _formatCurrency(num value) {
+    if (value >= 1000) {
+      final formatted = value.toStringAsFixed(0).replaceAllMapped(
+        RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+        (m) => '${m[1]},',
+      );
+      return '฿$formatted';
+    }
+    return '฿${value.toStringAsFixed(0)}';
+  }
+
   Widget _buildStatsGrid(GuardHomeStrings strings) {
+    final dashboard = context.watch<BookingProvider>().dashboard;
+    final todayEarnings = (dashboard?['today_earnings'] as num?) ?? 0;
+    final weekEarnings = (dashboard?['week_earnings'] as num?) ?? 0;
+    final todayJobs = (dashboard?['today_jobs_count'] as num?) ?? 0;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -265,15 +261,15 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           children: [
             _buildStatCard(
               strings.today,
-              '฿1,450',
-              strings.completedJobs,
+              _formatCurrency(todayEarnings),
+              '$todayJobs ${strings.completedJobs}',
               Icons.today_rounded,
               AppColors.info,
             ),
             const SizedBox(width: 16),
             _buildStatCard(
               strings.thisWeek,
-              '฿8,900',
+              _formatCurrency(weekEarnings),
               strings.upPercent,
               Icons.analytics_rounded,
               AppColors.primary,
@@ -342,16 +338,18 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
   }
 
   Widget _buildAlertCard(GuardHomeStrings strings) {
+    final isOnline = context.watch<TrackingProvider>().isOnline;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: _isReady
+        color: isOnline
             ? AppColors.primary.withValues(alpha: 0.05)
             : AppColors.surface,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: _isReady
+          color: isOnline
               ? AppColors.primary.withValues(alpha: 0.2)
               : AppColors.border,
         ),
@@ -361,22 +359,22 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: _isReady
+              color: isOnline
                   ? AppColors.primary.withValues(alpha: 0.1)
                   : AppColors.disabled.withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
             child: Icon(
-              _isReady
+              isOnline
                   ? Icons.notifications_active_rounded
                   : Icons.notifications_off_rounded,
-              color: _isReady ? AppColors.primary : AppColors.textSecondary,
+              color: isOnline ? AppColors.primary : AppColors.textSecondary,
               size: 32,
             ),
           ),
           const SizedBox(height: 16),
           Text(
-            _isReady ? strings.incomingJobs : strings.unavailable,
+            isOnline ? strings.incomingJobs : strings.unavailable,
             style: GoogleFonts.inter(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -385,14 +383,14 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           ),
           const SizedBox(height: 8),
           Text(
-            _isReady ? strings.newJobsMsg : strings.setAvailableMsg,
+            isOnline ? strings.newJobsMsg : strings.setAvailableMsg,
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(
               fontSize: 14,
               color: AppColors.textSecondary,
             ),
           ),
-          if (_isReady) ...[
+          if (isOnline) ...[
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: () {},
