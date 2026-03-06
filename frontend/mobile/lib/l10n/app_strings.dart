@@ -629,6 +629,58 @@ class GuardRegistrationStrings {
 }
 
 // ──────────────────────────────────────────────
+// 11b. CustomerRegistrationStrings
+// ──────────────────────────────────────────────
+class CustomerRegistrationStrings {
+  final String appBarTitle;
+  final String fillInfo;
+  final String fullName;
+  final String fullNameHint;
+  final String contactPhone;
+  final String contactPhoneHint;
+  final String contactPhoneInvalid;
+  final String email;
+  final String emailHint;
+  final String emailInvalid;
+  final String companyName;
+  final String companyHint;
+  final String address;
+  final String addressHint;
+  final String addressRequired;
+  final String submitApplication;
+  final String submitting;
+  final String successMessage;
+
+  CustomerRegistrationStrings({required bool isThai})
+    : appBarTitle = isThai ? 'สมัครเพื่อเริ่มใช้บริการ' : 'Register as Customer',
+      fillInfo = isThai ? 'กรุณากรอกข้อมูลของคุณ' : 'Please fill in your information',
+      fullName = isThai ? 'ชื่อ-นามสกุล (ไม่บังคับ)' : 'Full Name (optional)',
+      fullNameHint = isThai ? 'กรอกชื่อ-นามสกุล' : 'Enter your full name',
+      contactPhone = isThai ? 'เบอร์ติดต่อ (ไม่บังคับ)' : 'Contact Phone (optional)',
+      contactPhoneHint = isThai
+          ? 'เบอร์ติดต่อ (ไม่ใช่เบอร์ login)'
+          : 'Contact number (not login number)',
+      contactPhoneInvalid = isThai
+          ? 'เบอร์โทรต้องเป็นตัวเลข 10 หลักขึ้นต้นด้วย 0'
+          : 'Phone must be 10 digits starting with 0',
+      email = isThai ? 'อีเมล (ไม่บังคับ)' : 'Email (optional)',
+      emailHint = 'example@mail.com',
+      emailInvalid = isThai ? 'รูปแบบอีเมลไม่ถูกต้อง' : 'Invalid email format',
+      companyName = isThai ? 'ชื่อบริษัท (ไม่บังคับ)' : 'Company Name (optional)',
+      companyHint = isThai ? 'กรอกชื่อบริษัท (ถ้ามี)' : 'Enter company name (if any)',
+      address = isThai ? 'ที่อยู่ *' : 'Address *',
+      addressHint = isThai
+          ? 'กรอกที่อยู่ เช่น บ้านเลขที่ ถนน แขวง เขต จังหวัด'
+          : 'Enter your full address',
+      addressRequired = isThai
+          ? 'กรุณากรอกที่อยู่อย่างน้อย 10 ตัวอักษร'
+          : 'Address must be at least 10 characters',
+      submitApplication = isThai ? 'ส่งใบสมัคร' : 'Submit Application',
+      submitting = isThai ? 'กำลังส่ง...' : 'Submitting...',
+      successMessage = isThai ? 'ส่งใบสมัครสำเร็จ!' : 'Application submitted!';
+}
+
+// ──────────────────────────────────────────────
 // 12. GuardHomeStrings — guard_home_tab
 // ──────────────────────────────────────────────
 class GuardHomeStrings {
@@ -637,11 +689,11 @@ class GuardHomeStrings {
   final String notReady;
   final String today;
   final String thisWeek;
-  final String completedJobs;
-  final String upPercent;
+  final String completedJobsLabel;
+  final String noChangeLabel;
   final String incomingJobs;
   final String unavailable;
-  final String newJobsMsg;
+  final String noNewJobsMsg;
   final String setAvailableMsg;
   final String viewNewJobs;
   final String sampleGuardName;
@@ -662,13 +714,13 @@ class GuardHomeStrings {
       notReady = isThai ? 'ไม่พร้อมให้บริการ' : 'Unavailable',
       today = isThai ? 'วันนี้' : 'Today',
       thisWeek = isThai ? 'สัปดาห์นี้' : 'This Week',
-      completedJobs = isThai ? 'งานสำเร็จ: 12 งาน' : 'Completed: 12 jobs',
-      upPercent = isThai ? 'เพิ่มขึ้น +16%' : 'Up +16%',
+      completedJobsLabel = isThai ? 'งานสำเร็จ' : 'Completed',
+      noChangeLabel = isThai ? 'ไม่เปลี่ยนแปลง' : 'No change',
       incomingJobs = isThai ? 'งานที่เข้ามา' : 'Incoming Jobs',
       unavailable = isThai ? 'ไม่พร้อมให้บริการ' : 'Unavailable',
-      newJobsMsg = isThai
-          ? 'มี 2 งานใหม่ โปรดตรวจสอบ'
-          : '2 new jobs available. Please check.',
+      noNewJobsMsg = isThai
+          ? 'ยังไม่มีงานใหม่'
+          : 'No new jobs available.',
       setAvailableMsg = isThai
           ? 'เปิดสถานะ "พร้อมให้บริการ" เพื่อรับงานใหม่'
           : 'Set status to "Available" to receive new jobs',
@@ -683,7 +735,24 @@ class GuardHomeStrings {
       locationPermissionDenied = isThai
           ? 'กรุณาอนุญาตการเข้าถึงตำแหน่ง'
           : 'Please allow location access',
-      gpsAccuracy = isThai ? 'ความแม่นยำ GPS' : 'GPS Accuracy';
+      gpsAccuracy = isThai ? 'ความแม่นยำ GPS' : 'GPS Accuracy',
+      _isThai = isThai;
+
+  final bool _isThai;
+
+  String completedJobsCount(int count) =>
+      _isThai ? '$count งานสำเร็จ' : '$count completed';
+
+  String newJobsCount(int count) =>
+      _isThai ? 'มี $count งานใหม่ โปรดตรวจสอบ' : '$count new jobs available. Please check.';
+
+  String weekChangePercent(double percent) {
+    if (percent == 0) return noChangeLabel;
+    final sign = percent > 0 ? '+' : '';
+    return _isThai
+        ? '${percent > 0 ? "เพิ่มขึ้น" : "ลดลง"} $sign${percent.toStringAsFixed(0)}%'
+        : '${percent > 0 ? "Up" : "Down"} $sign${percent.toStringAsFixed(0)}%';
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -691,8 +760,8 @@ class GuardHomeStrings {
 // ──────────────────────────────────────────────
 class GuardJobsStrings {
   final String appBarTitle;
-  final String currentTab;
-  final String completedTab;
+  final String currentTabLabel;
+  final String completedTabLabel;
   final String statusWorking;
   final String callClient;
   final String chat;
@@ -716,8 +785,8 @@ class GuardJobsStrings {
 
   GuardJobsStrings({required bool isThai})
     : appBarTitle = isThai ? 'รายการงาน' : 'Job List',
-      currentTab = isThai ? 'งานปัจจุบัน (1)' : 'Current (1)',
-      completedTab = isThai ? 'งานที่เสร็จแล้ว (2)' : 'Completed (2)',
+      currentTabLabel = isThai ? 'งานปัจจุบัน' : 'Current',
+      completedTabLabel = isThai ? 'งานที่เสร็จแล้ว' : 'Completed',
       statusWorking = isThai ? 'กำลังทำงาน' : 'Working',
       callClient = isThai ? 'โทรหาลูกค้า' : 'Call Client',
       chat = isThai ? 'แชท' : 'Chat',

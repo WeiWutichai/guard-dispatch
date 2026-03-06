@@ -100,7 +100,7 @@ nginx-gateway (port 80/443 — จุดเข้าเดียว)
 
 ```
 PostgreSQL: guard_dispatch_db
-├── schema: auth         (users, sessions, roles, otp_codes)
+├── schema: auth         (users, sessions, roles, otp_codes, guard_profiles, customer_profiles)
 ├── schema: booking      (requests, assignments, status)
 ├── schema: tracking     (locations, history)
 ├── schema: notification (logs, templates)
@@ -377,10 +377,11 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
 │       │   │   ├── tracking_service.dart  ← WebSocket GPS streaming to backend
 │       │   │   └── language_service.dart
-│       │   ├── screens/                ← 31+ screens (guard/customer/common)
+│       │   ├── screens/                ← 32+ screens (guard/customer/common)
 │       │   │   ├── phone_input_screen.dart           ← OTP: กรอกเบอร์โทร
 │       │   │   ├── otp_verification_screen.dart      ← OTP: กรอกรหัส 6 หลัก
 │       │   │   ├── set_password_screen.dart          ← OTP: ตั้งรหัสผ่าน + ข้อมูล
+│       │   │   ├── customer_registration_screen.dart ← Customer: กรอก address + company
 │       │   │   └── registration_pending_screen.dart  ← รอ Admin อนุมัติ (no tokens)
 │       │   ├── l10n/                   ← Bilingual strings (TH/EN)
 │       │   └── theme/                  ← Colors, styles
@@ -416,7 +417,7 @@ guard-dispatch/                 ← Monorepo (1 Repo)
   - Tab "guard": แสดง experience + salary (ไม่มีคอลัมน์ประเภท)
   - Tab "customer": แสดง companyName + bookingPurpose
 - **Stats Cards:** Scope ตาม active tab (นับเฉพาะ applicants ในประเภทที่เลือก)
-- **Modal:** Content แตกต่างตามประเภท — Guard แสดงเอกสาร/ใบประกาศ/ประวัติ, Customer แสดงบริษัท/วัตถุประสงค์
+- **Modal:** Content แตกต่างตามประเภท — Guard: fetch `getGuardProfile()` → แสดงเอกสาร/ประวัติ/ธนาคาร; Customer: fetch `getCustomerProfile()` → แสดง company_name + address
 - **Approved Note:** เมื่อสถานะ approved จะแสดงข้อความว่าไปอยู่เมนูไหน
 
 ### Map Page Architecture (/map)
@@ -445,9 +446,10 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 > **Flow เปลี่ยนแปลง (2026-03-05):** 3-step progressive registration with atomic guard role
 > - Step 1: `registerWithOtp(role=null)` ถูกเรียกใน `PinSetupScreen._finishSetup()` ทันทีหลัง PIN — Admin เห็น applicant โดยยังไม่มีประเภท
 > - Step 2: `updateRole(phone, 'guard')` ถูกเรียกใน `RoleSelectionScreen._onRoleTap()` — ออก `profile_token` เท่านั้น **ไม่ set role ใน DB** (guard ยังเป็น null)
-> - Step 2 (customer): `updateRole(phone, 'customer')` → set role ทันที (ไม่มี form step)
-> - Step 3: `submitGuardProfile(profileToken)` ถูกเรียกใน `GuardRegistrationScreen._onSubmit()` — set role='guard' + save profile **atomically** → Admin เห็นข้อมูลครบ
-> - **Rollback:** ถ้า Step 3 error (เช่น S3 upload fail) → role ยังเป็น null, ไม่มี partial state
+> - Step 2 (customer): `updateRole(phone, 'customer')` → ออก `profile_token` เท่านั้น **ไม่ set role ใน DB** (เหมือน guard)
+> - Step 3 (guard): `submitGuardProfile(profileToken)` ถูกเรียกใน `GuardRegistrationScreen._onSubmit()` — set role='guard' + save profile **atomically** → Admin เห็นข้อมูลครบ
+> - Step 3 (customer): `submitCustomerProfile(profileToken)` ถูกเรียกใน `CustomerRegistrationScreen._onSubmit()` — set role='customer' + save profile **atomically**
+> - **Rollback:** ถ้า Step 3 error → role ยังเป็น null, ไม่มี partial state
 
 ```
 Flutter Mobile                          Backend (rust-auth)                    External
@@ -486,13 +488,13 @@ RoleSelectionScreen(phone)
   ├─ ★ STEP 2: updateRole(phone, role)     POST /profile/role
   │   authProvider.updateRole(phone,   ──► ├─ validate_thai_phone()
   │     'guard'/'customer')                 ├─ Guard: SELECT id (verify user) — ไม่ UPDATE role
-  │                                         ├─ Customer: UPDATE role='customer' ทันที
-  │   ◄── profile_token (guard only) ─────┤ └─ encode_profile_token() if guard → Redis EX 15min
-  │                                              Guard: Admin ยังเห็น role=null
-  │                                              Customer: Admin เห็นประเภทแล้ว
+  │                                         ├─ Customer: SELECT id (verify user) — ไม่ UPDATE role
+  │   ◄── profile_token (both) ───────────┤ └─ encode_profile_token(purpose) → Redis EX 15min
+  │                                              Guard: purpose="guard_profile"
+  │                                              Customer: purpose="customer_profile"
   ├─ guard → GuardRegistrationScreen(phone, profileToken)
-  └─ customer → RegistrationPendingScreen
-  ▼ (guard only)
+  └─ customer → CustomerRegistrationScreen(phone, profileToken)
+  ▼ (guard path)
 GuardRegistrationScreen(phone, profileToken)
   ├─ Step 1: full_name, gender, DOB, experience, workplace
   ├─ Step 2: 5 docs (image_picker: id_card, security_license,
@@ -506,7 +508,18 @@ GuardRegistrationScreen(phone, profileToken)
                                             ├─ UPSERT auth.guard_profiles
                                             ├─ UPDATE auth.users SET role='guard' ← atomic!
                                             └─ invalidate_user_cache() → Admin เห็นทันที
-      (fallback: reissueProfileToken() if profileToken expired)
+      (fallback: reissueProfileToken(role:'guard') if profileToken expired)
+      ★ ถ้า error → role ยังเป็น null (ไม่มี partial state)
+  ▼ (customer path)
+CustomerRegistrationScreen(phone, profileToken)
+  ├─ address (required, min 10 chars), company_name (optional), email (optional)
+  └─ ★ STEP 3 (customer): _onSubmit():
+      authProvider.submitCustomerProfile(      POST /profile/customer
+        profileToken, address,            ──► ├─ validate_profile_token(purpose="customer_profile")
+        companyName)                           ├─ UPSERT auth.customer_profiles
+                                               ├─ UPDATE auth.users SET role='customer' WHERE role IS NULL
+                                               └─ invalidate_user_cache()
+      (fallback: reissueProfileToken(role:'customer') if profileToken expired)
       ★ ถ้า error → role ยังเป็น null (ไม่มี partial state)
   ▼
 RegistrationPendingScreen
@@ -528,15 +541,15 @@ RegistrationPendingScreen
 >
 > **3-step progressive visibility:** Admin sees applicant at each step:
 > 1. After PIN: user appears with `role=null` ("ยังไม่ได้ระบุ")
-> 2. After role selection: guard → role ยังเป็น null (แค่ออก profile_token); customer → role set ทันที
-> 3. After guard form submit: role='guard' + profile saved atomically — ถ้า error ไม่มี partial state
+> 2. After role selection: both guard & customer → role ยังเป็น null (แค่ออก profile_token)
+> 3. After form submit: guard → `submit_guard_profile()` sets role='guard'; customer → `submit_customer_profile()` sets role='customer' — both atomic
 >
-> **Atomic guard role:** `update_user_role(guard)` ไม่ UPDATE role — แค่ SELECT verify + issue profile_token.
-> `submit_guard_profile()` เป็นตัว SET role='guard' หลัง upload+save สำเร็จ → ถ้า S3 error, role ยัง null.
+> **Atomic role assignment:** `update_user_role()` ไม่ UPDATE role สำหรับทั้ง guard และ customer — แค่ SELECT verify + issue profile_token.
+> `submit_guard_profile()` / `submit_customer_profile()` เป็นตัว SET role หลัง save สำเร็จ → ถ้า error, role ยัง null.
 >
-> **Profile token lifecycle:** `updateRole(role='guard')` issues `profile_token` (15-min JWT).
-> Used by `submitGuardProfile()`. If expired, `reissueProfileToken()` gets a fresh one.
-> Single-use enforced via Redis GETDEL on jti.
+> **Profile token lifecycle:** `updateRole()` issues `profile_token` (15-min JWT) with purpose (`"guard_profile"` / `"customer_profile"`).
+> Used by `submitGuardProfile()` / `submitCustomerProfile()`. If expired, `reissueProfileToken(role:)` gets a fresh one.
+> Single-use enforced via Redis GETDEL on jti. Purpose isolation prevents cross-use.
 
 **iOS Keychain & PinLockScreen:**
 - iOS Keychain persists across app reinstalls — `isPinSet` อาจเป็น `true` แม้หลัง uninstall
@@ -550,26 +563,30 @@ RegistrationPendingScreen
 - `POST /otp/verify` → `handlers::verify_otp` (public, no JWT)
 - `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`. Password param = SHA-256 hash of user's PIN.
 - `POST /login/phone` → `handlers::login_with_phone` (public) — login with `{phone, password}` (PIN hash). Returns `{access_token, refresh_token, role}`. Used by mobile after admin approval.
-- `POST /profile/role` → `handlers::update_role` (public, no JWT) — guard: verify user + issue `profile_token` (**ไม่ set role**); customer: set role ทันที. Returns `profile_token` for guard, null for customer.
-- `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for pending guard (no OTP needed)
-- `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth — single-use)
+- `POST /profile/role` → `handlers::update_role` (public, no JWT) — guard: verify user + issue `profile_token` (**ไม่ set role**); customer: verify user + issue `profile_token` (**ไม่ set role**). Returns `profile_token` for both.
+- `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for pending user. Accepts optional `role` param to determine purpose (`"guard_profile"` / `"customer_profile"`)
+- `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth, purpose=`"guard_profile"` — single-use)
+- `POST /profile/customer` → `handlers::submit_customer_profile` (profile_token auth, purpose=`"customer_profile"` — single-use) — UPSERT `auth.customer_profiles`, SET role='customer' if role IS NULL
 - `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT)
+- `GET /admin/customer-profile/:user_id` → `handlers::get_customer_profile` (admin JWT) — JOIN users + customer_profiles
 - `GET /me` → `handlers::get_me` (JWT required) — returns `UserResponse { id, full_name, phone, email, role, avatar_url, approval_status }`. Used by `AuthProvider.fetchProfile()` for dashboard real data.
 
 **Shared Modules:**
 - `shared::otp` — `OtpConfig`, `validate_thai_phone()`, `generate_otp()`, `to_international_format()`, `format_otp_message()`
 - `shared::sms` — `SmsConfig`, `send_sms()` (INET CSGAPI gateway)
-- `shared::auth` — `PhoneVerifyClaims` (JWT with jti), `encode_phone_verify_token()`, `decode_phone_verify_token()`; `ProfileTokenClaims` (JWT with jti), `encode_profile_token()` → `(String, String)` (token, jti), `decode_profile_token()` → `(Uuid, String)` (user_id, jti)
+- `shared::auth` — `PhoneVerifyClaims` (JWT with jti), `encode_phone_verify_token()`, `decode_phone_verify_token()`; `ProfileTokenClaims` (JWT with jti + purpose), `encode_profile_token(purpose)` → `(String, String)` (token, jti), `decode_profile_token(expected_purpose)` → `(Uuid, String)` (user_id, jti) — purpose isolation: `"guard_profile"` / `"customer_profile"`
 
-**Auth Service — Guard Profile:**
-- `service::register_with_otp()`: if role=guard (explicit), calls `encode_profile_token()` → stores jti in Redis `SET EX 900` (15 min). When role=null (3-step flow), does NOT issue profile_token.
-- `service::update_user_role()`: Guard path: SELECT verify user (pending + role IS NULL or guard) + issue profile_token — **ไม่ UPDATE role**. Customer path: UPDATE role='customer'. Rejects admin role.
-- `service::validate_profile_token()`: async, takes redis param — decodes JWT, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
+**Auth Service — Guard & Customer Profile:**
+- `service::register_with_otp()`: if role=guard (explicit), calls `encode_profile_token(purpose="guard_profile")` → stores jti in Redis `SET EX 900` (15 min). When role=null (3-step flow), does NOT issue profile_token.
+- `service::update_user_role()`: Guard path: SELECT verify user (pending + role IS NULL or guard) + issue profile_token (purpose=`"guard_profile"`) — **ไม่ UPDATE role**. Customer path: SELECT verify user + issue profile_token (purpose=`"customer_profile"`) — **ไม่ UPDATE role**. Rejects admin role.
+- `service::validate_profile_token(expected_purpose)`: async, takes redis + expected_purpose param — decodes JWT with purpose check, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
 - `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles`; then **SET role='guard'** + `invalidate_user_cache()` — role set only after successful save (atomic, no partial state on error)
+- `service::submit_customer_profile()`: validates address not empty; UPSERTs `auth.customer_profiles`; then **SET role='customer' WHERE role IS NULL** + `invalidate_user_cache()` — guards keep their role if they also register as customer
+- `service::get_customer_profile()`: JOIN `auth.users` + `auth.customer_profiles` — returns `CustomerProfileResponse`
 - file_key format for guard docs: `profiles/guard/{user_id}/{doc_type}.{ext}`
 
 **Flutter Mobile:**
-- `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for guard), `reissueProfileToken(phone)`, `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`, `loginWithPhone(phone, pinHash)`, `fetchProfile()`
+- `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for both guard & customer), `reissueProfileToken(phone, {role})` (optional role param: `'guard'`/`'customer'`), `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`, `submitCustomerProfile({profileToken, address, companyName?})`, `loginWithPhone(phone, pinHash)`, `fetchProfile()`
   - `AuthStatus` enum: `unknown` | `authenticated` | `unauthenticated` | `pendingApproval`
   - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
   - `updateRole()` calls `POST /auth/profile/role`, updates local pending state with role
@@ -582,10 +599,11 @@ RegistrationPendingScreen
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
   - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only; also stores `phone` and `date_of_birth` (ISO format) for edit flow
   - `getPendingProfile()` retrieves stored profile for pre-filling edit form
-- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/login/phone`
+- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/profile/customer`, `/auth/login/phone`
 - `main.dart` `home`: `Consumer<AuthProvider>` — routes to `RegistrationPendingScreen` when `status == pendingApproval` (handles app-restart while pending)
 - `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed).
-- `RoleSelectionScreen._onRoleTap()`: **authenticated users** → `pushReplacement` ไป dashboard ทันที (guard→GuardDashboard, customer→HirerDashboard) ไม่ต้องลงทะเบียนใหม่; **unauthenticated users** → calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path → `RegistrationPendingScreen`
+- `RoleSelectionScreen._onRoleTap()`: **authenticated users** → `pushReplacement` ไป dashboard ทันที (guard→GuardDashboard, customer→HirerDashboard) ไม่ต้องลงทะเบียนใหม่; **unauthenticated users** → calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path gets profile_token → `CustomerRegistrationScreen(phone, profileToken)`
+- `CustomerRegistrationScreen`: single-page form — address (required, min 10 chars), company_name (optional), email (optional with `@` + `.` validation). Submit: `submitCustomerProfile(profileToken, address, companyName)` → `RegistrationPendingScreen`. Uses `reissueProfileToken(role:'customer')` fallback if profileToken is null/expired.
 - `GuardRegistrationScreen`: accepts optional `initialProfile` param for edit mode — `_prefillForm()` restores text fields, gender, DOB, bank from stored profile. Back button uses `canPop()` check to handle edit flow (no route to pop → navigate to `RegistrationPendingScreen`).
 - `GuardRegistrationScreen._onSubmit()`: only calls `submitGuardProfile(profileToken)` — no `registerWithOtp()`. Uses `reissueProfileToken()` fallback if profileToken is null/expired.
 - **Dashboard real data:** After login, dashboard screens use `AuthProvider` profile fields (`fullName`, `phone`, `avatarUrl`) from `GET /auth/me` instead of hardcoded mock data:
@@ -844,8 +862,10 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม cast `response.data['field'] as String?` — ใช้ `raw is String ? raw : null` เพื่อป้องกัน crash
 - ❌ ห้ามเรียก `registerWithOtp()` ใน `RoleSelectionScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `PinSetupScreen._finishSetup()` เท่านั้น (3-step flow: register ก่อน, เลือก role ทีหลัง)
 - ❌ ห้ามเรียก `updateRole()` ใน `PinSetupScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `RoleSelectionScreen._onRoleTap()` เท่านั้น
-- ❌ ห้าม `update_user_role()` SET role='guard' ใน DB — guard path ต้องแค่ SELECT verify + issue profile_token เท่านั้น → role จะถูก set ใน `submit_guard_profile()` หลัง upload สำเร็จ (atomic, no partial state)
+- ❌ ห้าม `update_user_role()` SET role ใน DB ทั้ง guard และ customer path — ต้องแค่ SELECT verify + issue profile_token เท่านั้น → role จะถูก set ใน `submit_guard_profile()` / `submit_customer_profile()` หลัง save สำเร็จ (atomic, no partial state)
 - ❌ ห้าม `submit_guard_profile()` สำเร็จโดยไม่ set role='guard' — ต้อง UPDATE role + `invalidate_user_cache()` หลัง UPSERT profile เสมอ
+- ❌ ห้าม `submit_customer_profile()` สำเร็จโดยไม่ set role='customer' (เมื่อ role IS NULL) — ต้อง UPDATE role + `invalidate_user_cache()` หลัง UPSERT profile เสมอ
+- ❌ ห้ามใช้ profile_token ข้าม purpose — guard token ใช้กับ `submit_customer_profile()` ไม่ได้ และในทางกลับกัน (`decode_profile_token(expected_purpose)` ตรวจ purpose)
 - ❌ ห้ามส่ง `phoneVerifiedToken` ไปยัง `RoleSelectionScreen` — token ถูก consume ใน `PinSetupScreen` แล้ว, ส่งแค่ `phone`
 - ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `SetPasswordScreen` — ต้อง navigate ไป `PinSetupScreen` โดยตรง (SetPasswordScreen ถูกลบออกจาก flow หลักแล้ว)
 - ❌ ห้ามแสดง `PinLockScreen` โดยตรวจเฉพาะ `pinService.isPinSet` — ต้องตรวจ `auth.status == AuthStatus.authenticated` ก่อนเสมอ (iOS Keychain persist ข้าม reinstall)

@@ -821,6 +821,7 @@ pub async fn register_with_otp(
             user.id,
             &jwt_config.encoding_key,
             PROFILE_TOKEN_TTL_MINUTES,
+            "guard_profile",
         )?;
         // Atomic SET EX — store jti so validate_profile_token can GETDEL it once.
         let ttl_secs = PROFILE_TOKEN_TTL_MINUTES * 60;
@@ -949,6 +950,7 @@ pub async fn reissue_profile_token(
     jwt_config: &JwtConfig,
     redis: &redis::aio::MultiplexedConnection,
     phone: &str,
+    role: Option<shared::models::UserRole>,
 ) -> Result<String, AppError> {
     let phone_clean = otp::validate_thai_phone(phone)?;
 
@@ -964,11 +966,18 @@ pub async fn reissue_profile_token(
         AppError::NotFound("No pending registration found for this phone".to_string())
     })?;
 
+    // Determine purpose from role (default: guard for backward compatibility)
+    let purpose = match role {
+        Some(shared::models::UserRole::Customer) => "customer_profile",
+        _ => "guard_profile",
+    };
+
     // Issue fresh profile_token + store jti in Redis
     let (token, jti) = encode_profile_token(
         user_id,
         &jwt_config.encoding_key,
         PROFILE_TOKEN_TTL_MINUTES,
+        purpose,
     )?;
     let ttl_secs = PROFILE_TOKEN_TTL_MINUTES * 60;
     redis::cmd("SET")
@@ -1008,30 +1017,24 @@ pub async fn update_user_role(
         ));
     }
 
-    // Guard: do NOT set role yet — role is set atomically in submit_guard_profile
-    // so that if profile upload fails, the user stays role=null (no partial state).
-    // Customer: set role immediately (no profile step).
-    let user: Option<(Uuid,)> = if role == UserRole::Guard {
-        sqlx::query_as(
-            "SELECT id FROM auth.users \
-             WHERE phone = $1 AND approval_status = 'pending' AND (role IS NULL OR role = 'guard'::user_role)",
-        )
-        .bind(&phone_clean)
-        .fetch_optional(db)
-        .await
-        .map_err(AppError::Database)?
+    // Guard: do NOT set role yet — role is set atomically in submit_guard_profile.
+    // Customer: do NOT set role yet — role is set atomically in submit_customer_profile.
+    // Both paths SELECT verify + issue profile_token.
+    let allowed_role = if role == UserRole::Guard {
+        "guard"
     } else {
-        sqlx::query_as(
-            "UPDATE auth.users SET role = $2::user_role, updated_at = NOW() \
-             WHERE phone = $1 AND approval_status = 'pending' AND role IS NULL \
-             RETURNING id",
-        )
-        .bind(&phone_clean)
-        .bind(role.to_string())
-        .fetch_optional(db)
-        .await
-        .map_err(AppError::Database)?
+        "customer"
     };
+    let user: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM auth.users \
+         WHERE phone = $1 AND approval_status = 'pending' \
+         AND (role IS NULL OR role = $2::user_role)",
+    )
+    .bind(&phone_clean)
+    .bind(allowed_role)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::Database)?;
 
     let (user_id,) = user.ok_or_else(|| {
         AppError::BadRequest(
@@ -1039,29 +1042,31 @@ pub async fn update_user_role(
         )
     })?;
 
-    // Invalidate user cache (customer role changed; guard just needs fresh token)
+    // Invalidate user cache
     invalidate_user_cache(redis, &user_id).await?;
 
-    // Issue profile_token only for guard role (needed for document upload)
-    let profile_token = if role == UserRole::Guard {
-        let (token, jti) = encode_profile_token(
-            user_id,
-            &jwt_config.encoding_key,
-            PROFILE_TOKEN_TTL_MINUTES,
-        )?;
-        let ttl_secs = PROFILE_TOKEN_TTL_MINUTES * 60;
-        redis::cmd("SET")
-            .arg(format!("profile_jti:{jti}"))
-            .arg("valid")
-            .arg("EX")
-            .arg(ttl_secs)
-            .query_async::<()>(&mut redis.clone())
-            .await
-            .map_err(AppError::Redis)?;
-        Some(token)
+    // Issue profile_token for both guard and customer
+    let purpose = if role == UserRole::Guard {
+        "guard_profile"
     } else {
-        None
+        "customer_profile"
     };
+    let (token, jti) = encode_profile_token(
+        user_id,
+        &jwt_config.encoding_key,
+        PROFILE_TOKEN_TTL_MINUTES,
+        purpose,
+    )?;
+    let ttl_secs = PROFILE_TOKEN_TTL_MINUTES * 60;
+    redis::cmd("SET")
+        .arg(format!("profile_jti:{jti}"))
+        .arg("valid")
+        .arg("EX")
+        .arg(ttl_secs)
+        .query_async::<()>(&mut redis.clone())
+        .await
+        .map_err(AppError::Redis)?;
+    let profile_token = Some(token);
 
     Ok((user_id, profile_token))
 }
@@ -1151,8 +1156,9 @@ pub async fn validate_profile_token(
     token: &str,
     jwt_config: &JwtConfig,
     redis: &redis::aio::MultiplexedConnection,
+    expected_purpose: &str,
 ) -> Result<Uuid, AppError> {
-    let (user_id, jti) = decode_profile_token(token, &jwt_config.decoding_key)?;
+    let (user_id, jti) = decode_profile_token(token, &jwt_config.decoding_key, expected_purpose)?;
     let mut conn = redis.clone();
     let status: Option<String> = redis::cmd("GETDEL")
         .arg(format!("profile_jti:{jti}"))
@@ -1341,6 +1347,136 @@ pub async fn get_guard_profile(
         account_number: row.account_number,
         account_name: row.account_name,
         passbook_photo_url: rewrite(passbook_photo_url),
+    })
+}
+
+// =============================================================================
+// Submit Customer Profile (profile_token protected)
+// =============================================================================
+
+pub async fn submit_customer_profile(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+    user_id: Uuid,
+    req: crate::models::SubmitCustomerProfileRequest,
+) -> Result<(), AppError> {
+    // Validate address: required, min 10 chars
+    let address = req.address.trim().to_string();
+    if address.len() < 10 {
+        return Err(AppError::BadRequest(
+            "Address is required and must be at least 10 characters".to_string(),
+        ));
+    }
+
+    // Validate email if provided
+    let email = req.email.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(ref e) = email {
+        if e.len() < 5 || !e.contains('@') || !e.contains('.') {
+            return Err(AppError::BadRequest(
+                "Invalid email format".to_string(),
+            ));
+        }
+    }
+
+    // Validate contact_phone if provided (Thai format)
+    let contact_phone = req
+        .contact_phone
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(ref p) = contact_phone {
+        shared::otp::validate_thai_phone(p)?;
+    }
+
+    let full_name = req.full_name.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let company_name = req.company_name.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
+    // UPSERT customer_profiles
+    sqlx::query(
+        "INSERT INTO auth.customer_profiles (user_id, full_name, contact_phone, email, company_name, address) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (user_id) DO UPDATE SET \
+             full_name = EXCLUDED.full_name, \
+             contact_phone = EXCLUDED.contact_phone, \
+             email = EXCLUDED.email, \
+             company_name = EXCLUDED.company_name, \
+             address = EXCLUDED.address, \
+             updated_at = NOW()",
+    )
+    .bind(user_id)
+    .bind(&full_name)
+    .bind(&contact_phone)
+    .bind(&email)
+    .bind(&company_name)
+    .bind(&address)
+    .execute(db)
+    .await
+    .map_err(AppError::Database)?;
+
+    // Set role = 'customer' ONLY IF role IS NULL
+    // (guard keeps their role — customer_profiles existence = customer access)
+    sqlx::query(
+        "UPDATE auth.users SET role = 'customer'::user_role, updated_at = NOW() \
+         WHERE id = $1 AND role IS NULL",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await
+    .map_err(AppError::Database)?;
+
+    invalidate_user_cache(redis, &user_id).await?;
+
+    Ok(())
+}
+
+// =============================================================================
+// Get Customer Profile (Admin)
+// =============================================================================
+
+pub async fn get_customer_profile(
+    db: &PgPool,
+    user_id: Uuid,
+) -> Result<crate::models::CustomerProfileResponse, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        user_id: Uuid,
+        // COALESCE: prefer profile full_name, fallback to users.full_name
+        full_name: String,
+        contact_phone: Option<String>,
+        email: Option<String>,
+        company_name: Option<String>,
+        address: String,
+        approval_status: shared::models::ApprovalStatus,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT cp.user_id, \
+                COALESCE(cp.full_name, u.full_name) AS full_name, \
+                cp.contact_phone, cp.email, \
+                cp.company_name, cp.address, \
+                u.approval_status AS approval_status, \
+                cp.created_at \
+         FROM auth.customer_profiles cp \
+         JOIN auth.users u ON u.id = cp.user_id \
+         WHERE cp.user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let row = row.ok_or_else(|| AppError::NotFound("Customer profile not found".to_string()))?;
+
+    Ok(crate::models::CustomerProfileResponse {
+        user_id: row.user_id,
+        full_name: row.full_name,
+        contact_phone: row.contact_phone,
+        email: row.email,
+        company_name: row.company_name,
+        address: row.address,
+        approval_status: row.approval_status,
+        created_at: row.created_at,
     })
 }
 

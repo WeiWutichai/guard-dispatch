@@ -138,18 +138,20 @@ pub struct ProfileTokenClaims {
     pub iat: i64,
 }
 
-/// Encode a short-lived profile-submission JWT for a newly registered guard.
+/// Encode a short-lived profile-submission JWT.
+/// `purpose` distinguishes token type (e.g. `"guard_profile"`, `"customer_profile"`).
 /// Returns `(token, jti)` so the caller can store the jti in Redis for GETDEL enforcement.
 pub fn encode_profile_token(
     user_id: Uuid,
     key: &EncodingKey,
     expiry_minutes: i64,
+    purpose: &str,
 ) -> Result<(String, String), AppError> {
     let now = Utc::now();
     let jti = Uuid::new_v4().to_string();
     let claims = ProfileTokenClaims {
         sub: user_id,
-        purpose: "guard_profile".to_string(),
+        purpose: purpose.to_string(),
         jti: jti.clone(),
         exp: (now + chrono::TimeDelta::minutes(expiry_minutes)).timestamp(),
         iat: now.timestamp(),
@@ -161,8 +163,13 @@ pub fn encode_profile_token(
 }
 
 /// Decode and validate a profile-submission JWT.
+/// `expected_purpose` must match the token's purpose (e.g. `"guard_profile"` or `"customer_profile"`).
 /// Returns `(user_id, jti)` — caller must GETDEL jti from Redis for single-use enforcement.
-pub fn decode_profile_token(token: &str, key: &DecodingKey) -> Result<(Uuid, String), AppError> {
+pub fn decode_profile_token(
+    token: &str,
+    key: &DecodingKey,
+    expected_purpose: &str,
+) -> Result<(Uuid, String), AppError> {
     let mut validation = Validation::default();
     validation.validate_exp = true;
     validation.set_required_spec_claims(&["exp"]);
@@ -170,7 +177,7 @@ pub fn decode_profile_token(token: &str, key: &DecodingKey) -> Result<(Uuid, Str
     let token_data = jsonwebtoken::decode::<ProfileTokenClaims>(token, key, &validation)
         .map_err(|e| AppError::Unauthorized(format!("Invalid or expired profile token: {e}")))?;
 
-    if token_data.claims.purpose != "guard_profile" {
+    if token_data.claims.purpose != expected_purpose {
         return Err(AppError::Unauthorized("Invalid token purpose".to_string()));
     }
 

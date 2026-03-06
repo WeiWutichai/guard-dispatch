@@ -13,10 +13,11 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AuthResponse, GuardProfileFormData, GuardProfileResponse, ListUsersQuery, LoginRequest,
-    PaginatedUsers, PhoneLoginRequest, RefreshRequest, RegisterRequest, RegisterWithOtpRequest,
-    RegisterWithOtpResponse, ReissueProfileTokenRequest, ReissueProfileTokenResponse,
-    RequestOtpRequest, RequestOtpResponse, UpdateApprovalStatusRequest,
+    AuthResponse, CustomerProfileResponse, GuardProfileFormData, GuardProfileResponse,
+    ListUsersQuery, LoginRequest, PaginatedUsers, PhoneLoginRequest, RefreshRequest,
+    RegisterRequest, RegisterWithOtpRequest, RegisterWithOtpResponse,
+    ReissueProfileTokenRequest, ReissueProfileTokenResponse, RequestOtpRequest,
+    RequestOtpResponse, SubmitCustomerProfileRequest, UpdateApprovalStatusRequest,
     UpdateProfileRequest, UpdateRoleRequest, UpdateRoleResponse, UserResponse,
     VerifyOtpRequest, VerifyOtpResponse,
 };
@@ -440,7 +441,7 @@ pub async fn submit_guard_profile(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::Unauthorized("Missing profile token".to_string()))?;
 
-    let user_id = crate::service::validate_profile_token(token, &state.jwt_config, &state.redis).await?;
+    let user_id = crate::service::validate_profile_token(token, &state.jwt_config, &state.redis, "guard_profile").await?;
 
     let mut form = GuardProfileFormData::default();
     let mut files: HashMap<String, Vec<u8>> = HashMap::new();
@@ -525,6 +526,7 @@ pub async fn reissue_profile_token(
         &state.jwt_config,
         &state.redis,
         &req.phone,
+        req.role,
     )
     .await?;
 
@@ -600,6 +602,77 @@ pub async fn get_guard_profile(
     )
     .await?;
 
+    Ok(Json(shared::models::ApiResponse::success(profile)))
+}
+
+// =============================================================================
+// Customer Profile Handlers
+// =============================================================================
+
+/// Submit customer profile (company name + address).
+/// Authenticated via single-use `profile_token` (Bearer header).
+#[utoipa::path(
+    post,
+    path = "/profile/customer",
+    tag = "Profile",
+    request_body = SubmitCustomerProfileRequest,
+    responses(
+        (status = 200, description = "Customer profile saved", body = ()),
+        (status = 400, description = "Validation error", body = ErrorBody),
+        (status = 401, description = "Invalid or expired profile token", body = ErrorBody),
+    ),
+)]
+pub async fn submit_customer_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<SubmitCustomerProfileRequest>,
+) -> Result<Json<shared::models::ApiResponse<()>>, AppError> {
+    // Extract Bearer token from Authorization header
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("Missing profile token".to_string()))?;
+
+    let user_id = crate::service::validate_profile_token(
+        token,
+        &state.jwt_config,
+        &state.redis,
+        "customer_profile",
+    )
+    .await?;
+
+    crate::service::submit_customer_profile(&state.db, &state.redis, user_id, req).await?;
+
+    Ok(Json(shared::models::ApiResponse::success(())))
+}
+
+/// Get a customer's full profile (admin only).
+#[utoipa::path(
+    get,
+    path = "/admin/customer-profile/{user_id}",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(
+        ("user_id" = Uuid, Path, description = "Customer user ID"),
+    ),
+    responses(
+        (status = 200, description = "Customer profile", body = CustomerProfileResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+        (status = 404, description = "Customer profile not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_customer_profile(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<shared::models::ApiResponse<CustomerProfileResponse>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+
+    let profile = crate::service::get_customer_profile(&state.db, user_id).await?;
     Ok(Json(shared::models::ApiResponse::success(profile)))
 }
 

@@ -61,6 +61,18 @@ export interface GuardProfile {
   passbook_photo_url: string | null;
 }
 
+// Customer profile submitted during mobile registration
+export interface CustomerProfile {
+  user_id: string;
+  full_name: string;
+  phone: string;
+  email: string;
+  company_name: string | null;
+  address: string;
+  approval_status: "pending" | "approved" | "rejected";
+  created_at: string;
+}
+
 // Booking types
 export interface GuardRequest {
   id: string;
@@ -382,6 +394,10 @@ export const authApi = {
   /** Fetch a guard applicant's profile (experience, documents, bank info). Admin only. */
   getGuardProfile: (userId: string): Promise<GuardProfile> =>
     apiFetch<GuardProfile>(`/auth/admin/guard-profile/${userId}`),
+
+  /** Fetch a customer's profile (company, address). Admin only. */
+  getCustomerProfile: (userId: string): Promise<CustomerProfile> =>
+    apiFetch<CustomerProfile>(`/auth/admin/customer-profile/${userId}`),
 };
 
 // ---------------------------------------------------------------------------

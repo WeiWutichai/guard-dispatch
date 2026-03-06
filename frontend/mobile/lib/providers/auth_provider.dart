@@ -149,12 +149,13 @@ class AuthProvider extends ChangeNotifier {
     return raw is String ? raw : null;
   }
 
-  /// Reissue a profile_token for a pending guard who already passed OTP.
+  /// Reissue a profile_token for a pending user who already passed OTP.
   /// Used when retrying profile submission without repeating the OTP flow.
-  Future<String> reissueProfileToken(String phone) async {
+  /// [role] determines the token purpose (guard_profile or customer_profile).
+  Future<String> reissueProfileToken(String phone, {String? role}) async {
     final response = await _apiClient.dio.post(
       '/auth/profile/reissue',
-      data: {'phone': phone},
+      data: <String, dynamic>{'phone': phone, if (role != null) 'role': role},
     );
     final token = response.data['data']?['profile_token'];
     if (token is! String) {
@@ -226,6 +227,31 @@ class AuthProvider extends ChangeNotifier {
     await _apiClient.dio.post(
       '/auth/profile/guard',
       data: formData,
+      options: Options(headers: {'Authorization': 'Bearer $profileToken'}),
+    );
+  }
+
+  /// Submit customer profile data after registration.
+  ///
+  /// Calls POST /auth/profile/customer with JSON body.
+  /// Requires the [profileToken] returned by [updateRole] for customer role.
+  Future<void> submitCustomerProfile({
+    required String profileToken,
+    required String address,
+    String? fullName,
+    String? contactPhone,
+    String? email,
+    String? companyName,
+  }) async {
+    await _apiClient.dio.post(
+      '/auth/profile/customer',
+      data: <String, dynamic>{
+        'address': address,
+        if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
+        if (contactPhone != null && contactPhone.isNotEmpty) 'contact_phone': contactPhone,
+        if (email != null && email.isNotEmpty) 'email': email,
+        if (companyName != null && companyName.isNotEmpty) 'company_name': companyName,
+      },
       options: Options(headers: {'Authorization': 'Bearer $profileToken'}),
     );
   }

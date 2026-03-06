@@ -152,6 +152,13 @@ export const translations = {
           docDriverLicense: "ใบขับขี่",
           passbookPhoto: "รูปสมุดบัญชี",
         },
+        customerProfile: {
+          companyInfo: "ข้อมูลบริษัท/ลูกค้า",
+          companyName: "ชื่อบริษัท",
+          address: "ที่อยู่",
+          loadingProfile: "กำลังโหลดข้อมูลโปรไฟล์...",
+          noProfile: "ยังไม่มีข้อมูลโปรไฟล์",
+        },
       },
       badge: {
         guard: "เจ้าหน้าที่ รปภ.",
@@ -249,6 +256,13 @@ export const translations = {
         contactInfo: "ข้อมูลติดต่อ",
         memberSince: "วันที่สมัคร",
         close: "ปิด",
+        customerProfile: {
+          companyInfo: "ข้อมูลบริษัท/ลูกค้า",
+          companyName: "ชื่อบริษัท",
+          address: "ที่อยู่",
+          loadingProfile: "กำลังโหลดข้อมูลโปรไฟล์...",
+          noProfile: "ยังไม่มีข้อมูลโปรไฟล์",
+        },
       },
     },
 
@@ -565,6 +579,13 @@ export const translations = {
           docDriverLicense: "Driver's License",
           passbookPhoto: "Passbook Photo",
         },
+        customerProfile: {
+          companyInfo: "Company / Customer Info",
+          companyName: "Company Name",
+          address: "Address",
+          loadingProfile: "Loading profile...",
+          noProfile: "No profile submitted yet",
+        },
       },
       badge: {
         guard: "Security Guard",
@@ -662,6 +683,13 @@ export const translations = {
         contactInfo: "Contact Information",
         memberSince: "Member Since",
         close: "Close",
+        customerProfile: {
+          companyInfo: "Company / Customer Info",
+          companyName: "Company Name",
+          address: "Address",
+          loadingProfile: "Loading profile...",
+          noProfile: "No profile submitted yet",
+        },
       },
     },
 

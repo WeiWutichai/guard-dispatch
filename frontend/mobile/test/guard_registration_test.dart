@@ -34,7 +34,7 @@ class _FakeAuthProvider extends AuthProvider {
   }
 
   @override
-  Future<String> reissueProfileToken(String phone) async {
+  Future<String> reissueProfileToken(String phone, {String? role}) async {
     return 'test_reissued_profile_token';
   }
 }

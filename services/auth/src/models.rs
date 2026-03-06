@@ -206,10 +206,14 @@ pub struct PaginatedUsers {
 // Profile Token Reissue DTOs
 // =============================================================================
 
-/// Request to reissue a profile_token for a pending guard who already passed OTP.
+/// Request to reissue a profile_token for a pending user who already passed OTP.
+/// `role` determines the token purpose (`"guard_profile"` or `"customer_profile"`).
+/// Defaults to guard when omitted (backward compatibility).
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ReissueProfileTokenRequest {
     pub phone: String,
+    /// Optional role to determine profile token purpose. Defaults to guard.
+    pub role: Option<UserRole>,
 }
 
 /// Response containing a fresh profile_token.
@@ -232,13 +236,12 @@ pub struct UpdateRoleRequest {
 }
 
 /// Response after successfully setting a user's role.
-/// For guard: includes profile_token for submitting guard profile data.
-/// For customer: profile_token is null (no profile form needed).
+/// Includes profile_token for both guard and customer profile submission.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UpdateRoleResponse {
     pub message: String,
     pub user_id: Uuid,
-    /// Short-lived JWT (15 min) for guard profile submission. Null for customer role.
+    /// Short-lived JWT (15 min) for profile submission (guard or customer).
     pub profile_token: Option<String>,
 }
 
@@ -296,6 +299,47 @@ pub struct GuardProfileResponse {
     pub account_number: Option<String>,
     pub account_name: Option<String>,
     pub passbook_photo_url: Option<String>,
+}
+
+// =============================================================================
+// Customer Profile DTOs
+// =============================================================================
+
+/// Customer profile data submitted after role selection.
+/// Sent as JSON (no file uploads).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SubmitCustomerProfileRequest {
+    pub full_name: Option<String>,
+    pub contact_phone: Option<String>,
+    pub email: Option<String>,
+    pub company_name: Option<String>,
+    pub address: String,
+}
+
+/// Customer profile as stored in `auth.customer_profiles`.
+#[derive(Debug, sqlx::FromRow)]
+pub struct CustomerProfileRow {
+    pub user_id: Uuid,
+    pub full_name: Option<String>,
+    pub contact_phone: Option<String>,
+    pub email: Option<String>,
+    pub company_name: Option<String>,
+    pub address: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Customer profile response returned to admin (JOIN users + customer_profiles).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CustomerProfileResponse {
+    pub user_id: Uuid,
+    pub full_name: String,
+    pub contact_phone: Option<String>,
+    pub email: Option<String>,
+    pub company_name: Option<String>,
+    pub address: String,
+    pub approval_status: ApprovalStatus,
+    pub created_at: DateTime<Utc>,
 }
 
 // =============================================================================

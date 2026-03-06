@@ -14,6 +14,7 @@ import 'hirer/hirer_dashboard_screen.dart';
 import 'phone_input_screen.dart';
 import 'registration_pending_screen.dart';
 import 'guard_registration_screen.dart';
+import 'customer_registration_screen.dart';
 
 class RoleSelectionScreen extends StatefulWidget {
   /// Phone number from OTP flow. Used to call updateRole API.
@@ -124,23 +125,39 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       return;
     }
 
-    // Customer path: set role → go to pending screen
+    // Customer path: set role → get profile_token → customer registration form
+    String? profileToken;
+    final pendingRole = await AuthService.getPendingRole();
+    if (!mounted) return;
+
     try {
       final authProvider = context.read<AuthProvider>();
-      await authProvider.updateRole(phone, 'customer');
-      if (!mounted) return;
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
-        (route) => false,
-      );
+      if (pendingRole == 'customer') {
+        // Role already set — just need a fresh profile token
+        profileToken = await authProvider.reissueProfileToken(phone, role: 'customer');
+      } else {
+        // Set role for the first time
+        profileToken = await authProvider.updateRole(phone, 'customer');
+      }
     } on DioException catch (e) {
       if (!mounted) return;
       final message = e.response?.data?['error']?['message'] as String?;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message ?? 'Failed to set role')),
       );
+      return;
     }
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerRegistrationScreen(
+          phone: phone!,
+          profileToken: profileToken,
+        ),
+      ),
+    );
   }
 
   @override

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
-import { authApi, type UserResponse } from "@/lib/api";
+import { authApi, type UserResponse, type CustomerProfile } from "@/lib/api";
 
 export default function CustomersPage() {
   const { t } = useLanguage();
@@ -30,6 +30,8 @@ export default function CustomersPage() {
     null
   );
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
 
   // Fetch approved customers from backend
   const fetchCustomers = useCallback(async () => {
@@ -85,11 +87,18 @@ export default function CustomersPage() {
   const openModal = (customer: UserResponse) => {
     setSelectedCustomer(customer);
     setIsModalOpen(true);
+    setCustomerProfile(null);
+    setIsProfileLoading(true);
+    authApi.getCustomerProfile(customer.id)
+      .then(setCustomerProfile)
+      .catch(() => setCustomerProfile(null))
+      .finally(() => setIsProfileLoading(false));
   };
 
   const closeModal = () => {
     setIsModalOpen(false);
     setSelectedCustomer(null);
+    setCustomerProfile(null);
   };
 
   return (
@@ -362,6 +371,36 @@ export default function CustomersPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Customer Profile — Company & Address */}
+              {isProfileLoading ? (
+                <div className="flex items-center gap-2 text-slate-400 text-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {t.customers.modal.customerProfile.loadingProfile}
+                </div>
+              ) : customerProfile ? (
+                <div className="bg-slate-50 rounded-xl p-4 space-y-3">
+                  <h4 className="text-sm font-bold text-slate-700">
+                    {t.customers.modal.customerProfile.companyInfo}
+                  </h4>
+                  <div className="space-y-3">
+                    {customerProfile.company_name && (
+                      <div>
+                        <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.companyName}</p>
+                        <p className="text-sm font-medium text-slate-800">{customerProfile.company_name}</p>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-xs text-slate-400 mb-0.5">{t.customers.modal.customerProfile.address}</p>
+                      <p className="text-sm font-medium text-slate-800">{customerProfile.address}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-400 italic">
+                  {t.customers.modal.customerProfile.noProfile}
+                </p>
+              )}
             </div>
 
             {/* Modal footer */}

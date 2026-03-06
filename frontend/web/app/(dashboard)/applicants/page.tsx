@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
-import { authApi, type UserResponse, type GuardProfile } from "@/lib/api";
+import { authApi, type UserResponse, type GuardProfile, type CustomerProfile } from "@/lib/api";
 
 // --- Types ---
 type ApplicantStatus = "pending" | "approved" | "rejected";
@@ -77,6 +77,10 @@ export default function ApplicantsPage() {
   const [guardProfile, setGuardProfile] = useState<GuardProfile | null>(null);
   const [isGuardProfileLoading, setIsGuardProfileLoading] = useState(false);
 
+  // Customer profile state (fetched when a customer applicant modal opens)
+  const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
+  const [isCustomerProfileLoading, setIsCustomerProfileLoading] = useState(false);
+
   // Document preview lightbox
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
@@ -119,6 +123,20 @@ export default function ApplicantsPage() {
     }
   }, [isApplicantModalOpen, selectedApplicant?.id, selectedApplicant?.role]);
 
+  // Fetch customer profile when a customer applicant modal opens
+  useEffect(() => {
+    if (isApplicantModalOpen && selectedApplicant?.role === "customer") {
+      setCustomerProfile(null);
+      setIsCustomerProfileLoading(true);
+      authApi.getCustomerProfile(selectedApplicant.id)
+        .then(setCustomerProfile)
+        .catch(() => setCustomerProfile(null))
+        .finally(() => setIsCustomerProfileLoading(false));
+    } else {
+      setCustomerProfile(null);
+    }
+  }, [isApplicantModalOpen, selectedApplicant?.id, selectedApplicant?.role]);
+
   // Stats scoped to current view
   const stats = {
     total,
@@ -131,6 +149,7 @@ export default function ApplicantsPage() {
     setIsApplicantModalOpen(false);
     setSelectedApplicant(null);
     setGuardProfile(null);
+    setCustomerProfile(null);
     setPreviewUrl(null);
   };
 
@@ -720,6 +739,41 @@ export default function ApplicantsPage() {
                   ) : (
                     <p className="text-sm text-slate-400 italic py-2">
                       {t.applicants.modal.guardProfile.noProfile}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Customer Profile Section */}
+              {selectedApplicant.role === "customer" && (
+                <div className="space-y-6">
+                  {isCustomerProfileLoading ? (
+                    <div className="flex items-center gap-2 text-slate-400 text-sm py-4">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      {t.applicants.modal.customerProfile.loadingProfile}
+                    </div>
+                  ) : customerProfile ? (
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                        <FileText className="h-4 w-4" />
+                        {t.applicants.modal.customerProfile.companyInfo}
+                      </h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        {customerProfile.company_name && (
+                          <div className="p-3 bg-slate-50 rounded-xl">
+                            <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.companyName}</p>
+                            <p className="text-sm font-medium text-slate-800">{customerProfile.company_name}</p>
+                          </div>
+                        )}
+                        <div className={cn("p-3 bg-slate-50 rounded-xl", !customerProfile.company_name && "col-span-2")}>
+                          <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.customerProfile.address}</p>
+                          <p className="text-sm font-medium text-slate-800">{customerProfile.address}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-400 italic py-2">
+                      {t.applicants.modal.customerProfile.noProfile}
                     </p>
                   )}
                 </div>
