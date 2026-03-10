@@ -29,6 +29,13 @@ class BookingProvider extends ChangeNotifier {
   Map<String, dynamic>? _ratings;
   Map<String, dynamic>? get ratings => _ratings;
 
+  // Customer requests
+  List<Map<String, dynamic>> _myRequests = [];
+  List<Map<String, dynamic>> get myRequests => _myRequests;
+
+  bool _isLoadingRequests = false;
+  bool get isLoadingRequests => _isLoadingRequests;
+
   // Loading & error
   bool _isLoading = false;
   bool get isLoading => _isLoading;
@@ -123,5 +130,63 @@ class BookingProvider extends ChangeNotifier {
     }
     _isLoading = false;
     notifyListeners();
+  }
+
+  // =========================================================================
+  // Customer (Hirer) methods
+  // =========================================================================
+
+  Future<void> fetchMyRequests({String? status}) async {
+    _isLoadingRequests = true;
+    _error = null;
+    notifyListeners();
+    try {
+      _myRequests = await _service.listMyRequests(status: status);
+    } catch (e) {
+      _error = e.toString();
+    }
+    _isLoadingRequests = false;
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> createRequest({
+    required double locationLat,
+    required double locationLng,
+    required String address,
+    String? description,
+    double? offeredPrice,
+    String? specialInstructions,
+    String urgency = 'medium',
+  }) async {
+    _error = null;
+    try {
+      final result = await _service.createRequest(
+        locationLat: locationLat,
+        locationLng: locationLng,
+        address: address,
+        description: description,
+        offeredPrice: offeredPrice,
+        specialInstructions: specialInstructions,
+        urgency: urgency,
+      );
+      // Refresh list after creating
+      await fetchMyRequests();
+      return result;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> cancelRequest(String requestId) async {
+    _error = null;
+    try {
+      await _service.cancelRequest(requestId);
+      await fetchMyRequests();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+    }
   }
 }

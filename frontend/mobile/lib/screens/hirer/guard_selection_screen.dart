@@ -1,12 +1,55 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../services/booking_service.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/language_service.dart';
-import '../notification_screen.dart';
-import 'payment_screen.dart';
 
-class GuardSelectionScreen extends StatelessWidget {
-  const GuardSelectionScreen({super.key});
+/// Shows the assignment status for a specific booking request.
+///
+/// If the request is still pending, shows "waiting for admin to assign".
+/// If assignments exist, shows the assigned guard info.
+class GuardSelectionScreen extends StatefulWidget {
+  /// The booking request ID to check assignments for.
+  /// When null, shows a generic "waiting" message.
+  final String? requestId;
+
+  const GuardSelectionScreen({super.key, this.requestId});
+
+  @override
+  State<GuardSelectionScreen> createState() => _GuardSelectionScreenState();
+}
+
+class _GuardSelectionScreenState extends State<GuardSelectionScreen> {
+  List<Map<String, dynamic>> _assignments = [];
+  bool _isLoading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.requestId != null) {
+      _fetchAssignments();
+    } else {
+      _isLoading = false;
+    }
+  }
+
+  Future<void> _fetchAssignments() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final apiClient = context.read<AuthProvider>().apiClient;
+      final service = BookingService(apiClient);
+      _assignments = await service.getAssignments(widget.requestId!);
+    } catch (e) {
+      _error = e.toString();
+    }
+    if (mounted) setState(() => _isLoading = false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -18,89 +61,13 @@ class GuardSelectionScreen extends StatelessWidget {
         children: [
           _buildHeader(context, isThai),
           Expanded(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 16,
-                  ),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(
-                          Icons.arrow_back_rounded,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      Text(
-                        isThai
-                            ? 'เจ้าหน้าที่ที่ว่าง (4 คน)'
-                            : 'Available Guards (4)',
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    physics: const BouncingScrollPhysics(),
-                    children: [
-                      _buildGuardCard(
-                        context,
-                        isThai,
-                        name: isThai ? 'สมชาย วิรุฬน' : 'Somchai Wirun',
-                        tag: isThai ? 'เจ้าหน้าที่ยอดนิยม' : 'Top Rated',
-                        rating: '4.9',
-                        reviews: '127',
-                        jobs: '234',
-                        exp: isThai ? '5 ปี' : '5 Years',
-                        dist: '1.2 กม.',
-                        price: '100',
-                        status: isThai ? 'ว่าง' : 'Available',
-                        image: 'https://i.pravatar.cc/150?u=1',
-                      ),
-                      const SizedBox(height: 16),
-                      _buildGuardCard(
-                        context,
-                        isThai,
-                        name: isThai ? 'ประยุทธ์ กิจดี' : 'Prayuth Kitdee',
-                        tag: 'VIP',
-                        rating: '4.8',
-                        reviews: '88',
-                        jobs: '156',
-                        exp: isThai ? '7 ปี' : '7 Years',
-                        dist: '2.1 กม.',
-                        price: '200',
-                        status: isThai ? 'บอดี้การ์ด' : 'Bodyguard',
-                        image: 'https://i.pravatar.cc/150?u=2',
-                      ),
-                      const SizedBox(height: 16),
-                      _buildGuardCard(
-                        context,
-                        isThai,
-                        name: isThai ? 'วิชัย ใจดี' : 'Wichai Jaidee',
-                        tag: isThai ? 'ว่าง' : 'Available',
-                        rating: '4.7',
-                        reviews: '45',
-                        jobs: '67',
-                        exp: isThai ? '3 ปี' : '3 Years',
-                        dist: '3.5 กม.',
-                        price: '100',
-                        status: isThai ? 'เจ้าหน้าที่ทั่วไป' : 'Guard',
-                        image: 'https://i.pravatar.cc/150?u=3',
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? _buildError(isThai)
+                    : _assignments.isEmpty
+                        ? _buildWaitingState(isThai)
+                        : _buildAssignmentList(isThai),
           ),
         ],
       ),
@@ -109,13 +76,18 @@ class GuardSelectionScreen extends StatelessWidget {
 
   Widget _buildHeader(BuildContext context, bool isThai) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
+      padding: const EdgeInsets.fromLTRB(16, 60, 24, 20),
       decoration: const BoxDecoration(
         color: AppColors.primary,
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
       child: Row(
         children: [
+          IconButton(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          ),
+          const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
@@ -134,7 +106,7 @@ class GuardSelectionScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'SecureGuard',
+                  isThai ? 'สถานะการจัดสรร' : 'Assignment Status',
                   style: GoogleFonts.inter(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
@@ -142,7 +114,7 @@ class GuardSelectionScreen extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  isThai ? 'บริการรักษาความปลอดภัย' : 'Security Services',
+                  isThai ? 'รายละเอียดเจ้าหน้าที่' : 'Guard Details',
                   style: GoogleFonts.inter(
                     fontSize: 12,
                     color: Colors.white.withValues(alpha: 0.9),
@@ -151,38 +123,115 @@ class GuardSelectionScreen extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const NotificationScreen(isGuard: false),
-              ),
-            ),
-            icon: const Icon(
-              Icons.notifications_none_rounded,
-              color: Colors.white,
-            ),
-          ),
-          const Icon(Icons.person_outline_rounded, color: Colors.white),
         ],
       ),
     );
   }
 
-  Widget _buildGuardCard(
-    BuildContext context,
-    bool isThai, {
-    required String name,
-    required String tag,
-    required String rating,
-    required String reviews,
-    required String jobs,
-    required String exp,
-    required String dist,
-    required String price,
-    required String status,
-    required String image,
-  }) {
+  Widget _buildWaitingState(bool isThai) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.hourglass_top_rounded,
+                size: 64,
+                color: Colors.amber.shade700,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              isThai
+                  ? 'กำลังรอ Admin จัดสรร รปภ.'
+                  : 'Waiting for Admin to Assign Guard',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              isThai
+                  ? 'คำขอของคุณอยู่ในระหว่างการพิจารณา\nAdmin จะจัดสรรเจ้าหน้าที่ให้เร็วที่สุด'
+                  : 'Your request is being reviewed.\nAn admin will assign a guard shortly.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                color: AppColors.textSecondary,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 32),
+            if (widget.requestId != null)
+              OutlinedButton.icon(
+                onPressed: _fetchAssignments,
+                icon: const Icon(Icons.refresh_rounded),
+                label: Text(isThai ? 'ตรวจสอบอีกครั้ง' : 'Check Again'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  side: const BorderSide(color: AppColors.primary),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAssignmentList(bool isThai) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: _assignments.length,
+      itemBuilder: (context, index) {
+        final assignment = _assignments[index];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: _buildAssignmentCard(assignment, isThai),
+        );
+      },
+    );
+  }
+
+  Widget _buildAssignmentCard(Map<String, dynamic> assignment, bool isThai) {
+    final status = assignment['status'] as String? ?? 'assigned';
+    final assignedAt = assignment['assigned_at'] as String? ?? '';
+    final guardId = assignment['guard_id'] as String? ?? '';
+
+    final statusLabel = switch (status) {
+      'assigned' => isThai ? 'ได้รับมอบหมาย' : 'Assigned',
+      'en_route' => isThai ? 'กำลังเดินทาง' : 'En Route',
+      'arrived' => isThai ? 'มาถึงแล้ว' : 'Arrived',
+      'completed' => isThai ? 'เสร็จสิ้น' : 'Completed',
+      'cancelled' => isThai ? 'ยกเลิก' : 'Cancelled',
+      _ => status,
+    };
+
+    final statusColor = switch (status) {
+      'assigned' => Colors.blue,
+      'en_route' => Colors.orange,
+      'arrived' => AppColors.success,
+      'completed' => AppColors.success,
+      'cancelled' => Colors.red,
+      _ => AppColors.textSecondary,
+    };
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -200,15 +249,18 @@ class GuardSelectionScreen extends StatelessWidget {
       child: Column(
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  image,
-                  width: 60,
-                  height: 60,
-                  fit: BoxFit.cover,
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.person_rounded,
+                  size: 32,
+                  color: AppColors.primary,
                 ),
               ),
               const SizedBox(width: 16),
@@ -216,196 +268,97 @@ class GuardSelectionScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          name,
-                          style: GoogleFonts.inter(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        const Icon(
-                          Icons.chevron_right_rounded,
-                          size: 18,
-                          color: AppColors.textSecondary,
-                        ),
-                      ],
+                    Text(
+                      isThai ? 'เจ้าหน้าที่ รปภ.' : 'Security Guard',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                     const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
+                    Text(
+                      'ID: ${guardId.length > 8 ? guardId.substring(0, 8) : guardId}...',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
                       ),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        tag,
-                        style: GoogleFonts.inter(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.star_rounded,
-                          size: 14,
-                          color: AppColors.warning,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          rating,
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          ' ($reviews ${isThai ? 'รีวิว' : 'Reviews'})',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Icon(
-                          Icons.check_circle_rounded,
-                          size: 14,
-                          color: AppColors.primary,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$jobs ${isThai ? 'งาน' : 'Jobs'}',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.access_time_rounded,
-                          size: 14,
-                          color: AppColors.textSecondary,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$exp ${isThai ? 'ประสบการณ์' : 'Exp'}',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Icon(
-                          Icons.location_on_rounded,
-                          size: 14,
-                          color: AppColors.textSecondary,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          dist,
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _buildSmallTag(isThai ? 'รักษาความปลอดภัย' : 'Security'),
-              const SizedBox(width: 6),
-              _buildSmallTag(isThai ? 'มือหนึ่ง' : 'Professional'),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  RichText(
-                    text: TextSpan(
-                      children: [
-                        TextSpan(
-                          text: '฿$price/${isThai ? 'ชั่วโมง' : 'hr'}',
-                          style: GoogleFonts.inter(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    isThai ? 'ออนไลน์ 5 นาทีที่แล้ว' : 'Online 5m ago',
-                    style: GoogleFonts.inter(
-                      fontSize: 10,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const PaymentScreen()),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
                 ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  isThai ? 'ยืนยันการจอง' : 'Confirm',
-                  style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+                  statusLabel,
+                  style: GoogleFonts.inter(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: statusColor,
+                  ),
                 ),
               ),
             ],
           ),
+          if (assignedAt.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Icon(
+                  Icons.calendar_today_rounded,
+                  size: 14,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '${isThai ? 'มอบหมายเมื่อ: ' : 'Assigned: '}${assignedAt.substring(0, 10)}',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildSmallTag(String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Text(
-        label,
-        style: GoogleFonts.inter(fontSize: 10, color: AppColors.textSecondary),
+  Widget _buildError(bool isThai) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline_rounded,
+              size: 64,
+              color: Colors.red.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              isThai ? 'เกิดข้อผิดพลาด' : 'Something went wrong',
+              style: GoogleFonts.inter(
+                fontSize: 16,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: _fetchAssignments,
+              child: Text(isThai ? 'ลองอีกครั้ง' : 'Retry'),
+            ),
+          ],
+        ),
       ),
     );
   }

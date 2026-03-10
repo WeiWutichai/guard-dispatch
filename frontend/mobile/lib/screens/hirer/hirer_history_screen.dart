@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 
@@ -15,13 +17,21 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
   int _selectedTabIndex = 0;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<BookingProvider>().fetchMyRequests();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final s = HirerHistoryStrings(isThai: isThai);
 
     final tabs = [
       isThai ? 'ทั้งหมด' : 'All',
-      isThai ? 'กำลังดำเนินการ' : 'Ongoing',
+      isThai ? 'รอดำเนินการ' : 'Pending',
       isThai ? 'เสร็จสิ้น' : 'Completed',
       isThai ? 'ยกเลิก' : 'Cancelled',
     ];
@@ -93,9 +103,51 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
             ),
           ),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              children: _buildFilteredItems(isThai, s),
+            child: Consumer<BookingProvider>(
+              builder: (context, booking, _) {
+                if (booking.isLoadingRequests) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                final requests = _filterRequests(booking.myRequests);
+                if (requests.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.history_rounded,
+                          size: 64,
+                          color: AppColors.textSecondary.withValues(alpha: 0.3),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          s.noHistory,
+                          style: GoogleFonts.inter(
+                            fontSize: 16,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return RefreshIndicator(
+                  onRefresh: () => booking.fetchMyRequests(),
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: requests.length,
+                    itemBuilder: (context, index) {
+                      final req = requests[index];
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: _buildRequestCard(req, isThai, s),
+                      );
+                    },
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -103,104 +155,38 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
     );
   }
 
-  List<Widget> _buildFilteredItems(bool isThai, HirerHistoryStrings s) {
-    // Dummy data with status
-    final allItems = [
-      _HistoryData(
-        name: isThai ? 'สมชาย วีรชน' : 'Somchai Wirachon',
-        service: s.securityGuard,
-        date: isThai ? '15 ก.พ. 2568' : '15 Feb 2025',
-        time: '14:00 - 20:00',
-        price: '฿1,200',
-        status: s.statusCompleted,
-        statusColor: AppColors.success,
-        avatar: 'https://i.pravatar.cc/150?u=1',
-        type: 2, // Completed
-      ),
-      _HistoryData(
-        name: isThai ? 'วิชัย นามสมมุติ' : 'Wichai Namsommut',
-        service: s.bodyguard,
-        date: isThai ? '10 ก.พ. 2568' : '10 Feb 2025',
-        time: '18:00 - 00:00',
-        price: '฿3,200',
-        status: s.statusCompleted,
-        statusColor: AppColors.success,
-        avatar: 'https://i.pravatar.cc/150?u=3',
-        type: 2, // Completed
-      ),
-      _HistoryData(
-        name: isThai ? 'มานี มีทรัพย์' : 'Manee Meesup',
-        service: s.securityGuard,
-        date: isThai ? '05 ก.พ. 2568' : '05 Feb 2025',
-        time: '08:00 - 16:00',
-        price: '฿1,600',
-        status: s.statusCancelled,
-        statusColor: Colors.red,
-        avatar: 'https://i.pravatar.cc/150?u=4',
-        type: 3, // Cancelled
-      ),
-    ];
-
-    final filtered = _selectedTabIndex == 0
-        ? allItems
-        : allItems.where((item) => item.type == _selectedTabIndex).toList();
-
-    if (filtered.isEmpty) {
-      return [
-        Padding(
-          padding: const EdgeInsets.only(top: 100),
-          child: Column(
-            children: [
-              Icon(
-                Icons.history_rounded,
-                size: 64,
-                color: AppColors.textSecondary.withValues(alpha: 0.3),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                isThai ? 'ไม่มีรายการ' : 'No history found',
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ];
-    }
-
-    return filtered.map((item) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: _buildHistoryItem(
-          isThai: isThai,
-          strings: s,
-          name: item.name,
-          service: item.service,
-          date: item.date,
-          time: item.time,
-          price: item.price,
-          status: item.status,
-          statusColor: item.statusColor,
-          avatar: item.avatar,
-        ),
-      );
-    }).toList();
+  List<Map<String, dynamic>> _filterRequests(
+    List<Map<String, dynamic>> all,
+  ) {
+    if (_selectedTabIndex == 0) return all;
+    final statusFilter = switch (_selectedTabIndex) {
+      1 => ['pending', 'assigned', 'in_progress'],
+      2 => ['completed'],
+      3 => ['cancelled'],
+      _ => <String>[],
+    };
+    return all
+        .where((r) => statusFilter.contains(r['status'] as String?))
+        .toList();
   }
 
-  Widget _buildHistoryItem({
-    required bool isThai,
-    required HirerHistoryStrings strings,
-    required String name,
-    required String service,
-    required String date,
-    required String time,
-    required String price,
-    required String status,
-    required Color statusColor,
-    required String avatar,
-  }) {
+  Widget _buildRequestCard(
+    Map<String, dynamic> req,
+    bool isThai,
+    HirerHistoryStrings s,
+  ) {
+    final status = req['status'] as String? ?? 'pending';
+    final statusLabel = _statusLabel(status, s);
+    final statusColor = _statusColor(status);
+    final address = req['address'] as String? ?? '';
+    final description = req['description'] as String?;
+    final price = req['offered_price'];
+    final createdAt = req['created_at'] as String? ?? '';
+    final urgency = req['urgency'] as String? ?? 'medium';
+
+    // Format date
+    final dateDisplay = _formatDate(createdAt, isThai);
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -216,30 +202,47 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
         ],
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              CircleAvatar(radius: 24, backgroundImage: NetworkImage(avatar)),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.shield_rounded,
+                  color: AppColors.primary,
+                  size: 24,
+                ),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      name,
+                      address,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.inter(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: AppColors.textPrimary,
                       ),
                     ),
-                    Text(
-                      service,
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: AppColors.textSecondary,
+                    if (description != null && description.isNotEmpty)
+                      Text(
+                        description,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -253,7 +256,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  status,
+                  statusLabel,
                   style: GoogleFonts.inter(
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
@@ -282,7 +285,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        date,
+                        dateDisplay,
                         style: GoogleFonts.inter(
                           fontSize: 12,
                           color: AppColors.textPrimary,
@@ -294,13 +297,13 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
                   Row(
                     children: [
                       const Icon(
-                        Icons.access_time_rounded,
+                        Icons.priority_high_rounded,
                         size: 14,
                         color: AppColors.textSecondary,
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        time,
+                        _urgencyLabel(urgency, isThai),
                         style: GoogleFonts.inter(
                           fontSize: 12,
                           color: AppColors.textSecondary,
@@ -310,54 +313,136 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
                   ),
                 ],
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    strings.total,
-                    style: GoogleFonts.inter(
-                      fontSize: 10,
-                      color: AppColors.textSecondary,
+              if (price != null)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      s.total,
+                      style: GoogleFonts.inter(
+                        fontSize: 10,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
-                  ),
-                  Text(
-                    price,
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
+                    Text(
+                      '฿${(price is num ? price : double.tryParse(price.toString()) ?? 0).toStringAsFixed(0)}',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primary,
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
             ],
           ),
+          // Cancel button for pending requests
+          if (status == 'pending') ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () => _cancelRequest(req['id'] as String),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                  side: const BorderSide(color: Colors.red),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: Text(
+                  isThai ? 'ยกเลิกคำขอ' : 'Cancel Request',
+                  style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
-}
 
-class _HistoryData {
-  final String name;
-  final String service;
-  final String date;
-  final String time;
-  final String price;
-  final String status;
-  final Color statusColor;
-  final String avatar;
-  final int type; // 1: In progress, 2: Completed, 3: Cancelled
+  Future<void> _cancelRequest(String requestId) async {
+    final isThai = LanguageProvider.of(context).isThai;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isThai ? 'ยืนยันการยกเลิก' : 'Confirm Cancel'),
+        content: Text(
+          isThai
+              ? 'คุณต้องการยกเลิกคำขอนี้หรือไม่?'
+              : 'Are you sure you want to cancel this request?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(isThai ? 'ไม่' : 'No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              isThai ? 'ยกเลิก' : 'Cancel',
+              style: const TextStyle(color: Colors.red),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await context.read<BookingProvider>().cancelRequest(requestId);
+    }
+  }
 
-  _HistoryData({
-    required this.name,
-    required this.service,
-    required this.date,
-    required this.time,
-    required this.price,
-    required this.status,
-    required this.statusColor,
-    required this.avatar,
-    required this.type,
-  });
+  String _statusLabel(String status, HirerHistoryStrings s) {
+    return switch (status) {
+      'pending' => s.statusInProgress,
+      'assigned' => s.statusInProgress,
+      'in_progress' => s.statusInProgress,
+      'completed' => s.statusCompleted,
+      'cancelled' => s.statusCancelled,
+      _ => status,
+    };
+  }
+
+  Color _statusColor(String status) {
+    return switch (status) {
+      'pending' => Colors.amber.shade700,
+      'assigned' => Colors.blue,
+      'in_progress' => AppColors.success,
+      'completed' => AppColors.success,
+      'cancelled' => Colors.red,
+      _ => AppColors.textSecondary,
+    };
+  }
+
+  String _urgencyLabel(String urgency, bool isThai) {
+    return switch (urgency) {
+      'low' => isThai ? 'ต่ำ' : 'Low',
+      'medium' => isThai ? 'ปกติ' : 'Normal',
+      'high' => isThai ? 'เร่งด่วน' : 'Urgent',
+      'critical' => isThai ? 'ฉุกเฉิน' : 'Critical',
+      _ => urgency,
+    };
+  }
+
+  String _formatDate(String isoDate, bool isThai) {
+    if (isoDate.isEmpty) return '-';
+    try {
+      final dt = DateTime.parse(isoDate);
+      final thMonths = [
+        '', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+        'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
+      ];
+      final enMonths = [
+        '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+      if (isThai) {
+        return '${dt.day} ${thMonths[dt.month]} ${dt.year + 543}';
+      }
+      return '${dt.day} ${enMonths[dt.month]} ${dt.year}';
+    } catch (_) {
+      return isoDate.substring(0, 10);
+    }
+  }
 }

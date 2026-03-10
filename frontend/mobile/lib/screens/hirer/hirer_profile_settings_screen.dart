@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 
@@ -14,8 +16,8 @@ class HirerProfileSettingsScreen extends StatefulWidget {
 
 class _HirerProfileSettingsScreenState
     extends State<HirerProfileSettingsScreen> {
-  final _nameController = TextEditingController(text: 'มานะ มีบุญ');
-  final _phoneController = TextEditingController(text: '081-234-5678');
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
   final _companyController = TextEditingController();
   final _addressController = TextEditingController();
@@ -23,6 +25,16 @@ class _HirerProfileSettingsScreenState
   bool _pushNotif = true;
   bool _smsNotif = false;
   bool _bookingAlerts = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final auth = context.read<AuthProvider>();
+    _nameController.text = auth.fullName ?? '';
+    _phoneController.text = auth.phone ?? '';
+    _companyController.text = auth.companyName ?? '';
+    _addressController.text = auth.customerAddress ?? '';
+  }
 
   @override
   void dispose() {
@@ -92,29 +104,30 @@ class _HirerProfileSettingsScreenState
         children: [
           Stack(
             children: [
-              Container(
-                width: 96,
-                height: 96,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                  border: Border.all(
-                    color: AppColors.primary.withValues(alpha: 0.3),
-                    width: 3,
-                  ),
-                ),
-                child: ClipOval(
-                  child: Image.network(
-                    'https://i.pravatar.cc/150?u=customer',
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) => const Icon(
-                      Icons.person,
-                      size: 48,
-                      color: AppColors.primary,
+              Builder(builder: (context) {
+                final avatarUrl = context.watch<AuthProvider>().avatarUrl;
+                return Container(
+                  width: 96,
+                  height: 96,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.primary.withValues(alpha: 0.1),
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.3),
+                      width: 3,
                     ),
+                    image: avatarUrl != null
+                        ? DecorationImage(
+                            image: NetworkImage(avatarUrl),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
                   ),
-                ),
-              ),
+                  child: avatarUrl == null
+                      ? const Icon(Icons.person, size: 48, color: AppColors.primary)
+                      : null,
+                );
+              }),
               Positioned(
                 bottom: 0,
                 right: 0,

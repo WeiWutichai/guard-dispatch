@@ -76,4 +76,78 @@ class BookingService {
     final response = await _apiClient.dio.get('/booking/guard/ratings');
     return response.data['data'] as Map<String, dynamic>;
   }
+
+  // =========================================================================
+  // Customer (Hirer) endpoints
+  // =========================================================================
+
+  /// POST /booking/requests — create a new guard request.
+  Future<Map<String, dynamic>> createRequest({
+    required double locationLat,
+    required double locationLng,
+    required String address,
+    String? description,
+    double? offeredPrice,
+    String? specialInstructions,
+    String urgency = 'medium',
+  }) async {
+    final response = await _apiClient.dio.post(
+      '/booking/requests',
+      data: <String, dynamic>{
+        'location_lat': locationLat,
+        'location_lng': locationLng,
+        'address': address,
+        if (description != null && description.isNotEmpty)
+          'description': description,
+        'offered_price': ?offeredPrice,
+        if (specialInstructions != null && specialInstructions.isNotEmpty)
+          'special_instructions': specialInstructions,
+        'urgency': urgency,
+      },
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// GET /booking/requests — list customer's own requests.
+  Future<List<Map<String, dynamic>>> listMyRequests({
+    String? status,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final params = <String, dynamic>{'limit': limit, 'offset': offset};
+    if (status != null) params['status'] = status;
+
+    final response = await _apiClient.dio.get(
+      '/booking/requests',
+      queryParameters: params,
+    );
+    final data = response.data['data'];
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
+  /// GET /booking/requests/{id} — get a single request detail.
+  Future<Map<String, dynamic>> getRequest(String requestId) async {
+    final response = await _apiClient.dio.get('/booking/requests/$requestId');
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// PUT /booking/requests/{id}/cancel — cancel a pending request.
+  Future<void> cancelRequest(String requestId) async {
+    await _apiClient.dio.put('/booking/requests/$requestId/cancel');
+  }
+
+  /// GET /booking/requests/{id}/assignments — get assignments for a request.
+  Future<List<Map<String, dynamic>>> getAssignments(String requestId) async {
+    final response = await _apiClient.dio.get(
+      '/booking/requests/$requestId/assignments',
+    );
+    final data = response.data['data'];
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
 }

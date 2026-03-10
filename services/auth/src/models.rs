@@ -90,6 +90,9 @@ pub struct UserResponse {
     /// Guard-only: previous workplace from guard_profiles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_workplace: Option<String>,
+    /// Customer-only: address from customer_profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_address: Option<String>,
     /// Customer profile approval status (separate from user approval_status).
     /// Present when the user has submitted a customer profile.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,6 +136,7 @@ impl From<UserRow> for UserResponse {
             date_of_birth: None,
             years_of_experience: None,
             previous_workplace: None,
+            customer_address: None,
             customer_approval_status: None,
         }
     }

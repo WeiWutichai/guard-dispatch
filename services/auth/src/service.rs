@@ -451,6 +451,7 @@ pub async fn get_profile(
         cp_full_name: Option<String>,
         cp_company_name: Option<String>,
         cp_contact_phone: Option<String>,
+        cp_address: Option<String>,
         cp_approval_status: Option<ApprovalStatus>,
         // guard_profiles fields (non-sensitive only)
         gp_gender: Option<String>,
@@ -468,6 +469,7 @@ pub async fn get_profile(
             cp.full_name          AS cp_full_name,
             cp.company_name       AS cp_company_name,
             cp.contact_phone      AS cp_contact_phone,
+            cp.address            AS cp_address,
             cp.approval_status    AS cp_approval_status,
             gp.gender             AS gp_gender,
             gp.date_of_birth      AS gp_date_of_birth,
@@ -505,6 +507,7 @@ pub async fn get_profile(
         date_of_birth: row.gp_date_of_birth.map(|d| d.format("%Y-%m-%d").to_string()),
         years_of_experience: row.gp_years_of_experience,
         previous_workplace: row.gp_previous_workplace,
+        customer_address: row.cp_address,
         customer_approval_status: row.cp_approval_status,
     };
     cache_user(redis, &response).await?;
@@ -1625,6 +1628,7 @@ pub async fn list_customer_applicants(
             date_of_birth: None,
             years_of_experience: None,
             previous_workplace: None,
+            customer_address: None,
             customer_approval_status: None,
         })
         .collect();

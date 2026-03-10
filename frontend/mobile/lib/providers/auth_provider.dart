@@ -48,6 +48,7 @@ class AuthProvider extends ChangeNotifier {
   int? _yearsOfExperience;
   String? _previousWorkplace;
   String? _customerApprovalStatus;
+  String? _customerAddress;
   final ApiClient _apiClient = ApiClient();
 
   AuthStatus get status => _status;
@@ -63,6 +64,7 @@ class AuthProvider extends ChangeNotifier {
   String? get previousWorkplace => _previousWorkplace;
   /// Customer profile approval status (from customer_profiles.approval_status).
   /// null = no customer profile submitted, 'pending'/'approved'/'rejected'.
+  String? get customerAddress => _customerAddress;
   String? get customerApprovalStatus => _customerApprovalStatus;
   ApiClient get apiClient => _apiClient;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
@@ -113,6 +115,7 @@ class AuthProvider extends ChangeNotifier {
       _dateOfBirth = data['date_of_birth'] as String?;
       _yearsOfExperience = data['years_of_experience'] as int?;
       _previousWorkplace = data['previous_workplace'] as String?;
+      _customerAddress = data['customer_address'] as String?;
       _customerApprovalStatus = data['customer_approval_status'] as String?;
       final role = data['role'] as String?;
       if (role != null) _role = role;
@@ -347,6 +350,7 @@ class AuthProvider extends ChangeNotifier {
     _dateOfBirth = null;
     _yearsOfExperience = null;
     _previousWorkplace = null;
+    _customerAddress = null;
     _customerApprovalStatus = null;
     notifyListeners();
   }
