@@ -270,6 +270,12 @@ class RegistrationPendingStrings {
   final String checkStatus;
   final String notYetApproved;
   final String checkStatusError;
+  // Customer-specific fields
+  final String customerInfoTitle;
+  final String fieldCompanyName;
+  final String fieldAddress;
+  final String fieldEmail;
+  final String fieldContactPhone;
 
   RegistrationPendingStrings({required bool isThai})
     : title = isThai ? 'รอการอนุมัติ' : 'Awaiting Approval',
@@ -309,7 +315,12 @@ class RegistrationPendingStrings {
       editDialogCancel = isThai ? 'ยกเลิก' : 'Cancel',
       checkStatus = isThai ? 'ตรวจสอบสถานะ' : 'Check Status',
       notYetApproved = isThai ? 'ยังไม่ได้รับการอนุมัติ กรุณารอสักครู่' : 'Not yet approved. Please wait.',
-      checkStatusError = isThai ? 'ไม่สามารถตรวจสอบได้ กรุณาลงทะเบียนใหม่' : 'Unable to check. Please re-register.';
+      checkStatusError = isThai ? 'ไม่สามารถตรวจสอบได้ กรุณาลงทะเบียนใหม่' : 'Unable to check. Please re-register.',
+      customerInfoTitle = isThai ? 'ข้อมูลลูกค้า' : 'Customer Info',
+      fieldCompanyName = isThai ? 'ชื่อบริษัท' : 'Company',
+      fieldAddress = isThai ? 'ที่อยู่' : 'Address',
+      fieldEmail = isThai ? 'อีเมล' : 'Email',
+      fieldContactPhone = isThai ? 'เบอร์ติดต่อ' : 'Contact Phone';
 }
 
 // ──────────────────────────────────────────────
@@ -1063,6 +1074,12 @@ class ProfileSettingsStrings {
   final String emailHint;
   final String address;
   final String addressHint;
+  // Guard-specific fields
+  final String guardInfo;
+  final String gender;
+  final String dateOfBirth;
+  final String yearsOfExperience;
+  final String previousWorkplace;
   final String emergencyContact;
   final String contactName;
   final String contactNameHint;
@@ -1090,6 +1107,11 @@ class ProfileSettingsStrings {
       emailHint = isThai ? 'กรอกอีเมล' : 'Enter email',
       address = isThai ? 'ที่อยู่' : 'Address',
       addressHint = isThai ? 'กรอกที่อยู่' : 'Enter address',
+      guardInfo = isThai ? 'ข้อมูลเจ้าหน้าที่' : 'Guard Info',
+      gender = isThai ? 'เพศ' : 'Gender',
+      dateOfBirth = isThai ? 'วันเกิด' : 'Date of Birth',
+      yearsOfExperience = isThai ? 'ประสบการณ์ (ปี)' : 'Experience (years)',
+      previousWorkplace = isThai ? 'สถานที่ทำงานก่อนหน้า' : 'Previous Workplace',
       emergencyContact = isThai ? 'ผู้ติดต่อฉุกเฉิน' : 'Emergency Contact',
       contactName = isThai ? 'ชื่อผู้ติดต่อ' : 'Contact Name',
       contactNameHint = isThai ? 'กรอกชื่อ' : 'Enter name',
@@ -1599,4 +1621,24 @@ class LiveMapStrings {
           : 'No guards found for this filter',
       refresh = isThai ? 'รีเฟรช' : 'Refresh',
       myLocation = isThai ? 'ตำแหน่งของฉัน' : 'My Location';
+}
+
+// ──────────────────────────────────────────────
+// PinLoginStrings — pin_login_screen
+// ──────────────────────────────────────────────
+class PinLoginStrings {
+  final String accountApproved;
+  final String title;
+  final String subtitle;
+  final String pinIncorrect;
+
+  PinLoginStrings({required bool isThai})
+    : accountApproved = isThai ? 'บัญชีได้รับอนุมัติแล้ว' : 'Account Approved',
+      title = isThai ? 'เข้าสู่ระบบ' : 'Login',
+      subtitle = isThai
+          ? 'กรุณาใส่ PIN 6 หลักที่ตั้งไว้ตอนลงทะเบียน'
+          : 'Enter the 6-digit PIN you set during registration',
+      pinIncorrect = isThai
+          ? 'PIN ไม่ถูกต้อง ลองใหม่อีกครั้ง'
+          : 'Incorrect PIN. Try again';
 }

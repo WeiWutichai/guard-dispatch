@@ -40,6 +40,14 @@ class AuthProvider extends ChangeNotifier {
   String? _fullName;
   String? _phone;
   String? _avatarUrl;
+  String? _companyName;
+  String? _contactPhone;
+  // Guard profile fields
+  String? _gender;
+  String? _dateOfBirth;
+  int? _yearsOfExperience;
+  String? _previousWorkplace;
+  String? _customerApprovalStatus;
   final ApiClient _apiClient = ApiClient();
 
   AuthStatus get status => _status;
@@ -47,30 +55,46 @@ class AuthProvider extends ChangeNotifier {
   String? get fullName => _fullName;
   String? get phone => _phone;
   String? get avatarUrl => _avatarUrl;
+  String? get companyName => _companyName;
+  String? get contactPhone => _contactPhone;
+  String? get gender => _gender;
+  String? get dateOfBirth => _dateOfBirth;
+  int? get yearsOfExperience => _yearsOfExperience;
+  String? get previousWorkplace => _previousWorkplace;
+  /// Customer profile approval status (from customer_profiles.approval_status).
+  /// null = no customer profile submitted, 'pending'/'approved'/'rejected'.
+  String? get customerApprovalStatus => _customerApprovalStatus;
   ApiClient get apiClient => _apiClient;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
   bool get isPendingApproval => _status == AuthStatus.pendingApproval;
 
   /// Check persisted auth state on app startup.
   ///
-  /// Priority: pendingApproval flag > stored access token > unauthenticated.
+  /// If valid tokens exist they take priority (user is already approved).
+  /// Only fall back to pendingApproval when there are no tokens.
   Future<void> checkAuthStatus() async {
+    final token = await AuthService.getAccessToken();
+    if (token != null) {
+      // User has tokens — they are authenticated regardless of any stale
+      // pending flag (e.g. an approved guard who added a customer profile).
+      if (await AuthService.isPendingApproval()) {
+        await AuthService.clearPendingApproval();
+      }
+      _status = AuthStatus.authenticated;
+      _role = await AuthService.getRole();
+      notifyListeners();
+      await fetchProfile();
+      return;
+    }
+
     if (await AuthService.isPendingApproval()) {
       _status = AuthStatus.pendingApproval;
       _role = await AuthService.getPendingRole();
       notifyListeners();
       return;
     }
-    final token = await AuthService.getAccessToken();
-    if (token != null) {
-      _status = AuthStatus.authenticated;
-      _role = await AuthService.getRole();
-      notifyListeners();
-      await fetchProfile();
-      return;
-    } else {
-      _status = AuthStatus.unauthenticated;
-    }
+
+    _status = AuthStatus.unauthenticated;
     notifyListeners();
   }
 
@@ -78,13 +102,24 @@ class AuthProvider extends ChangeNotifier {
   Future<void> fetchProfile() async {
     try {
       final response = await _apiClient.dio.get('/auth/me');
+      debugPrint('fetchProfile response: ${response.data}');
       final data = response.data['data'];
       _fullName = data['full_name'] as String?;
       _phone = data['phone'] as String?;
       _avatarUrl = data['avatar_url'] as String?;
+      _companyName = data['company_name'] as String?;
+      _contactPhone = data['contact_phone'] as String?;
+      _gender = data['gender'] as String?;
+      _dateOfBirth = data['date_of_birth'] as String?;
+      _yearsOfExperience = data['years_of_experience'] as int?;
+      _previousWorkplace = data['previous_workplace'] as String?;
+      _customerApprovalStatus = data['customer_approval_status'] as String?;
+      final role = data['role'] as String?;
+      if (role != null) _role = role;
+      debugPrint('fullName set to: $_fullName, phone: $_phone, role: $_role');
       notifyListeners();
-    } catch (_) {
-      // Silently fail — dashboard will show fallback values.
+    } catch (e) {
+      debugPrint('fetchProfile error: $e');
     }
   }
 
@@ -102,10 +137,10 @@ class AuthProvider extends ChangeNotifier {
   /// that must be used in the registration step.
   /// Throws [DioException] on invalid OTP or network error.
   Future<String> verifyOtp(String phone, String code) async {
-    final response = await _apiClient.dio.post('/auth/otp/verify', data: {
-      'phone': phone,
-      'code': code,
-    });
+    final response = await _apiClient.dio.post(
+      '/auth/otp/verify',
+      data: {'phone': phone, 'code': code},
+    );
     return response.data['data']['phone_verified_token'] as String;
   }
 
@@ -128,15 +163,16 @@ class AuthProvider extends ChangeNotifier {
     String? email,
     String? role,
   }) async {
-    final data = <String, dynamic>{
-      'phone_verified_token': phoneVerifiedToken,
-    };
+    final data = <String, dynamic>{'phone_verified_token': phoneVerifiedToken};
     if (role != null) data['role'] = role;
     if (password != null) data['password'] = password;
     if (fullName != null) data['full_name'] = fullName;
     if (email != null) data['email'] = email;
 
-    final response = await _apiClient.dio.post('/auth/register/otp', data: data);
+    final response = await _apiClient.dio.post(
+      '/auth/register/otp',
+      data: data,
+    );
 
     // Persist pending state so the correct screen shows on app restart.
     await AuthService.setPendingApproval(role: role);
@@ -155,7 +191,7 @@ class AuthProvider extends ChangeNotifier {
   Future<String> reissueProfileToken(String phone, {String? role}) async {
     final response = await _apiClient.dio.post(
       '/auth/profile/reissue',
-      data: <String, dynamic>{'phone': phone, if (role != null) 'role': role},
+      data: <String, dynamic>{'phone': phone, 'role': ?role},
     );
     final token = response.data['data']?['profile_token'];
     if (token is! String) {
@@ -206,22 +242,29 @@ class AuthProvider extends ChangeNotifier {
 
     if (fullName != null) formData.fields.add(MapEntry('full_name', fullName));
     if (gender != null) formData.fields.add(MapEntry('gender', gender));
-    if (dateOfBirth != null) formData.fields.add(MapEntry('date_of_birth', dateOfBirth));
+    if (dateOfBirth != null) {
+      formData.fields.add(MapEntry('date_of_birth', dateOfBirth));
+    }
     if (yearsOfExperience != null) {
-      formData.fields.add(MapEntry('years_of_experience', yearsOfExperience.toString()));
+      formData.fields.add(
+        MapEntry('years_of_experience', yearsOfExperience.toString()),
+      );
     }
     if (previousWorkplace != null) {
       formData.fields.add(MapEntry('previous_workplace', previousWorkplace));
     }
     if (bankName != null) formData.fields.add(MapEntry('bank_name', bankName));
-    if (accountNumber != null) formData.fields.add(MapEntry('account_number', accountNumber));
-    if (accountName != null) formData.fields.add(MapEntry('account_name', accountName));
+    if (accountNumber != null) {
+      formData.fields.add(MapEntry('account_number', accountNumber));
+    }
+    if (accountName != null) {
+      formData.fields.add(MapEntry('account_name', accountName));
+    }
 
     for (final entry in files.entries) {
-      formData.files.add(MapEntry(
-        entry.key,
-        await MultipartFile.fromFile(entry.value.path),
-      ));
+      formData.files.add(
+        MapEntry(entry.key, await MultipartFile.fromFile(entry.value.path)),
+      );
     }
 
     await _apiClient.dio.post(
@@ -248,9 +291,11 @@ class AuthProvider extends ChangeNotifier {
       data: <String, dynamic>{
         'address': address,
         if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
-        if (contactPhone != null && contactPhone.isNotEmpty) 'contact_phone': contactPhone,
+        if (contactPhone != null && contactPhone.isNotEmpty)
+          'contact_phone': contactPhone,
         if (email != null && email.isNotEmpty) 'email': email,
-        if (companyName != null && companyName.isNotEmpty) 'company_name': companyName,
+        if (companyName != null && companyName.isNotEmpty)
+          'company_name': companyName,
       },
       options: Options(headers: {'Authorization': 'Bearer $profileToken'}),
     );
@@ -262,10 +307,10 @@ class AuthProvider extends ChangeNotifier {
   /// (which was stored as the password during registration).
   /// On success: stores tokens + role, clears pending state, sets authenticated.
   Future<bool> loginWithPhone(String phone, String pinHash) async {
-    final response = await _apiClient.dio.post('/auth/login/phone', data: {
-      'phone': phone,
-      'password': pinHash,
-    });
+    final response = await _apiClient.dio.post(
+      '/auth/login/phone',
+      data: {'phone': phone, 'password': pinHash},
+    );
     final data = response.data['data'];
     final accessToken = data['access_token'] as String;
     final refreshToken = data['refresh_token'] as String;
@@ -296,6 +341,13 @@ class AuthProvider extends ChangeNotifier {
     _fullName = null;
     _phone = null;
     _avatarUrl = null;
+    _companyName = null;
+    _contactPhone = null;
+    _gender = null;
+    _dateOfBirth = null;
+    _yearsOfExperience = null;
+    _previousWorkplace = null;
+    _customerApprovalStatus = null;
     notifyListeners();
   }
 

@@ -10,6 +10,8 @@ import '../l10n/app_strings.dart';
 import '../providers/auth_provider.dart';
 import '../services/auth_service.dart';
 import 'pin_setup_screen.dart';
+import 'pin_login_screen.dart';
+import 'role_selection_screen.dart';
 import '../services/pin_storage_service.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
@@ -140,9 +142,67 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         return;
       }
 
-      // Navigate directly to PIN setup — name/email collected later in the
-      // registration form. registerWithOtp is called at the end of that flow.
       final pinService = context.read<PinStorageService>();
+
+      // Returning user: PIN already set → skip PinSetup, try register/login directly
+      if (pinService.isPinSet) {
+        final storedHash = pinService.getStoredPinHash()!;
+        try {
+          await authProvider.registerWithOtp(
+            phoneVerifiedToken: phoneVerifiedToken,
+            password: storedHash,
+          );
+          // New/pending user — clear OTP data, go to RoleSelection
+          await AuthService.clearPhoneVerifiedData();
+          await AuthService.storePhone(widget.phone);
+          if (!mounted) return;
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RoleSelectionScreen(phone: widget.phone),
+            ),
+            (route) => false,
+          );
+        } on DioException catch (e) {
+          if (!mounted) return;
+          final msg = e.response?.data?['error']?['message'] as String?;
+          if (msg != null && msg.contains('log in instead')) {
+            // Account approved → auto-login with stored PIN hash
+            try {
+              await authProvider.loginWithPhone(widget.phone, storedHash);
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => RoleSelectionScreen(phone: widget.phone),
+                ),
+                (route) => false,
+              );
+            } catch (_) {
+              // Stored PIN doesn't match backend → manual PIN entry
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PinLoginScreen(phone: widget.phone),
+                ),
+                (route) => false,
+              );
+            }
+            return;
+          }
+          // Other error — show it
+          setState(() {
+            _hasError = true;
+            _isVerifying = false;
+            _errorMessage = msg;
+          });
+          _clearFieldsAfterDelay();
+        }
+        return;
+      }
+
+      // New user: no PIN set → go to PinSetupScreen
       Navigator.push(
         context,
         MaterialPageRoute(

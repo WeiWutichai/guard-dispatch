@@ -220,6 +220,8 @@ pub struct GuardDashboardSummary {
     pub today_jobs_count: i64,
     pub today_earnings: f64,
     pub week_earnings: f64,
+    pub last_week_earnings: f64,
+    pub pending_jobs_count: i64,
     pub active_job: Option<GuardJobResponse>,
 }
 

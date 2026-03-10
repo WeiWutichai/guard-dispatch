@@ -27,8 +27,11 @@ class BookingService {
       '/booking/guard/jobs',
       queryParameters: params,
     );
-    final list = response.data['data'] as List<dynamic>;
-    return list.cast<Map<String, dynamic>>();
+    final data = response.data['data'];
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
   }
 
   /// GET /booking/guard/earnings

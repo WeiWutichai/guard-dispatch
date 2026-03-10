@@ -46,8 +46,9 @@ class _AuthInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    // Skip auth header for public endpoints
-    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role'];
+    // Skip auth header for public endpoints and profile-token endpoints
+    // (profile/guard and profile/customer use their own Bearer profile_token)
+    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role', '/auth/profile/guard', '/auth/profile/customer'];
     final isPublic = publicPaths.any((p) => options.path.contains(p));
 
     if (!isPublic) {
@@ -87,8 +88,9 @@ class _AuthInterceptor extends Interceptor {
         );
 
         if (response.statusCode == 200) {
-          final newAccessToken = response.data['access_token'] as String;
-          final newRefreshToken = response.data['refresh_token'] as String;
+          final data = response.data['data'];
+          final newAccessToken = data['access_token'] as String;
+          final newRefreshToken = data['refresh_token'] as String;
           await AuthService.storeTokens(newAccessToken, newRefreshToken);
 
           // Retry original request with new token

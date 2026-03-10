@@ -72,6 +72,28 @@ pub struct UserResponse {
     pub is_active: bool,
     pub approval_status: ApprovalStatus,
     pub created_at: DateTime<Utc>,
+    /// Customer-only: company name from customer_profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+    /// Customer-only: contact phone from customer_profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_phone: Option<String>,
+    /// Guard-only: gender from guard_profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<String>,
+    /// Guard-only: date of birth (ISO date string) from guard_profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_of_birth: Option<String>,
+    /// Guard-only: years of experience from guard_profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub years_of_experience: Option<i32>,
+    /// Guard-only: previous workplace from guard_profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_workplace: Option<String>,
+    /// Customer profile approval status (separate from user approval_status).
+    /// Present when the user has submitted a customer profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_approval_status: Option<ApprovalStatus>,
 }
 
 // =============================================================================
@@ -105,6 +127,13 @@ impl From<UserRow> for UserResponse {
             is_active: row.is_active,
             approval_status: row.approval_status,
             created_at: row.created_at,
+            company_name: None,
+            contact_phone: None,
+            gender: None,
+            date_of_birth: None,
+            years_of_experience: None,
+            previous_workplace: None,
+            customer_approval_status: None,
         }
     }
 }

@@ -43,6 +43,8 @@ use crate::state::AppState;
         handlers::get_guard_profile,
         handlers::submit_customer_profile,
         handlers::get_customer_profile,
+        handlers::list_customer_applicants,
+        handlers::update_customer_approval,
         handlers::reissue_profile_token,
         handlers::update_role,
     ),
@@ -199,6 +201,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/profile/customer", post(handlers::submit_customer_profile))
         .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile))
         .route("/admin/customer-profile/{user_id}", get(handlers::get_customer_profile))
+        .route("/admin/customer-applicants", get(handlers::list_customer_applicants))
+        .route("/admin/customer-profile/{user_id}/approval", patch(handlers::update_customer_approval))
         .merge({
             let swagger = SwaggerUi::new("/swagger-ui")
                 .url("/api-docs/openapi.json", ApiDoc::openapi());

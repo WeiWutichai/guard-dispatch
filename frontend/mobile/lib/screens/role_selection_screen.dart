@@ -34,6 +34,36 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     // If user is already authenticated (approved), go directly to dashboard.
     final auth = context.read<AuthProvider>();
     if (auth.status == AuthStatus.authenticated) {
+      // For customer role: check customer profile approval status.
+      // - approved → dashboard
+      // - pending → pending screen
+      // - null (no profile) → registration form
+      if (role == 'customer') {
+        final cas = auth.customerApprovalStatus;
+        if (cas == 'approved') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => dashboard),
+          );
+        } else if (cas == 'pending') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+          );
+        } else {
+          // No customer profile yet → show registration form
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CustomerRegistrationScreen(
+                phone: auth.phone ?? '',
+                profileToken: null,
+              ),
+            ),
+          );
+        }
+        return;
+      }
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => dashboard),
@@ -149,7 +179,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     }
 
     if (!mounted) return;
-    Navigator.push(
+    Navigator.pushReplacement(
       context,
       MaterialPageRoute(
         builder: (_) => CustomerRegistrationScreen(

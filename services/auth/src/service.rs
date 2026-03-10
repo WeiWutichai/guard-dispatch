@@ -431,11 +431,52 @@ pub async fn get_profile(
         return Ok(cached);
     }
 
-    let user = sqlx::query_as::<_, UserRow>(
+    // Single query with LEFT JOINs to pull profile-specific fields.
+    // - Guard: gender, date_of_birth, experience, workplace from guard_profiles
+    //          full_name lives in auth.users (set by submit_guard_profile)
+    // - Customer: full_name + company_name + contact_phone from customer_profiles
+    // NOTE: No sensitive fields (bank info, doc URLs) are returned here.
+    #[derive(sqlx::FromRow)]
+    struct ProfileRow {
+        id: Uuid,
+        email: String,
+        phone: String,
+        full_name: String,
+        role: Option<UserRole>,
+        avatar_url: Option<String>,
+        is_active: bool,
+        approval_status: ApprovalStatus,
+        created_at: chrono::DateTime<chrono::Utc>,
+        // customer_profiles fields
+        cp_full_name: Option<String>,
+        cp_company_name: Option<String>,
+        cp_contact_phone: Option<String>,
+        cp_approval_status: Option<ApprovalStatus>,
+        // guard_profiles fields (non-sensitive only)
+        gp_gender: Option<String>,
+        gp_date_of_birth: Option<chrono::NaiveDate>,
+        gp_years_of_experience: Option<i32>,
+        gp_previous_workplace: Option<String>,
+    }
+
+    let row = sqlx::query_as::<_, ProfileRow>(
         r#"
-        SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
-        FROM auth.users
-        WHERE id = $1
+        SELECT
+            u.id, u.email, u.phone,
+            u.full_name, u.role, u.avatar_url, u.is_active,
+            u.approval_status, u.created_at,
+            cp.full_name          AS cp_full_name,
+            cp.company_name       AS cp_company_name,
+            cp.contact_phone      AS cp_contact_phone,
+            cp.approval_status    AS cp_approval_status,
+            gp.gender             AS gp_gender,
+            gp.date_of_birth      AS gp_date_of_birth,
+            gp.years_of_experience AS gp_years_of_experience,
+            gp.previous_workplace AS gp_previous_workplace
+        FROM auth.users u
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+        LEFT JOIN auth.guard_profiles gp ON gp.user_id = u.id
+        WHERE u.id = $1
         "#,
     )
     .bind(user_id)
@@ -443,7 +484,29 @@ pub async fn get_profile(
     .await?
     .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
-    let response = UserResponse::from(user);
+    // Prefer customer_profiles.full_name over users.full_name for customers
+    let full_name = row.cp_full_name
+        .filter(|s| !s.is_empty())
+        .unwrap_or(row.full_name);
+
+    let response = UserResponse {
+        id: row.id,
+        email: row.email,
+        phone: row.phone,
+        full_name,
+        role: row.role,
+        avatar_url: row.avatar_url,
+        is_active: row.is_active,
+        approval_status: row.approval_status,
+        created_at: row.created_at,
+        company_name: row.cp_company_name,
+        contact_phone: row.cp_contact_phone,
+        gender: row.gp_gender,
+        date_of_birth: row.gp_date_of_birth.map(|d| d.format("%Y-%m-%d").to_string()),
+        years_of_experience: row.gp_years_of_experience,
+        previous_workplace: row.gp_previous_workplace,
+        customer_approval_status: row.cp_approval_status,
+    };
     cache_user(redis, &response).await?;
 
     Ok(response)
@@ -485,8 +548,8 @@ pub async fn update_profile(
 
     let response = UserResponse::from(user);
 
-    // cache_user uses SET_EX which atomically overwrites any existing key — no need for DEL first
-    cache_user(redis, &response).await?;
+    // Invalidate cache so next get_profile re-fetches with full JOIN (includes profile fields)
+    invalidate_user_cache(redis, &user_id).await?;
 
     Ok(response)
 }
@@ -954,16 +1017,16 @@ pub async fn reissue_profile_token(
 ) -> Result<String, AppError> {
     let phone_clean = otp::validate_thai_phone(phone)?;
 
-    // User must exist AND be pending
+    // User must exist (allow both pending and approved users to reissue profile tokens)
     let user: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM auth.users WHERE phone = $1 AND approval_status = 'pending'"
+        "SELECT id FROM auth.users WHERE phone = $1"
     )
     .bind(&phone_clean)
     .fetch_optional(db)
     .await?;
 
     let (user_id,) = user.ok_or_else(|| {
-        AppError::NotFound("No pending registration found for this phone".to_string())
+        AppError::NotFound("No registration found for this phone".to_string())
     })?;
 
     // Determine purpose from role (default: guard for backward compatibility)
@@ -996,9 +1059,10 @@ pub async fn reissue_profile_token(
 // Update User Role (step 2 of 3-step registration)
 // =============================================================================
 
-/// Set the role of a pending user identified by phone.
-/// Only works for users with `approval_status='pending'` and `role IS NULL`.
-/// For guard role: issues a profile_token for profile submission.
+/// Issue a profile_token for a user identified by phone.
+/// Works for any existing user (pending or approved) to support adding profiles.
+/// For guard role: issues a profile_token with purpose "guard_profile".
+/// For customer role: issues a profile_token with purpose "customer_profile".
 pub async fn update_user_role(
     db: &PgPool,
     redis: &redis::aio::MultiplexedConnection,
@@ -1020,25 +1084,19 @@ pub async fn update_user_role(
     // Guard: do NOT set role yet — role is set atomically in submit_guard_profile.
     // Customer: do NOT set role yet — role is set atomically in submit_customer_profile.
     // Both paths SELECT verify + issue profile_token.
-    let allowed_role = if role == UserRole::Guard {
-        "guard"
-    } else {
-        "customer"
-    };
+    // Allow any existing user (pending or approved) to add a profile for a different role
+    // (e.g., approved guard adding customer profile).
     let user: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM auth.users \
-         WHERE phone = $1 AND approval_status = 'pending' \
-         AND (role IS NULL OR role = $2::user_role)",
+        "SELECT id FROM auth.users WHERE phone = $1",
     )
     .bind(&phone_clean)
-    .bind(allowed_role)
     .fetch_optional(db)
     .await
     .map_err(AppError::Database)?;
 
     let (user_id,) = user.ok_or_else(|| {
         AppError::BadRequest(
-            "No pending user with unset role found for this phone".to_string(),
+            "No user found for this phone".to_string(),
         )
     })?;
 
@@ -1391,16 +1449,17 @@ pub async fn submit_customer_profile(
     let full_name = req.full_name.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let company_name = req.company_name.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
-    // UPSERT customer_profiles
+    // UPSERT customer_profiles (reset approval_status to pending on re-submission)
     sqlx::query(
-        "INSERT INTO auth.customer_profiles (user_id, full_name, contact_phone, email, company_name, address) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+        "INSERT INTO auth.customer_profiles (user_id, full_name, contact_phone, email, company_name, address, approval_status) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending') \
          ON CONFLICT (user_id) DO UPDATE SET \
              full_name = EXCLUDED.full_name, \
              contact_phone = EXCLUDED.contact_phone, \
              email = EXCLUDED.email, \
              company_name = EXCLUDED.company_name, \
              address = EXCLUDED.address, \
+             approval_status = 'pending', \
              updated_at = NOW()",
     )
     .bind(user_id)
@@ -1455,7 +1514,7 @@ pub async fn get_customer_profile(
                 COALESCE(cp.full_name, u.full_name) AS full_name, \
                 cp.contact_phone, cp.email, \
                 cp.company_name, cp.address, \
-                u.approval_status AS approval_status, \
+                cp.approval_status AS approval_status, \
                 cp.created_at \
          FROM auth.customer_profiles cp \
          JOIN auth.users u ON u.id = cp.user_id \
@@ -1478,6 +1537,130 @@ pub async fn get_customer_profile(
         approval_status: row.approval_status,
         created_at: row.created_at,
     })
+}
+
+// =============================================================================
+// List Customer Applicants (Admin) — based on customer_profiles.approval_status
+// =============================================================================
+
+pub async fn list_customer_applicants(
+    db: &PgPool,
+    query: ListUsersQuery,
+) -> Result<PaginatedUsers, AppError> {
+    let limit = query.limit.unwrap_or(20).min(100);
+    let offset = query.offset.unwrap_or(0);
+
+    let search_pattern = query.search
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{s}%"));
+
+    let status_filter = query.approval_status.as_ref().filter(|s| !s.is_empty()).cloned();
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM auth.customer_profiles cp
+        JOIN auth.users u ON u.id = cp.user_id
+        WHERE u.role != 'admin'
+          AND ($1::approval_status IS NULL OR cp.approval_status = $1::approval_status)
+          AND ($2::text IS NULL OR u.full_name ILIKE $2 OR u.email ILIKE $2 OR u.phone ILIKE $2)
+        "#,
+    )
+    .bind(&status_filter)
+    .bind(&search_pattern)
+    .fetch_one(db)
+    .await?;
+
+    #[derive(sqlx::FromRow)]
+    struct CpRow {
+        id: Uuid,
+        email: String,
+        phone: String,
+        full_name: String,
+        avatar_url: Option<String>,
+        is_active: bool,
+        cp_approval_status: ApprovalStatus,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    let rows = sqlx::query_as::<_, CpRow>(
+        r#"
+        SELECT u.id, u.email, u.phone,
+               COALESCE(cp.full_name, u.full_name) AS full_name,
+               u.avatar_url, u.is_active,
+               cp.approval_status AS cp_approval_status,
+               cp.created_at
+        FROM auth.customer_profiles cp
+        JOIN auth.users u ON u.id = cp.user_id
+        WHERE u.role != 'admin'
+          AND ($1::approval_status IS NULL OR cp.approval_status = $1::approval_status)
+          AND ($2::text IS NULL OR u.full_name ILIKE $2 OR u.email ILIKE $2 OR u.phone ILIKE $2)
+        ORDER BY cp.created_at DESC
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(&status_filter)
+    .bind(&search_pattern)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(db)
+    .await?;
+
+    let users: Vec<UserResponse> = rows
+        .into_iter()
+        .map(|r| UserResponse {
+            id: r.id,
+            email: r.email,
+            phone: r.phone,
+            full_name: r.full_name,
+            role: Some(UserRole::Customer),
+            avatar_url: r.avatar_url,
+            is_active: r.is_active,
+            approval_status: r.cp_approval_status,
+            created_at: r.created_at,
+            company_name: None,
+            contact_phone: None,
+            gender: None,
+            date_of_birth: None,
+            years_of_experience: None,
+            previous_workplace: None,
+            customer_approval_status: None,
+        })
+        .collect();
+
+    Ok(PaginatedUsers { users, total })
+}
+
+// =============================================================================
+// Update Customer Profile Approval Status (Admin)
+// =============================================================================
+
+pub async fn update_customer_approval_status(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+    user_id: Uuid,
+    status: ApprovalStatus,
+) -> Result<(), AppError> {
+    let status_str = status.to_string();
+
+    let result = sqlx::query(
+        "UPDATE auth.customer_profiles SET approval_status = $2::approval_status, updated_at = NOW() \
+         WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .bind(&status_str)
+    .execute(db)
+    .await
+    .map_err(AppError::Database)?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Customer profile not found".to_string()));
+    }
+
+    invalidate_user_cache(redis, &user_id).await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

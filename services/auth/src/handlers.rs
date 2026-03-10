@@ -676,6 +676,75 @@ pub async fn get_customer_profile(
     Ok(Json(shared::models::ApiResponse::success(profile)))
 }
 
+/// List customer applicants (users who have submitted a customer profile).
+/// Uses customer_profiles.approval_status for filtering (not auth.users.approval_status).
+#[utoipa::path(
+    get,
+    path = "/admin/customer-applicants",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(
+        ("approval_status" = Option<String>, Query, description = "Filter by customer profile status (pending, approved, rejected)"),
+        ("search" = Option<String>, Query, description = "Search by name, email, or phone"),
+        ("limit" = Option<i64>, Query, description = "Page size (default 20, max 100)"),
+        ("offset" = Option<i64>, Query, description = "Offset for pagination"),
+    ),
+    responses(
+        (status = 200, description = "List of customer applicants", body = PaginatedUsers),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+    ),
+)]
+pub async fn list_customer_applicants(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<ListUsersQuery>,
+) -> Result<Json<shared::models::ApiResponse<PaginatedUsers>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+
+    let result = crate::service::list_customer_applicants(&state.db, query).await?;
+    Ok(Json(shared::models::ApiResponse::success(result)))
+}
+
+/// Update a customer profile's approval status (admin only).
+#[utoipa::path(
+    patch,
+    path = "/admin/customer-profile/{user_id}/approval",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(
+        ("user_id" = Uuid, Path, description = "Customer user ID"),
+    ),
+    request_body = UpdateApprovalStatusRequest,
+    responses(
+        (status = 200, description = "Customer profile approval updated"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+        (status = 404, description = "Customer profile not found", body = ErrorBody),
+    ),
+)]
+pub async fn update_customer_approval(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(user_id): Path<Uuid>,
+    Json(req): Json<UpdateApprovalStatusRequest>,
+) -> Result<Json<shared::models::ApiResponse<()>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+
+    crate::service::update_customer_approval_status(
+        &state.db,
+        &state.redis,
+        user_id,
+        req.approval_status,
+    )
+    .await?;
+    Ok(Json(shared::models::ApiResponse::success(())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -108,6 +108,25 @@ PostgreSQL: guard_dispatch_db
 └── schema: audit        (logs ทุก action)
 ```
 
+### Customer Profiles Table
+```sql
+CREATE TABLE auth.customer_profiles (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL UNIQUE REFERENCES auth.users(id),
+  full_name       TEXT,
+  contact_phone   TEXT,
+  email           TEXT,
+  company_name    TEXT,
+  address         TEXT NOT NULL,
+  approval_status approval_status NOT NULL DEFAULT 'pending',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+> **Dual approval tracking:** `auth.users.approval_status` tracks guard profile approval.
+> `auth.customer_profiles.approval_status` tracks customer profile approval independently.
+> A guard with `users.approval_status='approved'` can have `customer_profiles.approval_status='pending'`.
+
 ### OTP Codes Table
 ```sql
 CREATE TABLE auth.otp_codes (
@@ -285,7 +304,7 @@ CREATE TABLE chat.attachments (
 - **PIN Security:** Hash PIN ด้วย SHA-256 ก่อนเก็บ — ห้ามเก็บ plaintext PIN
 - **API Client:** ใช้ `ApiClient` (Dio-based) ที่มี JWT interceptor อัตโนมัติ — ห้ามเรียก API ตรงโดยไม่ผ่าน interceptor
   - Interceptor ใส่ Bearer token จาก `FlutterSecureStorage` อัตโนมัติ
-  - 401 response → auto-refresh token แล้ว retry
+  - 401 response → auto-refresh token แล้ว retry — **refresh response ต้อง parse `response.data['data']`** (ApiResponse wrapper) ไม่ใช่ `response.data` ตรง
   - Skip auth สำหรับ public endpoints (`/auth/login`, `/auth/register`, etc.)
 - **State Management:** ใช้ Provider pattern (`ChangeNotifierProvider`) — `AuthProvider` เป็น centralized auth state
   - `main.dart` wrap app ด้วย `MultiProvider`
@@ -381,6 +400,7 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   │   ├── phone_input_screen.dart           ← OTP: กรอกเบอร์โทร
 │       │   │   ├── otp_verification_screen.dart      ← OTP: กรอกรหัส 6 หลัก
 │       │   │   ├── set_password_screen.dart          ← OTP: ตั้งรหัสผ่าน + ข้อมูล
+│       │   │   ├── pin_login_screen.dart              ← Login ด้วย PIN เดิม (returning approved user)
 │       │   │   ├── customer_registration_screen.dart ← Customer: กรอก address + company
 │       │   │   └── registration_pending_screen.dart  ← รอ Admin อนุมัติ (no tokens)
 │       │   ├── l10n/                   ← Bilingual strings (TH/EN)
@@ -404,21 +424,27 @@ guard-dispatch/                 ← Monorepo (1 Repo)
     │     ├── แสดง: ประสบการณ์, เงินเดือน, เอกสาร, ใบประกาศ
     │     └── อนุมัติ → ย้ายไปเมนู "พนักงานรักษาความปลอดภัย" (/guards)
     │
-    └── Tab: ผู้เรียก รปภ. (Customer Applicants)
-          ├── แสดง: ชื่อบริษัท, วัตถุประสงค์การจอง
-          └── อนุมัติ → ย้ายไปเมนู "ลูกค้า" (/customers)
+    └── Tab: ผู้เรียก รปภ. (Customer Applicants) ← ใช้ `listCustomerApplicants` API
+          ├── แสดง: ชื่อ, เบอร์, company_name, address, approval_status
+          └── อนุมัติ (updateCustomerApproval) → ย้ายไปเมนู "ลูกค้า" (/customers)
 ```
 
 ### Applicants Page Technical Details
 - **Types:** Discriminated union — `GuardApplicant` (type: "guard") | `CustomerApplicant` (type: "customer")
 - **Tabs:** 3 tabs (ทั้งหมด / เจ้าหน้าที่ รปภ. / ผู้เรียก รปภ.)
-- **Dynamic Columns:** Table columns เปลี่ยนตาม active tab
-  - Tab "all": แสดงคอลัมน์ ประเภท + experience + salary
-  - Tab "guard": แสดง experience + salary (ไม่มีคอลัมน์ประเภท)
-  - Tab "customer": แสดง companyName + bookingPurpose
+- **Data Source:**
+  - Tab "all" / "guard": `authApi.listUsers()` — queries `auth.users` by role
+  - Tab "customer": `authApi.listCustomerApplicants()` — queries `auth.customer_profiles` JOIN `auth.users` (finds guards with customer profiles)
+- **Approval Endpoints:**
+  - Guard/no-role: `authApi.updateApprovalStatus()` → PATCH `/auth/users/{id}/approval` (updates `auth.users.approval_status`)
+  - Customer tab: `authApi.updateCustomerApproval()` → PATCH `/auth/admin/customer-profile/{id}/approval` (updates `customer_profiles.approval_status`)
 - **Stats Cards:** Scope ตาม active tab (นับเฉพาะ applicants ในประเภทที่เลือก)
-- **Modal:** Content แตกต่างตามประเภท — Guard: fetch `getGuardProfile()` → แสดงเอกสาร/ประวัติ/ธนาคาร; Customer: fetch `getCustomerProfile()` → แสดง company_name + address
+- **Modal:** Content แตกต่างตามประเภท — Guard: fetch `getGuardProfile()` → แสดงเอกสาร/ประวัติ/ธนาคาร; Customer: fetch `getCustomerProfile()` → แสดง full_name, contact_phone, email, company_name, address
 - **Approved Note:** เมื่อสถานะ approved จะแสดงข้อความว่าไปอยู่เมนูไหน
+
+### Customers Page (/customers)
+- **Data Source:** `authApi.listCustomerApplicants({ approval_status: 'approved' })` — queries `customer_profiles` with approved status (NOT `listUsers` with `role='customer'` — guards who added customer profiles keep `role='guard'` in `auth.users`)
+- **Modal:** fetches `getCustomerProfile()` → shows full_name, contact_phone, email, company_name, address
 
 ### Map Page Architecture (/map)
 - **Auth Gate:** `useAuth()` — admin + customer only (guards see unauthorized screen)
@@ -471,7 +497,13 @@ OtpVerificationScreen                   POST /otp/verify
   │                                     ├─ Mark OTP as used
   │  ◄── phone_verified_token ─────────┤ ├─ Issue JWT (phone + jti)
   │                                     └─ Store jti="valid" in Redis
-  ▼ (navigate directly to PinSetupScreen — no SetPasswordScreen)
+  ▼ pinService.isPinSet?
+  ├─ YES (returning user — skip PinSetup entirely):
+  │   registerWithOtp(storedPinHash) → "log in instead"?
+  │   → loginWithPhone(phone, storedHash) → RoleSelection (authenticated → dashboard)
+  │   → fail → PinLoginScreen(phone) → enter original PIN → dashboard
+  │
+  └─ NO (new user — navigate to PinSetupScreen):
 PinSetupScreen(phone, phoneVerifiedToken)
   ├─ Step 1: Set 6-digit PIN → SHA-256 → FlutterSecureStorage
   ├─ Step 2: Confirm PIN
@@ -482,6 +514,13 @@ PinSetupScreen(phone, phoneVerifiedToken)
   │                                         ├─ Argon2 hash PIN (password param = SHA-256 of PIN)
   │   ◄── 202 + user_id ──────────────────┤ ├─ UPSERT user (role=NULL, status=pending)
   │   (no profile_token — role unknown)     └─ Admin เห็น applicant ไม่มีประเภท
+  │
+  │   ★ RETURNING USER (approved, tokens cleared):
+  │   registerWithOtp returns 409 "Please log in instead"
+  │   → auto-try loginWithPhone(phone, pinHash) with PIN just entered
+  │   → success: RoleSelectionScreen (authenticated → dashboard)
+  │   → fail: PinLoginScreen(phone) → enter original PIN → loginWithPhone → dashboard
+  │
   └─ Navigate → RoleSelectionScreen(phone)  ← phoneVerifiedToken consumed
   ▼
 RoleSelectionScreen(phone)
@@ -516,11 +555,12 @@ CustomerRegistrationScreen(phone, profileToken)
   └─ ★ STEP 3 (customer): _onSubmit():
       authProvider.submitCustomerProfile(      POST /profile/customer
         profileToken, address,            ──► ├─ validate_profile_token(purpose="customer_profile")
-        companyName)                           ├─ UPSERT auth.customer_profiles
+        companyName)                           ├─ UPSERT auth.customer_profiles (approval_status='pending')
                                                ├─ UPDATE auth.users SET role='customer' WHERE role IS NULL
                                                └─ invalidate_user_cache()
       (fallback: reissueProfileToken(role:'customer') if profileToken expired)
       ★ ถ้า error → role ยังเป็น null (ไม่มี partial state)
+      ★ customer_profiles.approval_status = 'pending' → ต้องรอ admin อนุมัติ
   ▼
 RegistrationPendingScreen
   ├─ "ตรวจสอบสถานะ" button → _checkApprovalStatus():
@@ -569,7 +609,9 @@ RegistrationPendingScreen
 - `POST /profile/customer` → `handlers::submit_customer_profile` (profile_token auth, purpose=`"customer_profile"` — single-use) — UPSERT `auth.customer_profiles`, SET role='customer' if role IS NULL
 - `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT)
 - `GET /admin/customer-profile/:user_id` → `handlers::get_customer_profile` (admin JWT) — JOIN users + customer_profiles
-- `GET /me` → `handlers::get_me` (JWT required) — returns `UserResponse { id, full_name, phone, email, role, avatar_url, approval_status }`. Used by `AuthProvider.fetchProfile()` for dashboard real data.
+- `GET /admin/customer-applicants` → `handlers::list_customer_applicants` (admin JWT) — queries `customer_profiles` JOIN `auth.users`, filters by `customer_profiles.approval_status`. Returns `PaginatedUsers` with `role` forced to `"customer"`.
+- `PATCH /admin/customer-profile/:user_id/approval` → `handlers::update_customer_approval` (admin JWT) — updates `customer_profiles.approval_status` + `invalidate_user_cache()`
+- `GET /me` → `handlers::get_me` (JWT required) — returns `UserResponse { id, full_name, phone, email, role, avatar_url, approval_status, customer_approval_status }`. Used by `AuthProvider.fetchProfile()` for dashboard real data.
 
 **Shared Modules:**
 - `shared::otp` — `OtpConfig`, `validate_thai_phone()`, `generate_otp()`, `to_international_format()`, `format_otp_message()`
@@ -581,8 +623,10 @@ RegistrationPendingScreen
 - `service::update_user_role()`: Guard path: SELECT verify user (pending + role IS NULL or guard) + issue profile_token (purpose=`"guard_profile"`) — **ไม่ UPDATE role**. Customer path: SELECT verify user + issue profile_token (purpose=`"customer_profile"`) — **ไม่ UPDATE role**. Rejects admin role.
 - `service::validate_profile_token(expected_purpose)`: async, takes redis + expected_purpose param — decodes JWT with purpose check, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
 - `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles`; then **SET role='guard'** + `invalidate_user_cache()` — role set only after successful save (atomic, no partial state on error)
-- `service::submit_customer_profile()`: validates address not empty; UPSERTs `auth.customer_profiles`; then **SET role='customer' WHERE role IS NULL** + `invalidate_user_cache()` — guards keep their role if they also register as customer
-- `service::get_customer_profile()`: JOIN `auth.users` + `auth.customer_profiles` — returns `CustomerProfileResponse`
+- `service::submit_customer_profile()`: validates address not empty; UPSERTs `auth.customer_profiles` with `approval_status='pending'`; then **SET role='customer' WHERE role IS NULL** + `invalidate_user_cache()` — guards keep their role if they also register as customer
+- `service::get_customer_profile()`: JOIN `auth.users` + `auth.customer_profiles` — returns `CustomerProfileResponse` (uses `cp.approval_status` not `u.approval_status`)
+- `service::list_customer_applicants()`: JOIN `customer_profiles` + `auth.users`, filters by `cp.approval_status`, returns `PaginatedUsers` with `role` forced to `Some(UserRole::Customer)`
+- `service::update_customer_approval_status()`: UPDATE `customer_profiles.approval_status` + `invalidate_user_cache()`
 - file_key format for guard docs: `profiles/guard/{user_id}/{doc_type}.{ext}`
 
 **Flutter Mobile:**
@@ -591,19 +635,22 @@ RegistrationPendingScreen
   - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
   - `updateRole()` calls `POST /auth/profile/role`, updates local pending state with role
   - `loginWithPhone(phone, pinHash)` calls `POST /auth/login/phone` → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval.
-  - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_avatarUrl`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
-  - `checkAuthStatus()`: checks `isPendingApproval()` flag first → then access token (+ `fetchProfile()`) → else unauthenticated
-  - Profile fields: `fullName`, `phone`, `avatarUrl` (getters) — used by dashboard screens instead of hardcoded mock data
+  - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_avatarUrl`, `_customerApprovalStatus`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
+  - `checkAuthStatus()`: checks stored access token **first** (tokens take priority over stale pending flag) → clears any stale `pendingApproval` flag → `fetchProfile()` → else checks `isPendingApproval()` → else unauthenticated
+  - Profile fields: `fullName`, `phone`, `avatarUrl`, `customerApprovalStatus` (getters) — used by dashboard screens instead of hardcoded mock data
+  - `customerApprovalStatus`: `String?` — `'pending'` | `'approved'` | `'rejected'` | `null` (no customer profile). Parsed from `GET /auth/me` response `customer_approval_status` field. Used by `RoleSelectionScreen` and `HirerDashboardScreen` for routing.
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
 - `AuthService`: `storeTokens()`, `storePhone()`, `getStoredPhone()`, `storeRole()`, `getRole()`, `clearRole()`, `markRegistered()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
   - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only; also stores `phone` and `date_of_birth` (ISO format) for edit flow
   - `getPendingProfile()` retrieves stored profile for pre-filling edit form
 - `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/profile/customer`, `/auth/login/phone`
-- `main.dart` `home`: `Consumer<AuthProvider>` — routes to `RegistrationPendingScreen` when `status == pendingApproval` (handles app-restart while pending)
-- `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed).
-- `RoleSelectionScreen._onRoleTap()`: **authenticated users** → `pushReplacement` ไป dashboard ทันที (guard→GuardDashboard, customer→HirerDashboard) ไม่ต้องลงทะเบียนใหม่; **unauthenticated users** → calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path gets profile_token → `CustomerRegistrationScreen(phone, profileToken)`
-- `CustomerRegistrationScreen`: single-page form — address (required, min 10 chars), company_name (optional), email (optional with `@` + `.` validation). Submit: `submitCustomerProfile(profileToken, address, companyName)` → `RegistrationPendingScreen`. Uses `reissueProfileToken(role:'customer')` fallback if profileToken is null/expired.
+- `main.dart` `home`: `Consumer<AuthProvider>` — shows loading spinner when `status == unknown` (async auth check in progress), routes to `RegistrationPendingScreen` when `status == pendingApproval`, `PinLockScreen` when authenticated + PIN set, else `PhoneInputScreen`
+- `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed). **Returning approved user handling:** if `registerWithOtp` returns "Please log in instead" (Conflict), auto-tries `loginWithPhone(phone, pinHash)` with the PIN just entered — if success → RoleSelectionScreen (authenticated → dashboard); if fail → `PinLoginScreen(phone)` for retry with original PIN.
+- `PinLoginScreen`: simple PIN entry screen for returning approved users whose tokens were cleared. Calls `loginWithPhone(phone, hashPin(pin))` → success → RoleSelectionScreen (authenticated → dashboard). Shows "บัญชีได้รับอนุมัติแล้ว" badge. i18n via `PinLoginStrings`.
+- `RoleSelectionScreen._onRoleTap()`: **authenticated users** → customer path checks `customerApprovalStatus`: `'approved'` → HirerDashboard, `'pending'` → RegistrationPendingScreen, `null` → CustomerRegistrationScreen; guard path → GuardDashboard ทันที. **unauthenticated users** → calls `updateRole(phone, role)` → guard path gets profile_token → `GuardRegistrationScreen(phone, profileToken)`; customer path gets profile_token → `CustomerRegistrationScreen(phone, profileToken)` (uses `pushReplacement` ไม่ใช่ `push`)
+- `HirerDashboardScreen`: `initState` gate — ถ้า `auth.customerApprovalStatus != 'approved'` → redirect ไป `CustomerRegistrationScreen(phone, profileToken: null)` เพื่อบังคับลงทะเบียน customer ก่อนใช้งาน (ใช้ `customerApprovalStatus` ไม่ใช่ `auth.role`)
+- `CustomerRegistrationScreen`: single-page form — address (required, min 10 chars), company_name (optional), email (optional with `@` + `.` validation). Submit: **always** calls `submitCustomerProfile` → `fetchProfile()` → `RegistrationPendingScreen` (ทั้ง authenticated และ unauthenticated). Only calls `setPendingApproval(role:'customer')` for **non-authenticated** users. Uses `reissueProfileToken(role:'customer')` fallback if profileToken is null/expired. Back button → `pushReplacement` ไป `RoleSelectionScreen(phone)` (ไม่ใช่ pop หรือ RegistrationPendingScreen).
 - `GuardRegistrationScreen`: accepts optional `initialProfile` param for edit mode — `_prefillForm()` restores text fields, gender, DOB, bank from stored profile. Back button uses `canPop()` check to handle edit flow (no route to pop → navigate to `RegistrationPendingScreen`).
 - `GuardRegistrationScreen._onSubmit()`: only calls `submitGuardProfile(profileToken)` — no `registerWithOtp()`. Uses `reissueProfileToken()` fallback if profileToken is null/expired.
 - **Dashboard real data:** After login, dashboard screens use `AuthProvider` profile fields (`fullName`, `phone`, `avatarUrl`) from `GET /auth/me` instead of hardcoded mock data:
@@ -868,9 +915,13 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามใช้ profile_token ข้าม purpose — guard token ใช้กับ `submit_customer_profile()` ไม่ได้ และในทางกลับกัน (`decode_profile_token(expected_purpose)` ตรวจ purpose)
 - ❌ ห้ามส่ง `phoneVerifiedToken` ไปยัง `RoleSelectionScreen` — token ถูก consume ใน `PinSetupScreen` แล้ว, ส่งแค่ `phone`
 - ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `SetPasswordScreen` — ต้อง navigate ไป `PinSetupScreen` โดยตรง (SetPasswordScreen ถูกลบออกจาก flow หลักแล้ว)
+- ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `PinSetupScreen` ถ้า `pinService.isPinSet == true` — returning user ต้อง skip PinSetup → ลอง registerWithOtp(storedPinHash) → auto-login หรือ PinLoginScreen
 - ❌ ห้ามแสดง `PinLockScreen` โดยตรวจเฉพาะ `pinService.isPinSet` — ต้องตรวจ `auth.status == AuthStatus.authenticated` ก่อนเสมอ (iOS Keychain persist ข้าม reinstall)
 - ❌ ห้าม navigate จาก `PinLockScreen` ไป dashboard ตรง — ต้องไป `RoleSelectionScreen(phone)` เสมอ เพื่อให้ user เลือก role (guard/customer) ทุกครั้งหลัง unlock
-- ❌ ห้ามบังคับ authenticated user ลงทะเบียนใหม่ใน `RoleSelectionScreen._onRoleTap()` — ถ้า `auth.status == authenticated` ต้อง `pushReplacement` ไป dashboard ทันที
+- ❌ ห้ามบังคับ authenticated user ลงทะเบียนใหม่ใน `RoleSelectionScreen._onRoleTap()` — ถ้า `auth.status == authenticated` ต้องตรวจ `customerApprovalStatus` ก่อน route (approved→dashboard, pending→pending screen, null→registration)
+- ❌ ห้ามใช้ `auth.role != 'customer'` เป็น gate ของ `HirerDashboardScreen` — ต้องใช้ `auth.customerApprovalStatus != 'approved'` เพราะ guard ที่เพิ่ม customer profile ยังมี `role='guard'` ใน `auth.users`
+- ❌ ห้ามใช้ `authApi.listUsers({ role: 'customer' })` สำหรับหน้า customers — ต้องใช้ `authApi.listCustomerApplicants({ approval_status: 'approved' })` เพราะ guard ที่เพิ่ม customer profile ไม่มี `role='customer'` ใน `auth.users`
+- ❌ ห้ามใช้ `authApi.updateApprovalStatus()` สำหรับ customer applicants — ต้องใช้ `authApi.updateCustomerApproval()` ซึ่ง update `customer_profiles.approval_status` (ไม่ใช่ `users.approval_status`)
 
 ### Web Admin (Next.js)
 - ❌ ห้าม hardcode ข้อความภาษาในหน้า — ต้องใช้ `t.xxx` จาก `useLanguage()` เสมอ
@@ -890,6 +941,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามเก็บ plaintext PIN — ต้อง hash ด้วย SHA-256 ก่อน store
 - ❌ ห้าม hardcode OTP ในโค้ด — ต้องส่งผ่าน API (`AuthService.verifyOtp()`)
 - ❌ ห้ามเรียก API ตรงโดยไม่ผ่าน `ApiClient` — ต้องใช้ Dio interceptor ที่ attach Bearer token อัตโนมัติ
+- ❌ ห้าม parse token refresh response ด้วย `response.data['access_token']` ตรง — backend ใช้ ApiResponse wrapper ต้อง parse `response.data['data']['access_token']` เสมอ
 - ❌ ห้ามเช็ค auth state แยกในแต่ละ screen — ใช้ `AuthProvider` ผ่าน Provider
 - ❌ ห้าม navigate ตรงหลัง login โดยไม่ validate credentials กับ backend ก่อน
 - ❌ ห้าม expose bank account number ใน UI ที่ไม่จำเป็น — input ต้อง mask, ปิด autocorrect/suggestions
@@ -899,7 +951,9 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม import `latlong2` แบบ full — ต้องใช้ `show LatLng` เพื่อหลีกเลี่ยง conflict กับ `dart:ui.Path`
 - ❌ ห้ามแสดงหน้า map โดยไม่ตรวจ role — ต้อง gate ด้วย `AuthProvider` (admin/customer เท่านั้น)
 - ❌ ห้าม set `AuthStatus.authenticated` หลัง `registerWithOtp()` — ต้อง set `AuthStatus.pendingApproval` เท่านั้น ห้ามเก็บ token ที่ registration
-- ❌ ห้าม navigate ไปหน้า dashboard หรือ PinSetupScreen หลัง registration — ต้องไป `RegistrationPendingScreen` เสมอ
+- ❌ ห้าม navigate ไปหน้า dashboard หรือ PinSetupScreen หลัง registration — ต้องไป `RegistrationPendingScreen` เสมอ (ยกเว้น authenticated user ที่เพิ่ม profile ใหม่ → กลับ dashboard)
+- ❌ ห้ามเรียก `setPendingApproval()` สำหรับ authenticated user — ต้องตรวจ `authProvider.isAuthenticated` ก่อน; ถ้า authenticated แล้วห้าม override auth state ด้วย pending flag (จะทำให้ tokens หาย + app แสดง PhoneInputScreen หลัง restart)
+- ❌ ห้าม `checkAuthStatus()` เช็ค `isPendingApproval()` ก่อน access token — ต้องเช็ค token ก่อนเสมอ เพราะ pending flag อาจเป็น stale จากการเพิ่ม profile ใหม่ของ authenticated user
 - ❌ ห้ามใช้ `AuthService.isRegistered('guard')` เพื่อตรวจสอบว่าควรแสดง Dashboard — ใช้ `context.watch<AuthProvider>().isAuthenticated` แทน (SharedPreferences key อาจไม่ถูก set ในทุก flow)
 - ❌ ห้ามใช้ hardcoded mock data ใน Dashboard screens (ชื่อ, avatar, รหัส) — ใช้ `AuthProvider.fullName`, `AuthProvider.phone`, `AuthProvider.avatarUrl` จาก `GET /auth/me`
 - ❌ ห้าม login ด้วย email-based endpoint จาก mobile — ใช้ `POST /auth/login/phone` (phone + PIN hash) เท่านั้น

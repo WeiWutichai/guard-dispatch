@@ -251,7 +251,14 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
     final dashboard = context.watch<BookingProvider>().dashboard;
     final todayEarnings = (dashboard?['today_earnings'] as num?) ?? 0;
     final weekEarnings = (dashboard?['week_earnings'] as num?) ?? 0;
+    final lastWeekEarnings = (dashboard?['last_week_earnings'] as num?) ?? 0;
     final todayJobs = (dashboard?['today_jobs_count'] as num?) ?? 0;
+
+    // Calculate week-over-week change
+    double weekChange = 0;
+    if (lastWeekEarnings > 0) {
+      weekChange = ((weekEarnings - lastWeekEarnings) / lastWeekEarnings * 100).toDouble();
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -262,7 +269,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
             _buildStatCard(
               strings.today,
               _formatCurrency(todayEarnings),
-              '$todayJobs ${strings.completedJobs}',
+              strings.completedJobsCount(todayJobs.toInt()),
               Icons.today_rounded,
               AppColors.info,
             ),
@@ -270,7 +277,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
             _buildStatCard(
               strings.thisWeek,
               _formatCurrency(weekEarnings),
-              strings.upPercent,
+              strings.weekChangePercent(weekChange),
               Icons.analytics_rounded,
               AppColors.primary,
             ),
@@ -339,6 +346,9 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
 
   Widget _buildAlertCard(GuardHomeStrings strings) {
     final isOnline = context.watch<TrackingProvider>().isOnline;
+    final dashboard = context.watch<BookingProvider>().dashboard;
+    final pendingJobs = (dashboard?['pending_jobs_count'] as num?) ?? 0;
+    final hasPendingJobs = pendingJobs > 0;
 
     return Container(
       width: double.infinity,
@@ -383,14 +393,18 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           ),
           const SizedBox(height: 8),
           Text(
-            isOnline ? strings.newJobsMsg : strings.setAvailableMsg,
+            isOnline
+                ? (hasPendingJobs
+                    ? strings.newJobsCount(pendingJobs.toInt())
+                    : strings.noNewJobsMsg)
+                : strings.setAvailableMsg,
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(
               fontSize: 14,
               color: AppColors.textSecondary,
             ),
           ),
-          if (isOnline) ...[
+          if (isOnline && hasPendingJobs) ...[
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: () {},

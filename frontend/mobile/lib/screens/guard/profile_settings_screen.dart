@@ -18,6 +18,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
   final _addressController = TextEditingController();
+  final _genderController = TextEditingController();
+  final _dobController = TextEditingController();
+  final _experienceController = TextEditingController();
+  final _workplaceController = TextEditingController();
   final _emergencyNameController = TextEditingController();
   final _emergencyPhoneController = TextEditingController();
   final _relationshipController = TextEditingController();
@@ -34,6 +38,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final auth = context.read<AuthProvider>();
       _nameController.text = auth.fullName ?? '';
       _phoneController.text = auth.phone ?? '';
+      _genderController.text = auth.gender ?? '';
+      _dobController.text = auth.dateOfBirth ?? '';
+      _experienceController.text =
+          auth.yearsOfExperience?.toString() ?? '';
+      _workplaceController.text = auth.previousWorkplace ?? '';
       _initialized = true;
     }
   }
@@ -44,6 +53,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     _phoneController.dispose();
     _emailController.dispose();
     _addressController.dispose();
+    _genderController.dispose();
+    _dobController.dispose();
+    _experienceController.dispose();
+    _workplaceController.dispose();
     _emergencyNameController.dispose();
     _emergencyPhoneController.dispose();
     _relationshipController.dispose();
@@ -77,6 +90,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
             _buildProfilePhotoSection(strings),
             const SizedBox(height: 20),
             _buildPersonalInfoSection(strings),
+            const SizedBox(height: 20),
+            _buildGuardInfoSection(strings),
             const SizedBox(height: 20),
             _buildEmergencyContactSection(strings),
             const SizedBox(height: 20),
@@ -161,6 +176,22 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         _buildTextField(strings.email, _emailController, hint: strings.emailHint, keyboardType: TextInputType.emailAddress),
         const SizedBox(height: 16),
         _buildTextField(strings.address, _addressController, hint: strings.addressHint, maxLines: 2),
+      ],
+    );
+  }
+
+  Widget _buildGuardInfoSection(ProfileSettingsStrings strings) {
+    return _buildSection(
+      title: strings.guardInfo,
+      icon: Icons.shield_outlined,
+      children: [
+        _buildTextField(strings.gender, _genderController),
+        const SizedBox(height: 16),
+        _buildTextField(strings.dateOfBirth, _dobController),
+        const SizedBox(height: 16),
+        _buildTextField(strings.yearsOfExperience, _experienceController, keyboardType: TextInputType.number),
+        const SizedBox(height: 16),
+        _buildTextField(strings.previousWorkplace, _workplaceController),
       ],
     );
   }

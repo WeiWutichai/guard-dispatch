@@ -26,6 +26,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = GuardJobsStrings(isThai: isThai);
+    final booking = context.watch<BookingProvider>();
 
     return DefaultTabController(
       length: 2,
@@ -57,8 +58,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
               fontSize: 14,
             ),
             tabs: [
-              Tab(text: strings.currentTab),
-              Tab(text: strings.completedTab),
+              Tab(text: '${strings.currentTabLabel} (${booking.currentJobs.length})'),
+              Tab(text: '${strings.completedTabLabel} (${booking.completedJobs.length})'),
             ],
           ),
         ),

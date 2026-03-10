@@ -33,19 +33,18 @@ export default function CustomersPage() {
   const [customerProfile, setCustomerProfile] = useState<CustomerProfile | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
 
-  // Fetch approved customers from backend
+  // Fetch approved customers from customer_profiles table
   const fetchCustomers = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const params: Record<string, string | number> = {
-        role: "customer",
         approval_status: "approved",
         limit: 100,
       };
       if (searchQuery.trim()) params.search = searchQuery.trim();
-      const result = await authApi.listUsers(
-        params as Parameters<typeof authApi.listUsers>[0]
+      const result = await authApi.listCustomerApplicants(
+        params as Parameters<typeof authApi.listCustomerApplicants>[0]
       );
       setCustomers(result.users);
       setTotal(result.total);

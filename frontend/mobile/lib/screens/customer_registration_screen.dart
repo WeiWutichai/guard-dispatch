@@ -9,6 +9,7 @@ import '../services/auth_service.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import 'registration_pending_screen.dart';
+import 'role_selection_screen.dart';
 
 class CustomerRegistrationScreen extends StatefulWidget {
   final String phone;
@@ -56,20 +57,29 @@ class _CustomerRegistrationScreenState
 
     try {
       final authProvider = context.read<AuthProvider>();
+      final isAlreadyAuthenticated = authProvider.isAuthenticated;
 
       // Get profile token (use existing or reissue)
       final profileToken = widget.profileToken ??
           await authProvider.reissueProfileToken(widget.phone, role: 'customer');
 
-      // Save pending profile locally
-      await AuthService.savePendingProfile({
-        'phone': widget.phone,
-        'full_name': _fullNameController.text.trim(),
-        'contact_phone': _contactPhoneController.text.trim(),
-        'email': _emailController.text.trim(),
-        'company_name': _companyController.text.trim(),
-        'address': _addressController.text.trim(),
-      });
+      // Only save pending state for users who are NOT already authenticated.
+      // Authenticated users (e.g. approved guard adding customer profile)
+      // must NOT have their auth state overridden.
+      if (!isAlreadyAuthenticated) {
+        await Future.wait([
+          AuthService.savePendingProfile({
+            'phone': widget.phone,
+            'role': 'customer',
+            'full_name': _fullNameController.text.trim(),
+            'contact_phone': _contactPhoneController.text.trim(),
+            'email': _emailController.text.trim(),
+            'company_name': _companyController.text.trim(),
+            'address': _addressController.text.trim(),
+          }),
+          AuthService.setPendingApproval(role: 'customer'),
+        ]);
+      }
 
       // Submit to backend
       await authProvider.submitCustomerProfile(
@@ -109,6 +119,11 @@ class _CustomerRegistrationScreenState
         ),
       );
 
+      // Refresh profile to pick up customer_approval_status
+      await authProvider.fetchProfile();
+      if (!mounted) return;
+
+      // Navigate to pending screen — customer profile needs admin approval
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
@@ -144,16 +159,12 @@ class _CustomerRegistrationScreenState
           icon: const Icon(Icons.arrow_back_ios_new_rounded,
               color: AppColors.textPrimary, size: 20),
           onPressed: () {
-            if (Navigator.canPop(context)) {
-              Navigator.pop(context);
-            } else {
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const RegistrationPendingScreen()),
-                (route) => false,
-              );
-            }
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => RoleSelectionScreen(phone: widget.phone),
+              ),
+            );
           },
         ),
         title: Text(

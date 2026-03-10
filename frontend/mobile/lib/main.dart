@@ -75,6 +75,12 @@ class MyApp extends StatelessWidget {
           ),
           home: Consumer<AuthProvider>(
             builder: (context, auth, _) {
+              // Show loading while checking stored auth state.
+              if (auth.status == AuthStatus.unknown) {
+                return const Scaffold(
+                  body: Center(child: CircularProgressIndicator()),
+                );
+              }
               if (auth.status == AuthStatus.pendingApproval) {
                 return const RegistrationPendingScreen();
               }

@@ -89,14 +89,23 @@ export default function ApplicantsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const params: Record<string, string | number> = { limit: 100 };
-      if (activeTab !== "all") params.role = activeTab;
-      if (statusFilter !== "all") params.approval_status = statusFilter;
-      if (searchQuery.trim()) params.search = searchQuery.trim();
-
-      const result = await authApi.listUsers(params as Parameters<typeof authApi.listUsers>[0]);
-      setApplicants(result.users);
-      setTotal(result.total);
+      if (activeTab === "customer") {
+        // Customer applicants come from customer_profiles table
+        const params: Record<string, string | number> = { limit: 100 };
+        if (statusFilter !== "all") params.approval_status = statusFilter;
+        if (searchQuery.trim()) params.search = searchQuery.trim();
+        const result = await authApi.listCustomerApplicants(params as Parameters<typeof authApi.listCustomerApplicants>[0]);
+        setApplicants(result.users);
+        setTotal(result.total);
+      } else {
+        const params: Record<string, string | number> = { limit: 100 };
+        if (activeTab !== "all") params.role = activeTab;
+        if (statusFilter !== "all") params.approval_status = statusFilter;
+        if (searchQuery.trim()) params.search = searchQuery.trim();
+        const result = await authApi.listUsers(params as Parameters<typeof authApi.listUsers>[0]);
+        setApplicants(result.users);
+        setTotal(result.total);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -156,7 +165,11 @@ export default function ApplicantsPage() {
   const handleApprove = async (userId: string) => {
     setIsActionLoading(true);
     try {
-      await authApi.updateApprovalStatus(userId, "approved");
+      if (activeTab === "customer") {
+        await authApi.updateCustomerApproval(userId, "approved");
+      } else {
+        await authApi.updateApprovalStatus(userId, "approved");
+      }
       await fetchApplicants();
       closeModal();
     } catch {
@@ -169,7 +182,11 @@ export default function ApplicantsPage() {
   const handleReject = async (userId: string) => {
     setIsActionLoading(true);
     try {
-      await authApi.updateApprovalStatus(userId, "rejected");
+      if (activeTab === "customer") {
+        await authApi.updateCustomerApproval(userId, "rejected");
+      } else {
+        await authApi.updateApprovalStatus(userId, "rejected");
+      }
       await fetchApplicants();
       closeModal();
     } catch {

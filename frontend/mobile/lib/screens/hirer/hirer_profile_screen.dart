@@ -168,6 +168,16 @@ class HirerProfileScreen extends StatelessWidget {
                           color: const Color(0xFF8E8E93),
                         ),
                       ),
+                      if (auth.companyName != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          auth.companyName!,
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: const Color(0xFF8E8E93),
+                          ),
+                        ),
+                      ],
                     ],
                   );
                 }),

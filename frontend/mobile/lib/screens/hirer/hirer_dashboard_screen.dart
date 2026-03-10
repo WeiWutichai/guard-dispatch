@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/language_service.dart';
+import '../customer_registration_screen.dart';
 import 'service_selection_screen.dart';
 import '../chat_list_screen.dart';
 import 'hirer_history_screen.dart';
@@ -15,6 +18,26 @@ class HirerDashboardScreen extends StatefulWidget {
 
 class _HirerDashboardScreenState extends State<HirerDashboardScreen> {
   int _selectedIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final auth = context.read<AuthProvider>();
+      // Only allow access if customer profile is approved
+      if (auth.customerApprovalStatus != 'approved') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CustomerRegistrationScreen(
+              phone: auth.phone ?? '',
+              profileToken: null,
+            ),
+          ),
+        );
+      }
+    });
+  }
 
   final List<Widget> _screens = [
     const ServiceSelectionScreen(),

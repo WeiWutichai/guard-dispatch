@@ -9,6 +9,7 @@ import '../services/auth_service.dart';
 import '../services/pin_storage_service.dart';
 import '../l10n/app_strings.dart';
 import 'guard_registration_screen.dart';
+import 'customer_registration_screen.dart';
 import 'guard/guard_dashboard_screen.dart';
 import 'hirer/hirer_dashboard_screen.dart';
 
@@ -22,6 +23,7 @@ class RegistrationPendingScreen extends StatefulWidget {
 
 class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
   Map<String, dynamic>? _profile;
+  String? _pendingRole;
   bool _isChecking = false;
 
   @override
@@ -118,24 +120,33 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    final role = _pendingRole ?? _profile?['role'] as String?;
+    final Widget editScreen = role == 'customer'
+        ? CustomerRegistrationScreen(phone: phone)
+        : GuardRegistrationScreen(
+            phone: phone,
+            initialProfile: _profile,
+            dashboard: const GuardDashboardScreen(),
+          );
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(
-        builder: (_) => GuardRegistrationScreen(
-          phone: phone,
-          initialProfile: _profile,
-          dashboard: const GuardDashboardScreen(),
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => editScreen),
       (route) => false,
     );
   }
 
   Future<void> _loadProfile() async {
-    final data = await AuthService.getPendingProfile();
-    if (mounted && data != null) {
-      setState(() => _profile = data);
-    }
+    final results = await Future.wait([
+      AuthService.getPendingProfile(),
+      AuthService.getPendingRole(),
+    ]);
+    if (!mounted) return;
+    final data = results[0] as Map<String, dynamic>?;
+    final role = results[1] as String?;
+    setState(() {
+      _profile = data;
+      _pendingRole = role;
+    });
   }
 
   @override
@@ -330,6 +341,33 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
       return (v != null && v.isNotEmpty) ? v : null;
     }
 
+    final role = _pendingRole ?? p['role'] as String?;
+    if (role == 'customer') {
+      return _buildCustomerProfileCard(strings, s);
+    }
+    return _buildGuardProfileCard(strings, s, p);
+  }
+
+  Widget _buildCustomerProfileCard(RegistrationPendingStrings strings, String? Function(String) s) {
+    return Column(
+      children: [
+        _buildSection(strings.customerInfoTitle, Icons.business_outlined, [
+          if (s('full_name') != null)
+            _ProfileRow(Icons.badge_outlined, strings.fieldName, s('full_name')!),
+          if (s('contact_phone') != null)
+            _ProfileRow(Icons.phone_outlined, strings.fieldContactPhone, s('contact_phone')!),
+          if (s('email') != null)
+            _ProfileRow(Icons.email_outlined, strings.fieldEmail, s('email')!),
+          if (s('company_name') != null)
+            _ProfileRow(Icons.apartment_outlined, strings.fieldCompanyName, s('company_name')!),
+          if (s('address') != null)
+            _ProfileRow(Icons.location_on_outlined, strings.fieldAddress, s('address')!),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildGuardProfileCard(RegistrationPendingStrings strings, String? Function(String) s, Map<String, dynamic> p) {
     return Column(
       children: [
         // ── Personal info ──

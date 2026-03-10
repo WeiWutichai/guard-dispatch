@@ -544,7 +544,7 @@ pub async fn get_guard_dashboard_summary(
         total: Option<rust_decimal::Decimal>,
     }
 
-    let (today_count, today_earnings, week_earnings, active_job) = tokio::join!(
+    let (today_count, today_earnings, week_earnings, last_week_earnings, pending_count, active_job) = tokio::join!(
         // Today's assigned jobs
         sqlx::query_as::<_, CountRow>(
             r#"
@@ -573,6 +573,29 @@ pub async fn get_guard_dashboard_summary(
             FROM booking.assignments a
             INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
             WHERE a.guard_id = $1 AND a.status = 'completed' AND a.completed_at >= date_trunc('week', NOW())
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        // Last week's completed earnings (for week-over-week comparison)
+        sqlx::query_as::<_, SumRow>(
+            r#"
+            SELECT COALESCE(SUM(gr.offered_price), 0) AS total
+            FROM booking.assignments a
+            INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
+            WHERE a.guard_id = $1 AND a.status = 'completed'
+              AND a.completed_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
+              AND a.completed_at < date_trunc('week', NOW())
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        // Pending jobs (assigned but not yet completed/cancelled)
+        sqlx::query_as::<_, CountRow>(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM booking.assignments a
+            WHERE a.guard_id = $1 AND a.status IN ('assigned', 'en_route', 'arrived')
             "#,
         )
         .bind(guard_id)
@@ -613,6 +636,15 @@ pub async fn get_guard_dashboard_summary(
             .total
             .and_then(|d| d.to_f64())
             .unwrap_or(0.0),
+        last_week_earnings: last_week_earnings
+            .map_err(AppError::from)?
+            .total
+            .and_then(|d| d.to_f64())
+            .unwrap_or(0.0),
+        pending_jobs_count: pending_count
+            .map_err(AppError::from)?
+            .count
+            .unwrap_or(0),
         active_job: active_job
             .map_err(AppError::from)?
             .map(GuardJobResponse::from),

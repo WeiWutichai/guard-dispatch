@@ -398,6 +398,29 @@ export const authApi = {
   /** Fetch a customer's profile (company, address). Admin only. */
   getCustomerProfile: (userId: string): Promise<CustomerProfile> =>
     apiFetch<CustomerProfile>(`/auth/admin/customer-profile/${userId}`),
+
+  /** List customer applicants (users with customer_profiles). Admin only. */
+  listCustomerApplicants: (params?: {
+    approval_status?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.approval_status) query.set("approval_status", params.approval_status);
+    if (params?.search) query.set("search", params.search);
+    if (params?.limit) query.set("limit", String(params.limit));
+    if (params?.offset) query.set("offset", String(params.offset));
+    const qs = query.toString();
+    return apiFetch<PaginatedUsers>(`/auth/admin/customer-applicants${qs ? `?${qs}` : ""}`);
+  },
+
+  /** Update a customer profile's approval status. Admin only. */
+  updateCustomerApproval: (userId: string, approvalStatus: "pending" | "approved" | "rejected") =>
+    apiFetch<null>(`/auth/admin/customer-profile/${userId}/approval`, {
+      method: "PATCH",
+      body: JSON.stringify({ approval_status: approvalStatus }),
+    }),
 };
 
 // ---------------------------------------------------------------------------

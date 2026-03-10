@@ -54,12 +54,17 @@ class BookingProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final results = await Future.wait([
-        _service.getGuardJobs(),
-        _service.getGuardJobs(status: 'completed'),
-      ]);
-      _currentJobs = results[0];
-      _completedJobs = results[1];
+      // Fetch all jobs and split by assignment_status client-side
+      final allJobs = await _service.getGuardJobs(limit: 100);
+      _currentJobs = allJobs
+          .where((j) {
+            final s = j['assignment_status'] as String?;
+            return s == 'assigned' || s == 'en_route' || s == 'arrived';
+          })
+          .toList();
+      _completedJobs = allJobs
+          .where((j) => j['assignment_status'] == 'completed')
+          .toList();
     } catch (e) {
       _error = e.toString();
     }

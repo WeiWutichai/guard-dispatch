@@ -10,6 +10,7 @@ import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
 import 'role_selection_screen.dart';
+import 'pin_login_screen.dart';
 
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
@@ -112,8 +113,41 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
       } on DioException catch (e) {
         if (!mounted) return;
         final message = e.response?.data?['error']?['message'] as String?;
-        // Conflict = phone already registered (non-pending) → let them proceed to role selection
-        if (message != null && !message.contains('log in instead')) {
+
+        // Account already approved → try auto-login with the PIN just entered
+        if (message != null &&
+            message.contains('log in instead') &&
+            widget.phone != null) {
+          final pinHash = PinStorageService.hashPin(_firstPin);
+          try {
+            await context
+                .read<AuthProvider>()
+                .loginWithPhone(widget.phone!, pinHash);
+            if (!mounted) return;
+            // Auto-login succeeded → dashboard via RoleSelection
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(
+                builder: (_) => RoleSelectionScreen(phone: widget.phone),
+              ),
+              (route) => false,
+            );
+            return;
+          } catch (_) {
+            // PIN doesn't match backend → let user enter original PIN
+            if (!mounted) return;
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(
+                builder: (_) => PinLoginScreen(phone: widget.phone!),
+              ),
+              (route) => false,
+            );
+            return;
+          }
+        }
+
+        if (message != null) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(message)),
           );
