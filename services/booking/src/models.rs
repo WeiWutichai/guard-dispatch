@@ -379,3 +379,54 @@ pub struct RatingSummaryRow {
     pub communication: Option<rust_decimal::Decimal>,
     pub appearance: Option<rust_decimal::Decimal>,
 }
+
+// =============================================================================
+// Service Rates (Pricing)
+// =============================================================================
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
+pub struct ServiceRate {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    #[schema(value_type = f64)]
+    pub min_price: rust_decimal::Decimal,
+    #[schema(value_type = f64)]
+    pub max_price: rust_decimal::Decimal,
+    #[schema(value_type = f64)]
+    pub base_fee: rust_decimal::Decimal,
+    pub min_hours: i32,
+    pub notes: Option<String>,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateServiceRateDto {
+    pub name: String,
+    pub description: Option<String>,
+    #[schema(value_type = f64)]
+    pub min_price: rust_decimal::Decimal,
+    #[schema(value_type = f64)]
+    pub max_price: rust_decimal::Decimal,
+    #[schema(value_type = f64)]
+    pub base_fee: rust_decimal::Decimal,
+    pub min_hours: Option<i32>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateServiceRateDto {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    #[schema(value_type = Option<f64>)]
+    pub min_price: Option<rust_decimal::Decimal>,
+    #[schema(value_type = Option<f64>)]
+    pub max_price: Option<rust_decimal::Decimal>,
+    #[schema(value_type = Option<f64>)]
+    pub base_fee: Option<rust_decimal::Decimal>,
+    pub min_hours: Option<i32>,
+    pub notes: Option<String>,
+    pub is_active: Option<bool>,
+}

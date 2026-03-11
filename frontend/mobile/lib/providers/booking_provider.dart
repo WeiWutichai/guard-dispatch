@@ -29,6 +29,13 @@ class BookingProvider extends ChangeNotifier {
   Map<String, dynamic>? _ratings;
   Map<String, dynamic>? get ratings => _ratings;
 
+  // Service rates (pricing)
+  List<Map<String, dynamic>> _serviceRates = [];
+  List<Map<String, dynamic>> get serviceRates => _serviceRates;
+
+  bool _isLoadingRates = false;
+  bool get isLoadingRates => _isLoadingRates;
+
   // Customer requests
   List<Map<String, dynamic>> _myRequests = [];
   List<Map<String, dynamic>> get myRequests => _myRequests;
@@ -133,6 +140,22 @@ class BookingProvider extends ChangeNotifier {
   }
 
   // =========================================================================
+  // Pricing
+  // =========================================================================
+
+  Future<void> fetchServiceRates() async {
+    _isLoadingRates = true;
+    _error = null;
+    notifyListeners();
+    try {
+      _serviceRates = await _service.listServiceRates();
+    } catch (e) {
+      _error = e.toString();
+    }
+    _isLoadingRates = false;
+    notifyListeners();
+  }
+
   // Customer (Hirer) methods
   // =========================================================================
 

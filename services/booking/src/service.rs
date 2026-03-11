@@ -7,10 +7,10 @@ use shared::error::AppError;
 
 use crate::models::{
     AssignGuardDto, AssignmentResponse, AssignmentRow, AssignmentStatus, CreateRequestDto,
-    DailyEarning, GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobRow,
-    GuardRatingsSummary, GuardRequestResponse, GuardRequestRow, ListRequestsQuery, RatingSummaryRow,
-    RequestStatus, ReviewItem, ReviewRow, UpdateAssignmentStatusDto, WorkHistoryItem,
-    WorkHistoryResponse, WorkHistoryRow,
+    CreateServiceRateDto, DailyEarning, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
+    GuardJobRow, GuardRatingsSummary, GuardRequestResponse, GuardRequestRow, ListRequestsQuery,
+    RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate, UpdateAssignmentStatusDto,
+    UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse, WorkHistoryRow,
 };
 
 // =============================================================================
@@ -893,4 +893,176 @@ pub async fn get_guard_ratings(
             })
             .collect(),
     })
+}
+
+// =============================================================================
+// Service Rates (Pricing) — CRUD
+// =============================================================================
+
+pub async fn list_service_rates(db: &PgPool) -> Result<Vec<ServiceRate>, AppError> {
+    let rows = sqlx::query_as::<_, ServiceRate>(
+        r#"
+        SELECT id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        FROM booking.service_rates
+        WHERE is_active = true
+        ORDER BY created_at ASC
+        LIMIT 100
+        "#,
+    )
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows)
+}
+
+pub async fn get_service_rate(db: &PgPool, id: Uuid) -> Result<ServiceRate, AppError> {
+    let row = sqlx::query_as::<_, ServiceRate>(
+        r#"
+        SELECT id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        FROM booking.service_rates
+        WHERE id = $1 AND is_active = true
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Service rate not found".to_string()))?;
+
+    Ok(row)
+}
+
+fn validate_prices(
+    min_price: rust_decimal::Decimal,
+    max_price: rust_decimal::Decimal,
+    base_fee: rust_decimal::Decimal,
+) -> Result<(), AppError> {
+    if min_price < rust_decimal::Decimal::ZERO {
+        return Err(AppError::BadRequest("Min price cannot be negative".to_string()));
+    }
+    if max_price < rust_decimal::Decimal::ZERO {
+        return Err(AppError::BadRequest("Max price cannot be negative".to_string()));
+    }
+    if base_fee < rust_decimal::Decimal::ZERO {
+        return Err(AppError::BadRequest("Base fee cannot be negative".to_string()));
+    }
+    if min_price > max_price {
+        return Err(AppError::BadRequest(
+            "Min price cannot exceed max price".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub async fn create_service_rate(
+    db: &PgPool,
+    dto: CreateServiceRateDto,
+) -> Result<ServiceRate, AppError> {
+    let name = dto.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("Service name is required".to_string()));
+    }
+    if name.len() > 200 {
+        return Err(AppError::BadRequest("Service name too long (max 200 chars)".to_string()));
+    }
+    validate_prices(dto.min_price, dto.max_price, dto.base_fee)?;
+
+    let min_hours = dto.min_hours.unwrap_or(6);
+
+    let row = sqlx::query_as::<_, ServiceRate>(
+        r#"
+        INSERT INTO booking.service_rates (name, description, min_price, max_price, base_fee, min_hours, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        "#,
+    )
+    .bind(&name)
+    .bind(&dto.description)
+    .bind(dto.min_price)
+    .bind(dto.max_price)
+    .bind(dto.base_fee)
+    .bind(min_hours)
+    .bind(&dto.notes)
+    .fetch_one(db)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn update_service_rate(
+    db: &PgPool,
+    id: Uuid,
+    dto: UpdateServiceRateDto,
+) -> Result<ServiceRate, AppError> {
+    if let Some(ref name) = dto.name {
+        if name.trim().is_empty() {
+            return Err(AppError::BadRequest("Service name cannot be empty".to_string()));
+        }
+        if name.len() > 200 {
+            return Err(AppError::BadRequest("Service name too long (max 200 chars)".to_string()));
+        }
+    }
+
+    // Fetch existing to validate merged price values
+    let existing = sqlx::query_as::<_, ServiceRate>(
+        r#"
+        SELECT id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        FROM booking.service_rates
+        WHERE id = $1 AND is_active = true
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Service rate not found".to_string()))?;
+
+    let final_min = dto.min_price.unwrap_or(existing.min_price);
+    let final_max = dto.max_price.unwrap_or(existing.max_price);
+    let final_base = dto.base_fee.unwrap_or(existing.base_fee);
+    validate_prices(final_min, final_max, final_base)?;
+
+    let row = sqlx::query_as::<_, ServiceRate>(
+        r#"
+        UPDATE booking.service_rates
+        SET name        = COALESCE($2, name),
+            description = COALESCE($3, description),
+            min_price   = COALESCE($4, min_price),
+            max_price   = COALESCE($5, max_price),
+            base_fee    = COALESCE($6, base_fee),
+            min_hours   = COALESCE($7, min_hours),
+            notes       = COALESCE($8, notes),
+            is_active   = COALESCE($9, is_active),
+            updated_at  = NOW()
+        WHERE id = $1
+        RETURNING id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(dto.name.as_deref().map(str::trim))
+    .bind(&dto.description)
+    .bind(dto.min_price)
+    .bind(dto.max_price)
+    .bind(dto.base_fee)
+    .bind(dto.min_hours)
+    .bind(&dto.notes)
+    .bind(dto.is_active)
+    .fetch_one(db)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn delete_service_rate(db: &PgPool, id: Uuid) -> Result<(), AppError> {
+    // Soft delete: set is_active = false
+    let result = sqlx::query(
+        "UPDATE booking.service_rates SET is_active = false, updated_at = NOW() WHERE id = $1 AND is_active = true",
+    )
+    .bind(id)
+    .execute(db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Service rate not found".to_string()));
+    }
+
+    Ok(())
 }

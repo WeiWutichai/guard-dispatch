@@ -35,6 +35,11 @@ use crate::state::AppState;
         handlers::guard_earnings,
         handlers::guard_work_history,
         handlers::guard_ratings,
+        handlers::list_service_rates,
+        handlers::get_service_rate,
+        handlers::create_service_rate,
+        handlers::update_service_rate,
+        handlers::delete_service_rate,
     ),
     components(schemas(
         models::RequestStatus,
@@ -53,6 +58,9 @@ use crate::state::AppState;
         models::WorkHistoryItem,
         models::GuardRatingsSummary,
         models::ReviewItem,
+        models::ServiceRate,
+        models::CreateServiceRateDto,
+        models::UpdateServiceRateDto,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
@@ -61,6 +69,7 @@ use crate::state::AppState;
         (name = "Requests", description = "Guard request management"),
         (name = "Assignments", description = "Guard assignment management"),
         (name = "Guard", description = "Guard-specific endpoints (dashboard, jobs, earnings)"),
+        (name = "Pricing", description = "Service rate management"),
     ),
 )]
 struct ApiDoc;
@@ -104,6 +113,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/guard/earnings", get(handlers::guard_earnings))
         .route("/guard/work-history", get(handlers::guard_work_history))
         .route("/guard/ratings", get(handlers::guard_ratings))
+        // Pricing endpoints (GET = public, POST/PUT/DELETE = admin JWT)
+        .route(
+            "/pricing/services",
+            get(handlers::list_service_rates).post(handlers::create_service_rate),
+        )
+        .route(
+            "/pricing/services/{id}",
+            get(handlers::get_service_rate)
+                .put(handlers::update_service_rate)
+                .delete(handlers::delete_service_rate),
+        )
         .merge({
             let swagger = SwaggerUi::new("/swagger-ui")
                 .url("/api-docs/openapi.json", ApiDoc::openapi());

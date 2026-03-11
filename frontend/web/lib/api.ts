@@ -101,6 +101,21 @@ export interface Assignment {
   notes: string | null;
 }
 
+// Pricing types
+export interface ServiceRateResponse {
+  id: string;
+  name: string;
+  description: string | null;
+  min_price: number;
+  max_price: number;
+  base_fee: number;
+  min_hours: number;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // Tracking types
 export interface GuardLocation {
   guard_id: string;
@@ -479,6 +494,52 @@ export const bookingApi = {
     apiFetch<Assignment>(`/booking/assignments/${assignmentId}/status`, {
       method: "PUT",
       body: JSON.stringify({ status }),
+    }),
+};
+
+// ---------------------------------------------------------------------------
+// Pricing API
+// ---------------------------------------------------------------------------
+
+export const pricingApi = {
+  listServiceRates: () =>
+    apiFetch<ServiceRateResponse[]>("/booking/pricing/services"),
+
+  createServiceRate: (data: {
+    name: string;
+    description?: string;
+    min_price: number;
+    max_price: number;
+    base_fee: number;
+    min_hours?: number;
+    notes?: string;
+  }) =>
+    apiFetch<ServiceRateResponse>("/booking/pricing/services", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateServiceRate: (
+    id: string,
+    data: {
+      name?: string;
+      description?: string;
+      min_price?: number;
+      max_price?: number;
+      base_fee?: number;
+      min_hours?: number;
+      notes?: string;
+      is_active?: boolean;
+    }
+  ) =>
+    apiFetch<ServiceRateResponse>(`/booking/pricing/services/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  deleteServiceRate: (id: string) =>
+    apiFetch<null>(`/booking/pricing/services/${id}`, {
+      method: "DELETE",
     }),
 };
 

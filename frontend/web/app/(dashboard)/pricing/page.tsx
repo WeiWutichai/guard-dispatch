@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   DollarSign,
   Plus,
@@ -17,15 +17,18 @@ import {
   Gift,
   Check,
   Clock,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
+import { pricingApi, type ServiceRateResponse } from "@/lib/api";
 
 type PricingTab = "services" | "commission" | "areas" | "flexibility" | "promotions" | "history";
 
 interface ServiceRate {
   id: string;
   name: string;
+  description: string | null;
   minPrice: number;
   maxPrice: number;
   baseFee: number;
@@ -58,11 +61,19 @@ interface PriceHistory {
   newValue: string;
 }
 
-const initialServiceRates: ServiceRate[] = [
-  { id: "S001", name: "เจ้าหน้าที่รักษาความปลอดภัย", minPrice: 80, maxPrice: 200, baseFee: 100, minHours: 6, notes: "ราคามาตรฐานสำหรับงานทั่วไป" },
-  { id: "S002", name: "บอดี้การ์ด", minPrice: 180, maxPrice: 300, baseFee: 200, minHours: 4, notes: "สำหรับงานระดับสูง ต้องผ่านการอบรมพิเศษ" },
-  { id: "S003", name: "เจ้าหน้าที่รักษาความปลอดภัยงานอีเวนต์", minPrice: 100, maxPrice: 250, baseFee: 150, minHours: 4, notes: "สำหรับงานอีเวนต์และคอนเสิร์ต" },
-];
+/** Map API response to local ServiceRate shape */
+function toServiceRate(r: ServiceRateResponse): ServiceRate {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    minPrice: r.min_price,
+    maxPrice: r.max_price,
+    baseFee: r.base_fee,
+    minHours: r.min_hours,
+    notes: r.notes ?? "",
+  };
+}
 
 const initialAreaRates: AreaRate[] = [
   { id: "A001", province: "กรุงเทพฯ", area: "เขตเมือง", rate: 100 },
@@ -87,7 +98,24 @@ const initialPriceHistory: PriceHistory[] = [
 export default function PricingPage() {
   const { locale } = useLanguage();
   const [activeTab, setActiveTab] = useState<PricingTab>("services");
-  const [serviceRates, setServiceRates] = useState<ServiceRate[]>(initialServiceRates);
+  const [serviceRates, setServiceRates] = useState<ServiceRate[]>([]);
+  const [loadingServices, setLoadingServices] = useState(true);
+
+  const loadServiceRates = useCallback(async () => {
+    try {
+      setLoadingServices(true);
+      const data = await pricingApi.listServiceRates();
+      setServiceRates(data.map(toServiceRate));
+    } catch {
+      // keep current state on error
+    } finally {
+      setLoadingServices(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadServiceRates();
+  }, [loadServiceRates]);
   const [areaRates, setAreaRates] = useState<AreaRate[]>(initialAreaRates);
   const [promotions, setPromotions] = useState<Promotion[]>(initialPromotions);
   const [priceHistory] = useState<PriceHistory[]>(initialPriceHistory);
@@ -103,6 +131,8 @@ export default function PricingPage() {
 
   // Modals
   const [addServiceModalOpen, setAddServiceModalOpen] = useState(false);
+  const [editServiceModalOpen, setEditServiceModalOpen] = useState(false);
+  const [editingService, setEditingService] = useState<ServiceRate | null>(null);
   const [addPromotionModalOpen, setAddPromotionModalOpen] = useState(false);
   const [editAreaModalOpen, setEditAreaModalOpen] = useState(false);
   const [selectedArea, setSelectedArea] = useState<AreaRate | null>(null);
@@ -135,24 +165,57 @@ export default function PricingPage() {
     { id: "history", label: "ประวัติการปรับราคา", labelEn: "Price History", icon: History },
   ];
 
-  const handleAddService = () => {
+  const handleAddService = async () => {
     if (newService.name && newService.minPrice && newService.maxPrice) {
-      setServiceRates([...serviceRates, {
-        id: `S${Date.now()}`,
-        name: newService.name,
-        minPrice: newService.minPrice || 0,
-        maxPrice: newService.maxPrice || 0,
-        baseFee: newService.baseFee || 0,
-        minHours: newService.minHours || 4,
-        notes: newService.notes || "",
-      }]);
-      setNewService({ name: "", minPrice: 0, maxPrice: 0, baseFee: 0, minHours: 4, notes: "" });
-      setAddServiceModalOpen(false);
+      try {
+        await pricingApi.createServiceRate({
+          name: newService.name,
+          min_price: newService.minPrice || 0,
+          max_price: newService.maxPrice || 0,
+          base_fee: newService.baseFee || 0,
+          min_hours: newService.minHours || 4,
+          notes: newService.notes || undefined,
+        });
+        setNewService({ name: "", minPrice: 0, maxPrice: 0, baseFee: 0, minHours: 4, notes: "" });
+        setAddServiceModalOpen(false);
+        loadServiceRates();
+      } catch {
+        // silently fail — could add toast later
+      }
     }
   };
 
-  const handleDeleteService = (id: string) => {
-    setServiceRates(serviceRates.filter(s => s.id !== id));
+  const handleDeleteService = async (id: string) => {
+    try {
+      await pricingApi.deleteServiceRate(id);
+      loadServiceRates();
+    } catch {
+      // silently fail
+    }
+  };
+
+  const handleOpenEditService = (service: ServiceRate) => {
+    setEditingService({ ...service });
+    setEditServiceModalOpen(true);
+  };
+
+  const handleUpdateService = async () => {
+    if (!editingService) return;
+    try {
+      await pricingApi.updateServiceRate(editingService.id, {
+        name: editingService.name,
+        min_price: editingService.minPrice,
+        max_price: editingService.maxPrice,
+        base_fee: editingService.baseFee,
+        min_hours: editingService.minHours,
+        notes: editingService.notes || undefined,
+      });
+      setEditServiceModalOpen(false);
+      setEditingService(null);
+      loadServiceRates();
+    } catch {
+      // silently fail — could add toast later
+    }
   };
 
   const handleAddPromotion = () => {
@@ -262,6 +325,11 @@ export default function PricingPage() {
                 </button>
               </div>
 
+              {loadingServices ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-6 w-6 text-primary animate-spin" />
+                </div>
+              ) : (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
@@ -290,18 +358,29 @@ export default function PricingPage() {
                         </td>
                         <td className="py-3 px-4 text-sm text-slate-500 max-w-[200px] truncate">{service.notes}</td>
                         <td className="py-3 px-4 text-right">
-                          <button
-                            onClick={() => handleDeleteService(service.id)}
-                            className="p-1.5 text-red-500 hover:bg-red-50 rounded transition-colors"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleOpenEditService(service)}
+                              className="p-1.5 text-primary hover:bg-emerald-50 rounded transition-colors"
+                              title={locale === "th" ? "แก้ไข" : "Edit"}
+                            >
+                              <Edit3 className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteService(service.id)}
+                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                              title={locale === "th" ? "ลบ" : "Delete"}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              )}
             </div>
           )}
 
@@ -727,6 +806,112 @@ export default function PricingPage() {
                 className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-primary rounded-lg hover:bg-emerald-600 transition-colors"
               >
                 {locale === "th" ? "เพิ่มบริการ" : "Add Service"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Service Modal */}
+      {editServiceModalOpen && editingService && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">
+                {locale === "th" ? "แก้ไขอัตราค่าบริการ" : "Edit Service Rate"}
+              </h2>
+              <button
+                onClick={() => { setEditServiceModalOpen(false); setEditingService(null); }}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-sm font-medium text-slate-700 mb-2 block">
+                  {locale === "th" ? "ชื่อประเภทบริการ" : "Service Type Name"}
+                </label>
+                <input
+                  type="text"
+                  value={editingService.name}
+                  onChange={(e) => setEditingService({ ...editingService, name: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">
+                    {locale === "th" ? "ราคาขั้นต่ำ (฿)" : "Min Price (฿)"}
+                  </label>
+                  <input
+                    type="number"
+                    value={editingService.minPrice}
+                    onChange={(e) => setEditingService({ ...editingService, minPrice: parseInt(e.target.value) || 0 })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">
+                    {locale === "th" ? "ราคาสูงสุด (฿)" : "Max Price (฿)"}
+                  </label>
+                  <input
+                    type="number"
+                    value={editingService.maxPrice}
+                    onChange={(e) => setEditingService({ ...editingService, maxPrice: parseInt(e.target.value) || 0 })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">
+                    {locale === "th" ? "ค่าบริการพื้นฐาน (฿)" : "Base Fee (฿)"}
+                  </label>
+                  <input
+                    type="number"
+                    value={editingService.baseFee}
+                    onChange={(e) => setEditingService({ ...editingService, baseFee: parseInt(e.target.value) || 0 })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">
+                    {locale === "th" ? "ชั่วโมงขั้นต่ำ" : "Min Hours"}
+                  </label>
+                  <input
+                    type="number"
+                    value={editingService.minHours}
+                    onChange={(e) => setEditingService({ ...editingService, minHours: parseInt(e.target.value) || 4 })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-700 mb-2 block">
+                  {locale === "th" ? "หมายเหตุ" : "Notes"}
+                </label>
+                <input
+                  type="text"
+                  value={editingService.notes}
+                  onChange={(e) => setEditingService({ ...editingService, notes: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-slate-200">
+              <button
+                onClick={() => { setEditServiceModalOpen(false); setEditingService(null); }}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                {locale === "th" ? "ยกเลิก" : "Cancel"}
+              </button>
+              <button
+                onClick={handleUpdateService}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-primary rounded-lg hover:bg-emerald-600 transition-colors flex items-center justify-center gap-2"
+              >
+                <Save className="h-4 w-4" />
+                {locale === "th" ? "บันทึก" : "Save"}
               </button>
             </div>
           </div>

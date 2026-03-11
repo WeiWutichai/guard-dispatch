@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::Json;
 use std::sync::Arc;
 
@@ -7,9 +8,10 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AssignGuardDto, AssignmentResponse, CreateRequestDto, GuardDashboardSummary,
-    GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
-    ListRequestsQuery, UpdateAssignmentStatusDto, WorkHistoryResponse,
+    AssignGuardDto, AssignmentResponse, CreateRequestDto, CreateServiceRateDto,
+    GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary,
+    GuardRequestResponse, ListRequestsQuery, ServiceRate, UpdateAssignmentStatusDto,
+    UpdateServiceRateDto, WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -336,4 +338,123 @@ pub async fn guard_ratings(
     }
     let ratings = crate::service::get_guard_ratings(&state.db, user.user_id).await?;
     Ok(Json(ApiResponse::success(ratings)))
+}
+
+// =============================================================================
+// Pricing (Service Rates) endpoints
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/pricing/services",
+    tag = "Pricing",
+    responses(
+        (status = 200, description = "List of active service rates", body = Vec<ServiceRate>),
+    ),
+)]
+pub async fn list_service_rates(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<Vec<ServiceRate>>>, AppError> {
+    let rates = crate::service::list_service_rates(&state.db).await?;
+    Ok(Json(ApiResponse::success(rates)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/pricing/services/{id}",
+    tag = "Pricing",
+    params(("id" = Uuid, Path, description = "Service rate UUID")),
+    responses(
+        (status = 200, description = "Service rate details", body = ServiceRate),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_service_rate(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<ServiceRate>>, AppError> {
+    let rate = crate::service::get_service_rate(&state.db, id).await?;
+    Ok(Json(ApiResponse::success(rate)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/pricing/services",
+    tag = "Pricing",
+    security(("bearer" = [])),
+    request_body = CreateServiceRateDto,
+    responses(
+        (status = 200, description = "Service rate created", body = ServiceRate),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+    ),
+)]
+pub async fn create_service_rate(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(dto): Json<CreateServiceRateDto>,
+) -> Result<Json<ApiResponse<ServiceRate>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden(
+            "Only admins can create service rates".to_string(),
+        ));
+    }
+    let rate = crate::service::create_service_rate(&state.db, dto).await?;
+    Ok(Json(ApiResponse::success(rate)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/pricing/services/{id}",
+    tag = "Pricing",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Service rate UUID")),
+    request_body = UpdateServiceRateDto,
+    responses(
+        (status = 200, description = "Service rate updated", body = ServiceRate),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
+pub async fn update_service_rate(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+    Json(dto): Json<UpdateServiceRateDto>,
+) -> Result<Json<ApiResponse<ServiceRate>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden(
+            "Only admins can update service rates".to_string(),
+        ));
+    }
+    let rate = crate::service::update_service_rate(&state.db, id, dto).await?;
+    Ok(Json(ApiResponse::success(rate)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/pricing/services/{id}",
+    tag = "Pricing",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Service rate UUID")),
+    responses(
+        (status = 204, description = "Service rate deactivated"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — admin only", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
+pub async fn delete_service_rate(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden(
+            "Only admins can delete service rates".to_string(),
+        ));
+    }
+    crate::service::delete_service_rate(&state.db, id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

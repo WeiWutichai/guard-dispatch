@@ -139,6 +139,20 @@ class BookingService {
     await _apiClient.dio.put('/booking/requests/$requestId/cancel');
   }
 
+  // =========================================================================
+  // Pricing (public — no JWT required)
+  // =========================================================================
+
+  /// GET /booking/pricing/services — list active service rates.
+  Future<List<Map<String, dynamic>>> listServiceRates() async {
+    final response = await _apiClient.dio.get('/booking/pricing/services');
+    final data = response.data['data'];
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
   /// GET /booking/requests/{id}/assignments — get assignments for a request.
   Future<List<Map<String, dynamic>>> getAssignments(String requestId) async {
     final response = await _apiClient.dio.get(
