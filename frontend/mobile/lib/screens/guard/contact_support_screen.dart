@@ -21,19 +21,6 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.surface,
-      appBar: AppBar(
-        backgroundColor: AppColors.deepBlue,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          strings.appBarTitle,
-          style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-        ),
-        centerTitle: true,
-      ),
       body: SingleChildScrollView(
         child: Column(
           children: [
@@ -61,34 +48,73 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
   Widget _buildHeader(ContactSupportStrings strings) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+      padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
       decoration: const BoxDecoration(
-        color: AppColors.deepBlue,
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(32),
-          bottomRight: Radius.circular(32),
-        ),
+        color: AppColors.primary,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
       ),
       child: Column(
         children: [
+          Row(
+            children: [
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_ios_rounded,
+                    color: Colors.white, size: 20),
+              ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.shield_rounded,
+                    color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'SecureGuard',
+                      style: GoogleFonts.inter(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    Text(
+                      strings.appBarTitle,
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.2),
+              color: Colors.white.withValues(alpha: 0.2),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.headset_mic_rounded, color: AppColors.primary, size: 36),
+            child: const Icon(Icons.headset_mic_rounded, color: Colors.white, size: 36),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Text(
             strings.headerTitle,
-            style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+            style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
             strings.headerDesc,
             textAlign: TextAlign.center,
-            style: GoogleFonts.inter(fontSize: 14, color: Colors.white70),
+            style: GoogleFonts.inter(fontSize: 13, color: Colors.white.withValues(alpha: 0.8)),
           ),
         ],
       ),

@@ -32,41 +32,94 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
       length: 2,
       child: Scaffold(
         backgroundColor: AppColors.surface,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          automaticallyImplyLeading: false,
-          title: Text(
-            strings.appBarTitle,
-            style: GoogleFonts.inter(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          bottom: TabBar(
-            indicatorColor: AppColors.primary,
-            indicatorWeight: 3,
-            labelColor: AppColors.primary,
-            unselectedLabelColor: AppColors.textSecondary,
-            labelStyle: GoogleFonts.inter(
-              fontWeight: FontWeight.bold,
-              fontSize: 14,
-            ),
-            unselectedLabelStyle: GoogleFonts.inter(
-              fontWeight: FontWeight.w500,
-              fontSize: 14,
-            ),
-            tabs: [
-              Tab(text: '${strings.currentTabLabel} (${booking.currentJobs.length})'),
-              Tab(text: '${strings.completedTabLabel} (${booking.completedJobs.length})'),
-            ],
-          ),
-        ),
-        body: TabBarView(
+        body: Column(
           children: [
-            _buildCurrentJobs(strings, isThai),
-            _buildCompletedJobs(strings, isThai),
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 60, 24, 20),
+              decoration: const BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.shield_rounded,
+                            color: Colors.white, size: 24),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'SecureGuard',
+                              style: GoogleFonts.inter(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            Text(
+                              strings.appBarTitle,
+                              style: GoogleFonts.inter(
+                                fontSize: 13,
+                                color: Colors.white.withValues(alpha: 0.9),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: TabBar(
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      dividerColor: Colors.transparent,
+                      indicator: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      labelColor: AppColors.primary,
+                      unselectedLabelColor: Colors.white,
+                      labelStyle: GoogleFonts.inter(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                      unselectedLabelStyle: GoogleFonts.inter(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 13,
+                      ),
+                      tabs: [
+                        Tab(text: '${strings.currentTabLabel} (${booking.currentJobs.length})'),
+                        Tab(text: '${strings.completedTabLabel} (${booking.completedJobs.length})'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildCurrentJobs(strings, isThai),
+                  _buildCompletedJobs(strings, isThai),
+                ],
+              ),
+            ),
           ],
         ),
       ),

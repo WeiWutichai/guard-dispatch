@@ -8,10 +8,11 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AssignGuardDto, AssignmentResponse, CreateRequestDto, CreateServiceRateDto,
-    GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary,
-    GuardRequestResponse, ListRequestsQuery, ServiceRate, UpdateAssignmentStatusDto,
-    UpdateServiceRateDto, WorkHistoryResponse,
+    AssignGuardDto, AssignmentResponse, AvailableGuardResponse, AvailableGuardsQuery,
+    CreateRequestDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
+    GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
+    ListRequestsQuery, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto,
+    WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -131,10 +132,14 @@ pub async fn assign_guard(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<AssignGuardDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
+    // Admin can always assign; customer can assign to their own pending request
     if user.role != "admin" {
-        return Err(AppError::Forbidden(
-            "Only admins can assign guards".to_string(),
-        ));
+        let request = crate::service::get_request(&state.db, id).await?;
+        if request.customer_id != user.user_id {
+            return Err(AppError::Forbidden(
+                "Only admins or request owners can assign guards".to_string(),
+            ));
+        }
     }
     let assignment = crate::service::assign_guard(&state.db, id, req).await?;
     Ok(Json(ApiResponse::success(assignment)))
@@ -338,6 +343,30 @@ pub async fn guard_ratings(
     }
     let ratings = crate::service::get_guard_ratings(&state.db, user.user_id).await?;
     Ok(Json(ApiResponse::success(ratings)))
+}
+
+// =============================================================================
+// Available Guards (customer-facing guard discovery)
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/available-guards",
+    tag = "Guards",
+    security(("bearer" = [])),
+    params(AvailableGuardsQuery),
+    responses(
+        (status = 200, description = "List of available guards nearby", body = Vec<AvailableGuardResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn available_guards(
+    State(state): State<Arc<AppState>>,
+    _user: AuthUser,
+    Query(query): Query<AvailableGuardsQuery>,
+) -> Result<Json<ApiResponse<Vec<AvailableGuardResponse>>>, AppError> {
+    let guards = crate::service::list_available_guards(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(guards)))
 }
 
 // =============================================================================

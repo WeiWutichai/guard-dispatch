@@ -19,10 +19,12 @@ typedef OnTrackingError = void Function(String message);
 /// Uses `geolocator` for GPS and `web_socket_channel` for WebSocket.
 /// Bearer token is sent via Authorization header during WS upgrade.
 class TrackingService {
-  static const _defaultBaseUrl = String.fromEnvironment(
-    'API_URL',
-    defaultValue: 'http://10.0.2.2:80',
-  );
+  static const _envBaseUrl = String.fromEnvironment('API_URL');
+
+  static String get _defaultBaseUrl {
+    if (_envBaseUrl.isNotEmpty) return _envBaseUrl;
+    return Platform.isIOS ? 'http://localhost:80' : 'http://10.0.2.2:80';
+  }
 
   IOWebSocketChannel? _channel;
   StreamSubscription<Position>? _positionSub;

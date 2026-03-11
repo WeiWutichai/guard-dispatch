@@ -30,6 +30,7 @@ use crate::state::AppState;
         handlers::assign_guard,
         handlers::update_assignment_status,
         handlers::get_assignments,
+        handlers::available_guards,
         handlers::guard_dashboard,
         handlers::guard_jobs,
         handlers::guard_earnings,
@@ -50,6 +51,7 @@ use crate::state::AppState;
         models::UpdateAssignmentStatusDto,
         models::GuardRequestResponse,
         models::AssignmentResponse,
+        models::AvailableGuardResponse,
         models::GuardJobResponse,
         models::GuardDashboardSummary,
         models::GuardEarnings,
@@ -68,6 +70,7 @@ use crate::state::AppState;
     tags(
         (name = "Requests", description = "Guard request management"),
         (name = "Assignments", description = "Guard assignment management"),
+        (name = "Guards", description = "Available guards discovery"),
         (name = "Guard", description = "Guard-specific endpoints (dashboard, jobs, earnings)"),
         (name = "Pricing", description = "Service rate management"),
     ),
@@ -107,6 +110,8 @@ async fn main() -> anyhow::Result<()> {
             "/assignments/{id}/status",
             put(handlers::update_assignment_status),
         )
+        // Available guards (customer discovery)
+        .route("/available-guards", get(handlers::available_guards))
         // Guard-specific endpoints
         .route("/guard/dashboard", get(handlers::guard_dashboard))
         .route("/guard/jobs", get(handlers::guard_jobs))

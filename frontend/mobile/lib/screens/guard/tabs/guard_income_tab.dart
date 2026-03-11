@@ -31,22 +31,58 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
 
     return Scaffold(
       backgroundColor: AppColors.surface,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        automaticallyImplyLeading: false,
-        title: Text(
-          strings.appBarTitle,
-          style: GoogleFonts.inter(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ),
       body: Column(
         children: [
-          _buildSubTabNavigation(strings),
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 60, 24, 20),
+            decoration: const BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.shield_rounded,
+                          color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'SecureGuard',
+                            style: GoogleFonts.inter(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                          Text(
+                            strings.appBarTitle,
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              color: Colors.white.withValues(alpha: 0.9),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _buildSubTabNavigation(strings),
+              ],
+            ),
+          ),
           Expanded(
             child: _buildActiveContent(strings, isThai),
           ),
@@ -68,8 +104,11 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
 
   Widget _buildSubTabNavigation(GuardIncomeStrings strings) {
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Row(
         children: [
           _buildSubTabItem(0, strings.tabIncomeGoals),
@@ -90,11 +129,8 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: isActive ? AppColors.primary : Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isActive ? AppColors.primary : AppColors.border,
-            ),
+            color: isActive ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
             label,
@@ -102,7 +138,7 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
             style: GoogleFonts.inter(
               fontSize: 11,
               fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-              color: isActive ? Colors.white : AppColors.textSecondary,
+              color: isActive ? AppColors.primary : Colors.white,
             ),
           ),
         ),

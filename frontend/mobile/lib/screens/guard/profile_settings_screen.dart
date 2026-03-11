@@ -70,37 +70,78 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.surface,
-      appBar: AppBar(
-        backgroundColor: AppColors.deepBlue,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          strings.appBarTitle,
-          style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-        ),
-        centerTitle: true,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            _buildProfilePhotoSection(strings),
-            const SizedBox(height: 20),
-            _buildPersonalInfoSection(strings),
-            const SizedBox(height: 20),
-            _buildGuardInfoSection(strings),
-            const SizedBox(height: 20),
-            _buildEmergencyContactSection(strings),
-            const SizedBox(height: 20),
-            _buildNotificationsSection(strings),
-            const SizedBox(height: 24),
-            _buildSaveButton(strings),
-            const SizedBox(height: 24),
-          ],
-        ),
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
+            decoration: const BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
+            ),
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.arrow_back_ios_rounded,
+                      color: Colors.white, size: 20),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.shield_rounded,
+                      color: Colors.white, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'SecureGuard',
+                        style: GoogleFonts.inter(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      Text(
+                        strings.appBarTitle,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: Colors.white.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  _buildProfilePhotoSection(strings),
+                  const SizedBox(height: 20),
+                  _buildPersonalInfoSection(strings),
+                  const SizedBox(height: 20),
+                  _buildGuardInfoSection(strings),
+                  const SizedBox(height: 20),
+                  _buildEmergencyContactSection(strings),
+                  const SizedBox(height: 20),
+                  _buildNotificationsSection(strings),
+                  const SizedBox(height: 24),
+                  _buildSaveButton(strings),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

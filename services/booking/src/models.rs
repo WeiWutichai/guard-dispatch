@@ -430,3 +430,68 @@ pub struct UpdateServiceRateDto {
     pub notes: Option<String>,
     pub is_active: Option<bool>,
 }
+
+// =============================================================================
+// Available Guards (customer-facing guard discovery)
+// =============================================================================
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct AvailableGuardsQuery {
+    /// Customer request latitude
+    pub lat: f64,
+    /// Customer request longitude
+    pub lng: f64,
+    /// Search radius in km (default 50)
+    pub radius_km: Option<f64>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AvailableGuardResponse {
+    pub id: Uuid,
+    pub full_name: String,
+    pub avatar_url: Option<String>,
+    pub experience_years: Option<i32>,
+    pub lat: f64,
+    pub lng: f64,
+    pub distance_km: f64,
+    pub last_seen_at: DateTime<Utc>,
+    pub completed_jobs: i64,
+    /// Placeholder — reviews table not yet implemented
+    pub rating: f64,
+    /// Placeholder — reviews table not yet implemented
+    pub review_count: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct AvailableGuardRow {
+    pub id: Uuid,
+    pub full_name: String,
+    pub avatar_url: Option<String>,
+    pub experience_years: Option<i32>,
+    pub lat: f64,
+    pub lng: f64,
+    pub distance_km: f64,
+    pub last_seen_at: DateTime<Utc>,
+    pub completed_jobs: Option<i64>,
+}
+
+impl From<AvailableGuardRow> for AvailableGuardResponse {
+    fn from(row: AvailableGuardRow) -> Self {
+        Self {
+            id: row.id,
+            full_name: row.full_name,
+            avatar_url: row.avatar_url,
+            experience_years: row.experience_years,
+            lat: row.lat,
+            lng: row.lng,
+            distance_km: row.distance_km,
+            last_seen_at: row.last_seen_at,
+            completed_jobs: row.completed_jobs.unwrap_or(0),
+            // Placeholder ratings until reviews table is built
+            rating: 4.5 + (row.completed_jobs.unwrap_or(0) as f64 * 0.01).min(0.4),
+            review_count: row.completed_jobs.unwrap_or(0).min(200),
+        }
+    }
+}

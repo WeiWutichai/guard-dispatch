@@ -164,4 +164,43 @@ class BookingService {
     }
     return [];
   }
+
+  // =========================================================================
+  // Available Guards (customer discovery)
+  // =========================================================================
+
+  /// GET /booking/available-guards — list nearby online guards.
+  Future<List<Map<String, dynamic>>> listAvailableGuards({
+    required double lat,
+    required double lng,
+    double radiusKm = 50,
+    int limit = 20,
+  }) async {
+    final response = await _apiClient.dio.get(
+      '/booking/available-guards',
+      queryParameters: {
+        'lat': lat,
+        'lng': lng,
+        'radius_km': radiusKm,
+        'limit': limit,
+      },
+    );
+    final data = response.data['data'];
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
+  /// POST /booking/requests/{id}/assign — assign a guard to a request.
+  Future<Map<String, dynamic>> assignGuardToRequest(
+    String requestId,
+    String guardId,
+  ) async {
+    final response = await _apiClient.dio.post(
+      '/booking/requests/$requestId/assign',
+      data: {'guard_id': guardId},
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
 }

@@ -1,15 +1,22 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
+import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../theme/colors.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
-import '../notification_screen.dart';
+import 'guard_searching_screen.dart';
 
 class BookingScreen extends StatefulWidget {
-  const BookingScreen({super.key});
+  final Map<String, dynamic> serviceRate;
+
+  const BookingScreen({super.key, required this.serviceRate});
 
   @override
   State<BookingScreen> createState() => _BookingScreenState();
@@ -17,54 +24,127 @@ class BookingScreen extends StatefulWidget {
 
 class _BookingScreenState extends State<BookingScreen> {
   final _addressController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _priceController = TextEditingController();
-  final _specialInstructionsController = TextEditingController();
+  final _jobDetailsController = TextEditingController();
+  final _notesController = TextEditingController();
+  final _tipController = TextEditingController();
 
-  String _selectedUrgency = 'medium';
-  int _guardCount = 1;
-  bool _isSubmitting = false;
+  // Service time
+  late int _selectedHours;
+  late DateTime _selectedDate;
+  TimeOfDay _selectedTime = const TimeOfDay(hour: 8, minute: 0);
+
+  // Location
   double? _lat;
   double? _lng;
+
+  // Equipment
+  final Map<String, bool> _equipment = {
+    'radio': false,
+    'cctv': false,
+    'flashlight': false,
+    'first_aid': false,
+  };
+
+  // Additional services
+  final Map<String, bool> _services = {
+    'patrol': false,
+    'id_check': false,
+    'vip_escort': false,
+    'daily_report': false,
+  };
+
+  // Pricing
+  int _guardCount = 1;
+  bool _isSubmitting = false;
+
+  // Parsed from service rate
+  late String _serviceName;
+  late int _minHours;
+  late double _minPrice;
+  late double _maxPrice;
+  late double _baseFee;
 
   @override
   void initState() {
     super.initState();
-    final auth = context.read<AuthProvider>();
-    _addressController.text = auth.customerAddress ?? '';
+    final rate = widget.serviceRate;
+    _serviceName = rate['name'] as String? ?? '';
+    _minHours = rate['min_hours'] as int? ?? 4;
+    _minPrice = (rate['min_price'] as num?)?.toDouble() ?? 0;
+    _maxPrice = (rate['max_price'] as num?)?.toDouble() ?? 0;
+    _baseFee = (rate['base_fee'] as num?)?.toDouble() ?? 0;
+
+    _selectedHours = _minHours;
+    _selectedDate = DateTime.now().add(const Duration(days: 1));
   }
 
   @override
   void dispose() {
     _addressController.dispose();
-    _descriptionController.dispose();
-    _priceController.dispose();
-    _specialInstructionsController.dispose();
+    _jobDetailsController.dispose();
+    _notesController.dispose();
+    _tipController.dispose();
     super.dispose();
   }
 
+  // Duration preset options derived from min_hours
+  List<int> get _durationPresets {
+    final presets = <int>[];
+    for (final h in [4, 6, 8, 12, 24]) {
+      if (h >= _minHours) presets.add(h);
+    }
+    if (presets.isEmpty || presets.first != _minHours) {
+      presets.insert(0, _minHours);
+    }
+    return presets;
+  }
+
+  DateTime get _endDateTime {
+    final start = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+      _selectedTime.hour,
+      _selectedTime.minute,
+    );
+    return start.add(Duration(hours: _selectedHours));
+  }
+
+  double get _hourlyRate => (_minPrice + _maxPrice) / 2;
+  double get _subtotal => _hourlyRate * _selectedHours * _guardCount;
+  double get _tip {
+    final t = double.tryParse(_tipController.text.trim());
+    return (t != null && t > 0) ? t : 0;
+  }
+
+  double get _total => _subtotal + _baseFee + _tip;
+
   Future<void> _getCurrentLocation() async {
     try {
-      final permission = await Geolocator.checkPermission();
+      var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
-        final requested = await Geolocator.requestPermission();
-        if (requested == LocationPermission.denied ||
-            requested == LocationPermission.deniedForever) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied ||
+            permission == LocationPermission.deniedForever) {
           return;
         }
       }
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
       );
       setState(() {
         _lat = position.latitude;
         _lng = position.longitude;
+        _addressController.text =
+            '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}';
       });
       if (mounted) {
         final isThai = LanguageProvider.of(context).isThai;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(isThai ? 'ได้ตำแหน่ง GPS แล้ว' : 'GPS location acquired'),
+            content:
+                Text(isThai ? 'ได้ตำแหน่ง GPS แล้ว' : 'GPS location acquired'),
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 2),
           ),
@@ -82,6 +162,136 @@ class _BookingScreenState extends State<BookingScreen> {
     }
   }
 
+  Future<void> _openMapPicker() async {
+    // Default to current GPS or Bangkok center
+    final initialLat = _lat ?? 13.7563;
+    final initialLng = _lng ?? 100.5018;
+
+    final result = await showModalBottomSheet<LatLng>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _MapPickerSheet(
+        initialLat: initialLat,
+        initialLng: initialLng,
+      ),
+    );
+
+    if (result != null && mounted) {
+      setState(() {
+        _lat = result.latitude;
+        _lng = result.longitude;
+        _addressController.text =
+            '${result.latitude.toStringAsFixed(6)}, ${result.longitude.toStringAsFixed(6)}';
+      });
+      final isThai = LanguageProvider.of(context).isThai;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'ปักหมุดสำเร็จ' : 'Location pinned'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primary,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: AppColors.textPrimary,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _selectedDate = picked);
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _selectedTime,
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primary,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: AppColors.textPrimary,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _selectedTime = picked);
+  }
+
+  String _deriveUrgency() {
+    final now = DateTime.now();
+    final diff = _selectedDate.difference(now).inDays;
+    if (diff <= 0) return 'high';
+    if (diff <= 3) return 'medium';
+    return 'low';
+  }
+
+  String _buildDescription(bool isThai) {
+    final parts = <String>[];
+    parts.add(isThai
+        ? 'บริการ: $_serviceName'
+        : 'Service: $_serviceName');
+    final dateStr = DateFormat('dd/MM/yyyy').format(_selectedDate);
+    final timeStr =
+        '${_selectedTime.hour.toString().padLeft(2, '0')}:${_selectedTime.minute.toString().padLeft(2, '0')}';
+    parts.add(isThai
+        ? 'วันที่: $dateStr เวลา: $timeStr'
+        : 'Date: $dateStr Time: $timeStr');
+    parts.add(isThai
+        ? 'ระยะเวลา: $_selectedHours ชม.'
+        : 'Duration: $_selectedHours hrs');
+    parts.add(isThai
+        ? 'จำนวน รปภ.: $_guardCount คน'
+        : 'Guards: $_guardCount');
+
+    final selectedServices = _services.entries
+        .where((e) => e.value)
+        .map((e) => _serviceLabel(e.key, isThai))
+        .toList();
+    if (selectedServices.isNotEmpty) {
+      parts.add(isThai
+          ? 'บริการเพิ่มเติม: ${selectedServices.join(', ')}'
+          : 'Additional: ${selectedServices.join(', ')}');
+    }
+
+    final selectedEquipment = _equipment.entries
+        .where((e) => e.value)
+        .map((e) => _equipmentLabel(e.key, isThai))
+        .toList();
+    if (selectedEquipment.isNotEmpty) {
+      parts.add(isThai
+          ? 'อุปกรณ์: ${selectedEquipment.join(', ')}'
+          : 'Equipment: ${selectedEquipment.join(', ')}');
+    }
+
+    final jobDetails = _jobDetailsController.text.trim();
+    if (jobDetails.isNotEmpty) {
+      parts.add(isThai
+          ? 'รายละเอียดงาน: $jobDetails'
+          : 'Job Details: $jobDetails');
+    }
+
+    return parts.join('\n');
+  }
+
   Future<void> _submitBooking() async {
     final isThai = LanguageProvider.of(context).isThai;
     final address = _addressController.text.trim();
@@ -95,49 +305,33 @@ class _BookingScreenState extends State<BookingScreen> {
       return;
     }
 
-    // Use GPS coords or default to Bangkok center
     final lat = _lat ?? 13.7563;
     final lng = _lng ?? 100.5018;
-
-    final priceText = _priceController.text.trim();
-    final offeredPrice = priceText.isNotEmpty ? double.tryParse(priceText) : null;
-
-    // Combine special instructions with guard count
-    final specialParts = <String>[];
-    if (_guardCount > 1) {
-      specialParts.add(isThai
-          ? 'จำนวนเจ้าหน้าที่: $_guardCount คน'
-          : 'Guards needed: $_guardCount');
-    }
-    final extraInstructions = _specialInstructionsController.text.trim();
-    if (extraInstructions.isNotEmpty) specialParts.add(extraInstructions);
-    final specialInstructions =
-        specialParts.isNotEmpty ? specialParts.join('\n') : null;
+    final notes = _notesController.text.trim();
 
     setState(() => _isSubmitting = true);
     try {
-      await context.read<BookingProvider>().createRequest(
+      final result = await context.read<BookingProvider>().createRequest(
             locationLat: lat,
             locationLng: lng,
             address: address,
-            description: _descriptionController.text.trim().isNotEmpty
-                ? _descriptionController.text.trim()
-                : null,
-            offeredPrice: offeredPrice,
-            specialInstructions: specialInstructions,
-            urgency: _selectedUrgency,
+            description: _buildDescription(isThai),
+            offeredPrice: _total,
+            specialInstructions: notes.isNotEmpty ? notes : null,
+            urgency: _deriveUrgency(),
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(isThai
-              ? 'สร้างคำขอสำเร็จ! รอ Admin จัดสรร รปภ.'
-              : 'Request created! Waiting for admin to assign guard.'),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: AppColors.success,
+      final requestId = result['id']?.toString();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => GuardSearchingScreen(
+            requestId: requestId,
+            lat: lat,
+            lng: lng,
+          ),
         ),
       );
-      Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -156,15 +350,8 @@ class _BookingScreenState extends State<BookingScreen> {
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
 
-    final urgencies = [
-      {'key': 'low', 'label': isThai ? 'ต่ำ' : 'Low'},
-      {'key': 'medium', 'label': isThai ? 'ปกติ' : 'Normal'},
-      {'key': 'high', 'label': isThai ? 'เร่งด่วน' : 'Urgent'},
-      {'key': 'critical', 'label': isThai ? 'ฉุกเฉิน' : 'Critical'},
-    ];
-
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF9FAFB),
       body: Column(
         children: [
           _buildHeader(isThai),
@@ -174,157 +361,16 @@ class _BookingScreenState extends State<BookingScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildSectionHeader(
-                    isThai
-                        ? 'จองเจ้าหน้าที่รักษาความปลอดภัย'
-                        : 'Book Security Guard',
-                    isThai ? 'กรอกข้อมูลการจอง' : 'Fill booking info',
-                  ),
+                  _buildServiceTimeSection(isThai),
+                  const SizedBox(height: 20),
+                  _buildLocationSection(isThai),
+                  const SizedBox(height: 20),
+                  _buildEquipmentSection(isThai),
+                  const SizedBox(height: 20),
+                  _buildAdditionalServicesSection(isThai),
+                  const SizedBox(height: 20),
+                  _buildPricingSection(isThai),
                   const SizedBox(height: 24),
-
-                  // Urgency selector
-                  _buildLabel(
-                    isThai ? 'ระดับความเร่งด่วน' : 'Urgency Level',
-                    Icons.priority_high_rounded,
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: urgencies.map((u) {
-                      final isSelected = _selectedUrgency == u['key'];
-                      return Expanded(
-                        child: GestureDetector(
-                          onTap: () =>
-                              setState(() => _selectedUrgency = u['key']!),
-                          child: Container(
-                            margin: EdgeInsets.only(
-                              right: u == urgencies.last ? 0 : 8,
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? AppColors.primary
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: isSelected
-                                    ? AppColors.primary
-                                    : AppColors.border,
-                              ),
-                            ),
-                            child: Center(
-                              child: Text(
-                                u['label']!,
-                                style: GoogleFonts.inter(
-                                  fontSize: 12,
-                                  fontWeight: isSelected
-                                      ? FontWeight.bold
-                                      : FontWeight.w500,
-                                  color: isSelected
-                                      ? Colors.white
-                                      : AppColors.textSecondary,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Location / Address
-                  _buildLabel(
-                    isThai ? 'สถานที่' : 'Location',
-                    Icons.location_on_outlined,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildInputField(_addressController, isThai
-                      ? 'ใส่ที่อยู่'
-                      : 'Enter address'),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: _getCurrentLocation,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: AppColors.primary),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  _lat != null
-                                      ? Icons.check_circle_rounded
-                                      : Icons.my_location_rounded,
-                                  size: 16,
-                                  color: _lat != null
-                                      ? AppColors.success
-                                      : AppColors.primary,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _lat != null
-                                      ? (isThai ? 'ได้ตำแหน่งแล้ว' : 'Location set')
-                                      : (isThai
-                                          ? 'ใช้ตำแหน่งปัจจุบัน'
-                                          : 'Use Current Location'),
-                                  style: GoogleFonts.inter(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: _lat != null
-                                        ? AppColors.success
-                                        : AppColors.primary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Job description
-                  _buildLabel(
-                    isThai ? 'รายละเอียดงาน' : 'Job Details',
-                    Icons.description_outlined,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildTextArea(
-                    _descriptionController,
-                    isThai
-                        ? 'อธิบายรายละเอียดงาน'
-                        : 'Describe job details',
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Special instructions
-                  _buildLabel(
-                    isThai ? 'คำแนะนำพิเศษ' : 'Special Instructions',
-                    Icons.info_outline_rounded,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildTextArea(
-                    _specialInstructionsController,
-                    isThai
-                        ? 'อุปกรณ์ที่ต้องการ, ข้อกำหนดพิเศษ ฯลฯ'
-                        : 'Equipment needed, special requirements, etc.',
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Price & Guard count
-                  _buildPriceSummary(isThai),
-                  const SizedBox(height: 32),
                   _buildSubmitButton(isThai),
                   const SizedBox(height: 40),
                 ],
@@ -336,275 +382,708 @@ class _BookingScreenState extends State<BookingScreen> {
     );
   }
 
+  // ===========================================================================
+  // Header
+  // ===========================================================================
+
   Widget _buildHeader(bool isThai) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 60, 24, 20),
+      padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
       decoration: const BoxDecoration(
         color: AppColors.primary,
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.shield_rounded,
-              color: Colors.white,
-              size: 24,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'SecureGuard',
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                Text(
-                  isThai ? 'บริการรักษาความปลอดภัย' : 'Security Services',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: Colors.white.withValues(alpha: 0.9),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const NotificationScreen(isGuard: false),
-              ),
-            ),
-            icon: const Icon(
-              Icons.notifications_none_rounded,
-              color: Colors.white,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title, String subtitle) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: GoogleFonts.inter(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          subtitle,
-          style: GoogleFonts.inter(
-            fontSize: 12,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLabel(String label, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: AppColors.primary),
-        const SizedBox(width: 8),
-        Text(
-          label,
-          style: GoogleFonts.inter(
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildInputField(TextEditingController controller, String hint) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: TextField(
-        controller: controller,
-        decoration: InputDecoration(
-          hintText: hint,
-          border: InputBorder.none,
-          hintStyle: GoogleFonts.inter(
-            fontSize: 12,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTextArea(TextEditingController controller, String hint) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: TextField(
-        controller: controller,
-        maxLines: 4,
-        decoration: InputDecoration(
-          hintText: hint,
-          border: InputBorder.none,
-          hintStyle: GoogleFonts.inter(
-            fontSize: 12,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPriceSummary(bool isThai) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.primary, width: 1.5),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
       ),
       child: Column(
         children: [
-          // Offered price input
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                isThai ? 'ราคาที่เสนอ' : 'Offered Price',
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              Row(
-                children: [
-                  Container(
-                    width: 80,
-                    height: 36,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: TextField(
-                      controller: _priceController,
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.center,
-                      decoration: InputDecoration(
-                        border: InputBorder.none,
-                        hintText: '0',
-                        hintStyle: GoogleFonts.inter(fontSize: 13),
-                        contentPadding: EdgeInsets.zero,
-                        isDense: true,
-                      ),
-                      style: GoogleFonts.inter(fontSize: 13),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    isThai ? 'บาท' : 'THB',
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          // Guard count
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                isThai ? 'จำนวนเจ้าหน้าที่' : 'Number of guards',
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textPrimary,
-                ),
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white, size: 20),
               ),
               Container(
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.border),
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                child: Row(
+                child: const Icon(Icons.shield_rounded,
+                    color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildStepButton(
-                      Icons.remove,
-                      () => setState(() {
-                        if (_guardCount > 1) _guardCount--;
-                      }),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        '$_guardCount',
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
+                    Text(
+                      _serviceName,
+                      style: GoogleFonts.inter(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    _buildStepButton(
-                      Icons.add,
-                      () => setState(() => _guardCount++),
+                    const SizedBox(height: 2),
+                    Text(
+                      '฿${_minPrice.toInt()}-${_maxPrice.toInt()}/${isThai ? 'ชม.' : 'hr'}',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
                     ),
                   ],
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          Text(
+            isThai
+                ? 'กรอกรายละเอียดการจองบริการ'
+                : 'Fill in your booking details',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: Colors.white.withValues(alpha: 0.95),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildStepButton(IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        child: Icon(icon, size: 16, color: AppColors.textPrimary),
+  // ===========================================================================
+  // Section 1: Service Time
+  // ===========================================================================
+
+  Widget _buildServiceTimeSection(bool isThai) {
+    return _buildSectionCard(
+      icon: Icons.access_time_rounded,
+      title: isThai ? 'ระยะเวลาบริการ' : 'Service Duration',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Duration presets
+          Text(
+            isThai ? 'เลือกระยะเวลา' : 'Select Duration',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: _durationPresets.map((h) {
+              final isSelected = _selectedHours == h;
+              return GestureDetector(
+                onTap: () => setState(() => _selectedHours = h),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppColors.primary : Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isSelected ? AppColors.primary : AppColors.border,
+                    ),
+                  ),
+                  child: Text(
+                    '$h ${isThai ? 'ชม.' : 'hrs'}',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.w500,
+                      color:
+                          isSelected ? Colors.white : AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 8),
+          // Custom hours stepper
+          Row(
+            children: [
+              Text(
+                isThai ? 'หรือกำหนดเอง:' : 'Or custom:',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const Spacer(),
+              _buildStepper(
+                value: _selectedHours,
+                min: _minHours,
+                onChanged: (v) => setState(() => _selectedHours = v),
+              ),
+            ],
+          ),
+          const Divider(height: 28, color: AppColors.border),
+
+          // Date picker
+          Row(
+            children: [
+              const Icon(Icons.calendar_today_rounded,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 10),
+              Text(
+                isThai ? 'วันที่เริ่มบริการ' : 'Start Date',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: _pickDate,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        DateFormat('dd MMM yyyy').format(_selectedDate),
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Icon(Icons.arrow_drop_down_rounded,
+                          size: 20, color: AppColors.primary),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Time picker
+          Row(
+            children: [
+              const Icon(Icons.schedule_rounded,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 10),
+              Text(
+                isThai ? 'เวลาเริ่ม' : 'Start Time',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: _pickTime,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${_selectedTime.hour.toString().padLeft(2, '0')}:${_selectedTime.minute.toString().padLeft(2, '0')}',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Icon(Icons.arrow_drop_down_rounded,
+                          size: 20, color: AppColors.primary),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 28, color: AppColors.border),
+
+          // End date/time (auto-calculated)
+          _buildEndDateTimeRow(isThai),
+        ],
       ),
     );
   }
+
+  Widget _buildEndDateTimeRow(bool isThai) {
+    final end = _endDateTime;
+    final endDateStr = DateFormat('dd MMM yyyy').format(end);
+    final endTimeStr =
+        '${end.hour.toString().padLeft(2, '0')}:${end.minute.toString().padLeft(2, '0')}';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.event_available_rounded,
+              size: 18, color: AppColors.primary),
+          const SizedBox(width: 10),
+          Text(
+            isThai ? 'สิ้นสุดบริการ' : 'Service End',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            '$endDateStr  $endTimeStr',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: AppColors.primary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // Section 2: Location
+  // ===========================================================================
+
+  Widget _buildLocationSection(bool isThai) {
+    return _buildSectionCard(
+      icon: Icons.location_on_rounded,
+      title: isThai ? 'สถานที่' : 'Location',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Address sub-label
+          Text(
+            isThai ? 'ที่อยู่' : 'Address',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: TextField(
+              controller: _addressController,
+              maxLines: 2,
+              minLines: 1,
+              decoration: InputDecoration(
+                hintText: isThai
+                    ? 'ใส่ที่อยู่หรือใช้ GPS ปัจจุบัน'
+                    : 'Enter address or use current GPS',
+                border: InputBorder.none,
+                hintStyle: GoogleFonts.inter(
+                    fontSize: 13, color: AppColors.textSecondary),
+              ),
+              style: GoogleFonts.inter(fontSize: 14),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Pin from map button
+          GestureDetector(
+            onTap: _openMapPicker,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: _lat != null
+                    ? AppColors.success.withValues(alpha: 0.08)
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _lat != null
+                      ? AppColors.success
+                      : AppColors.primary,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _lat != null
+                        ? Icons.check_circle_rounded
+                        : Icons.map_rounded,
+                    size: 18,
+                    color: _lat != null ? AppColors.success : AppColors.primary,
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.location_on_rounded,
+                    size: 16,
+                    color: _lat != null
+                        ? AppColors.success
+                        : Colors.red.shade400,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _lat != null
+                        ? (isThai ? 'ปักหมุดแล้ว' : 'Location pinned')
+                        : (isThai
+                            ? 'ปักหมุดจากแผนที่'
+                            : 'Pin from Map'),
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color:
+                          _lat != null ? AppColors.success : AppColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Use current location button
+          GestureDetector(
+            onTap: _getCurrentLocation,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.my_location_rounded,
+                      size: 18, color: AppColors.textSecondary),
+                  const SizedBox(width: 8),
+                  Text(
+                    isThai ? 'ใช้ตำแหน่งปัจจุบัน' : 'Use Current Location',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const Divider(height: 28, color: AppColors.border),
+
+          // Job details sub-label
+          Text(
+            isThai ? 'รายละเอียดงาน' : 'Job Details',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: TextField(
+              controller: _jobDetailsController,
+              maxLines: 4,
+              minLines: 2,
+              decoration: InputDecoration(
+                hintText: isThai
+                    ? 'อธิบายรายละเอียดงานหรือความต้องการพิเศษ'
+                    : 'Describe job details or special requirements',
+                border: InputBorder.none,
+                hintStyle: GoogleFonts.inter(
+                    fontSize: 13, color: AppColors.textSecondary),
+              ),
+              style: GoogleFonts.inter(fontSize: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // Section 3: Security Equipment
+  // ===========================================================================
+
+  Widget _buildEquipmentSection(bool isThai) {
+    return _buildSectionCard(
+      icon: Icons.build_circle_rounded,
+      title: isThai ? 'อุปกรณ์รักษาความปลอดภัย' : 'Security Equipment',
+      child: Column(
+        children: [
+          _buildCheckboxTile(
+            key: 'radio',
+            map: _equipment,
+            icon: Icons.settings_input_antenna_rounded,
+            label: isThai ? 'วิทยุสื่อสาร' : 'Two-Way Radio',
+            desc: isThai ? 'สื่อสารระหว่างทีม' : 'Team communication',
+          ),
+          _buildCheckboxTile(
+            key: 'cctv',
+            map: _equipment,
+            icon: Icons.videocam_rounded,
+            label: isThai ? 'กล้องวงจรปิด' : 'CCTV Camera',
+            desc: isThai ? 'บันทึกภาพเหตุการณ์' : 'Event recording',
+          ),
+          _buildCheckboxTile(
+            key: 'flashlight',
+            map: _equipment,
+            icon: Icons.flashlight_on_rounded,
+            label: isThai ? 'ไฟฉาย' : 'Flashlight',
+            desc: isThai ? 'ตรวจสอบพื้นที่มืด' : 'Dark area inspection',
+          ),
+          _buildCheckboxTile(
+            key: 'first_aid',
+            map: _equipment,
+            icon: Icons.medical_services_rounded,
+            label: isThai ? 'อุปกรณ์ปฐมพยาบาล' : 'First Aid Kit',
+            desc: isThai ? 'เตรียมพร้อมเหตุฉุกเฉิน' : 'Emergency readiness',
+            isLast: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // Section 4: Additional Services
+  // ===========================================================================
+
+  Widget _buildAdditionalServicesSection(bool isThai) {
+    return _buildSectionCard(
+      icon: Icons.add_circle_outline_rounded,
+      title: isThai ? 'บริการเพิ่มเติม' : 'Additional Services',
+      child: Column(
+        children: [
+          _buildCheckboxTile(
+            key: 'patrol',
+            map: _services,
+            icon: Icons.directions_walk_rounded,
+            label: isThai ? 'ลาดตระเวน' : 'Patrol Service',
+            desc: isThai ? 'ตรวจตราพื้นที่รอบนอก' : 'Perimeter patrol',
+          ),
+          _buildCheckboxTile(
+            key: 'id_check',
+            map: _services,
+            icon: Icons.badge_rounded,
+            label: isThai ? 'ตรวจสอบตัวตน' : 'ID Verification',
+            desc: isThai ? 'ตรวจบัตรผู้เข้า-ออก' : 'Entry/exit ID check',
+          ),
+          _buildCheckboxTile(
+            key: 'vip_escort',
+            map: _services,
+            icon: Icons.security_rounded,
+            label: 'VIP Escort',
+            desc: isThai ? 'คุ้มกันบุคคลสำคัญ' : 'VIP protection detail',
+          ),
+          _buildCheckboxTile(
+            key: 'daily_report',
+            map: _services,
+            icon: Icons.summarize_rounded,
+            label: isThai ? 'รายงานประจำวัน' : 'Daily Report',
+            desc: isThai ? 'สรุปเหตุการณ์ประจำวัน' : 'Daily event summary',
+            isLast: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // Section 5: Pricing
+  // ===========================================================================
+
+  Widget _buildPricingSection(bool isThai) {
+    return _buildSectionCard(
+      icon: Icons.receipt_long_rounded,
+      title: isThai ? 'สรุปราคา' : 'Price Summary',
+      child: Column(
+        children: [
+          // Guard count
+          Row(
+            children: [
+              const Icon(Icons.people_rounded,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 10),
+              Text(
+                isThai ? 'จำนวนเจ้าหน้าที่' : 'Number of Guards',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              _buildStepper(
+                value: _guardCount,
+                min: 1,
+                onChanged: (v) => setState(() => _guardCount = v),
+              ),
+            ],
+          ),
+          const Divider(height: 24, color: AppColors.border),
+
+          // Breakdown
+          _buildPriceRow(
+            isThai ? 'ค่าบริการรายชั่วโมง' : 'Hourly Rate',
+            '฿${_hourlyRate.toStringAsFixed(0)}/${isThai ? 'ชม.' : 'hr'}',
+          ),
+          const SizedBox(height: 8),
+          _buildPriceRow(
+            isThai
+                ? '$_selectedHours ชม. × $_guardCount คน'
+                : '$_selectedHours hrs × $_guardCount guard${_guardCount > 1 ? 's' : ''}',
+            '฿${_subtotal.toStringAsFixed(0)}',
+          ),
+          const SizedBox(height: 8),
+          _buildPriceRow(
+            isThai ? 'ค่าพื้นฐาน' : 'Base Fee',
+            '฿${_baseFee.toStringAsFixed(0)}',
+          ),
+          const SizedBox(height: 8),
+
+          // Tip input
+          Row(
+            children: [
+              Text(
+                isThai ? 'ค่าตอบแทนพิเศษ' : 'Tip / Bonus',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const Spacer(),
+              SizedBox(
+                width: 100,
+                height: 38,
+                child: TextField(
+                  controller: _tipController,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.right,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: '0',
+                    hintStyle: GoogleFonts.inter(
+                        fontSize: 14, color: AppColors.disabled),
+                    prefixText: '฿',
+                    prefixStyle: GoogleFonts.inter(
+                        fontSize: 14, color: AppColors.textSecondary),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppColors.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppColors.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppColors.primary),
+                    ),
+                  ),
+                  style: GoogleFonts.inter(
+                      fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+          const Divider(color: AppColors.border),
+          const SizedBox(height: 12),
+
+          // Total
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                isThai ? 'ราคารวมทั้งหมด' : 'Total',
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              Text(
+                '฿${_total.toStringAsFixed(0)}',
+                style: GoogleFonts.inter(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
+          ),
+
+          // Notes
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: TextField(
+              controller: _notesController,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText: isThai
+                    ? 'หมายเหตุเพิ่มเติม (ไม่บังคับ)'
+                    : 'Additional notes (optional)',
+                border: InputBorder.none,
+                hintStyle: GoogleFonts.inter(
+                    fontSize: 13, color: AppColors.textSecondary),
+              ),
+              style: GoogleFonts.inter(fontSize: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // Submit
+  // ===========================================================================
 
   Widget _buildSubmitButton(bool isThai) {
     return ElevatedButton(
@@ -621,15 +1100,599 @@ class _BookingScreenState extends State<BookingScreen> {
               width: 24,
               height: 24,
               child: CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 2.5,
-              ),
+                  color: Colors.white, strokeWidth: 2.5),
             )
-          : Text(
-              isThai ? 'ส่งคำขอจอง' : 'Submit Request',
-              style:
-                  GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold),
+          : Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.check_circle_outline_rounded, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  isThai ? 'ยืนยันการจอง' : 'Confirm Booking',
+                  style: GoogleFonts.inter(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ],
             ),
+    );
+  }
+
+  // ===========================================================================
+  // Shared widgets
+  // ===========================================================================
+
+  Widget _buildSectionCard({
+    required IconData icon,
+    required String title,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 20, color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                title,
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCheckboxTile({
+    required String key,
+    required Map<String, bool> map,
+    required IconData icon,
+    required String label,
+    required String desc,
+    bool isLast = false,
+  }) {
+    final isChecked = map[key] ?? false;
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: () => setState(() => map[key] = !isChecked),
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isChecked
+                        ? AppColors.primary.withValues(alpha: 0.1)
+                        : const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon,
+                      size: 20,
+                      color: isChecked
+                          ? AppColors.primary
+                          : AppColors.textSecondary),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        desc,
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    color: isChecked ? AppColors.primary : Colors.white,
+                    borderRadius: BorderRadius.circular(7),
+                    border: Border.all(
+                      color: isChecked ? AppColors.primary : AppColors.border,
+                      width: 2,
+                    ),
+                  ),
+                  child: isChecked
+                      ? const Icon(Icons.check_rounded,
+                          size: 16, color: Colors.white)
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (!isLast) const Divider(height: 1, color: AppColors.border),
+      ],
+    );
+  }
+
+  Widget _buildStepper({
+    required int value,
+    required int min,
+    required ValueChanged<int> onChanged,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildStepButton(
+            Icons.remove,
+            value > min ? () => onChanged(value - 1) : null,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              '$value',
+              style: GoogleFonts.inter(
+                  fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+          ),
+          _buildStepButton(
+            Icons.add,
+            () => onChanged(value + 1),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepButton(IconData icon, VoidCallback? onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        child: Icon(icon,
+            size: 18,
+            color: onTap != null ? AppColors.textPrimary : AppColors.disabled),
+      ),
+    );
+  }
+
+  Widget _buildPriceRow(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.inter(
+              fontSize: 13, color: AppColors.textSecondary),
+        ),
+        Text(
+          value,
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ===========================================================================
+  // i18n helpers for checkbox labels
+  // ===========================================================================
+
+  String _equipmentLabel(String key, bool isThai) {
+    switch (key) {
+      case 'radio':
+        return isThai ? 'วิทยุสื่อสาร' : 'Radio';
+      case 'cctv':
+        return isThai ? 'กล้องวงจรปิด' : 'CCTV';
+      case 'flashlight':
+        return isThai ? 'ไฟฉาย' : 'Flashlight';
+      case 'first_aid':
+        return isThai ? 'ปฐมพยาบาล' : 'First Aid';
+      default:
+        return key;
+    }
+  }
+
+  String _serviceLabel(String key, bool isThai) {
+    switch (key) {
+      case 'patrol':
+        return isThai ? 'ลาดตระเวน' : 'Patrol';
+      case 'id_check':
+        return isThai ? 'ตรวจสอบตัวตน' : 'ID Check';
+      case 'vip_escort':
+        return 'VIP Escort';
+      case 'daily_report':
+        return isThai ? 'รายงานประจำวัน' : 'Daily Report';
+      default:
+        return key;
+    }
+  }
+}
+
+// =============================================================================
+// Map Picker Bottom Sheet
+// =============================================================================
+
+class _MapPickerSheet extends StatefulWidget {
+  final double initialLat;
+  final double initialLng;
+
+  const _MapPickerSheet({
+    required this.initialLat,
+    required this.initialLng,
+  });
+
+  @override
+  State<_MapPickerSheet> createState() => _MapPickerSheetState();
+}
+
+class _MapPickerSheetState extends State<_MapPickerSheet> {
+  late LatLng _pinLocation;
+  final MapController _mapController = MapController();
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  Timer? _debounce;
+  List<Map<String, dynamic>> _searchResults = [];
+  bool _isSearching = false;
+  bool _showResults = false;
+
+  static final Dio _nominatimDio = Dio(BaseOptions(
+    baseUrl: 'https://nominatim.openstreetmap.org',
+    connectTimeout: const Duration(seconds: 5),
+    receiveTimeout: const Duration(seconds: 5),
+    headers: {'User-Agent': 'SecureGuardMobile/1.0'},
+  ));
+
+  @override
+  void initState() {
+    super.initState();
+    _pinLocation = LatLng(widget.initialLat, widget.initialLng);
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String query) {
+    _debounce?.cancel();
+    if (query.trim().length < 2) {
+      setState(() {
+        _searchResults = [];
+        _showResults = false;
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 500), () {
+      _searchPlaces(query.trim());
+    });
+  }
+
+  Future<void> _searchPlaces(String query) async {
+    setState(() => _isSearching = true);
+    try {
+      final response = await _nominatimDio.get('/search', queryParameters: {
+        'q': query,
+        'format': 'json',
+        'limit': '5',
+        'countrycodes': 'th',
+        'accept-language': 'th,en',
+      });
+      final List<dynamic> data = response.data is String
+          ? jsonDecode(response.data as String)
+          : response.data;
+      setState(() {
+        _searchResults = data.cast<Map<String, dynamic>>();
+        _showResults = _searchResults.isNotEmpty;
+        _isSearching = false;
+      });
+    } catch (_) {
+      setState(() => _isSearching = false);
+    }
+  }
+
+  void _selectSearchResult(Map<String, dynamic> result) {
+    final lat = double.tryParse(result['lat']?.toString() ?? '');
+    final lng = double.tryParse(result['lon']?.toString() ?? '');
+    if (lat == null || lng == null) return;
+
+    final point = LatLng(lat, lng);
+    setState(() {
+      _pinLocation = point;
+      _showResults = false;
+      _searchController.text = result['display_name'] ?? '';
+    });
+    _searchFocus.unfocus();
+    _mapController.move(point, 16);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isThai = LanguageProvider.of(context).isThai;
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          // Handle bar
+          const SizedBox(height: 12),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: AppColors.border,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          // Title
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.location_on_rounded,
+                    color: AppColors.primary, size: 22),
+                const SizedBox(width: 8),
+                Text(
+                  isThai ? 'ปักหมุดจากแผนที่' : 'Pin Location on Map',
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: const Icon(Icons.close_rounded,
+                      color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          // Search bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _searchController,
+              focusNode: _searchFocus,
+              onChanged: _onSearchChanged,
+              style: GoogleFonts.inter(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: isThai ? 'ค้นหาสถานที่...' : 'Search places...',
+                hintStyle: GoogleFonts.inter(
+                    fontSize: 14, color: AppColors.textSecondary),
+                prefixIcon: const Icon(Icons.search_rounded,
+                    size: 20, color: AppColors.textSecondary),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? GestureDetector(
+                        onTap: () {
+                          _searchController.clear();
+                          setState(() {
+                            _searchResults = [];
+                            _showResults = false;
+                          });
+                        },
+                        child: const Icon(Icons.close_rounded,
+                            size: 18, color: AppColors.textSecondary),
+                      )
+                    : _isSearching
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: AppColors.primary),
+                            ),
+                          )
+                        : null,
+                filled: true,
+                fillColor: const Color(0xFFF3F4F6),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide:
+                      const BorderSide(color: AppColors.primary, width: 1.5),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Coordinate display
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.pin_drop_rounded,
+                      size: 16, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_pinLocation.latitude.toStringAsFixed(6)}, ${_pinLocation.longitude.toStringAsFixed(6)}',
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Map + search results overlay
+          Expanded(
+            child: Stack(
+              children: [
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: _pinLocation,
+                    initialZoom: 15,
+                    onTap: (_, point) {
+                      setState(() {
+                        _pinLocation = point;
+                        _showResults = false;
+                      });
+                      _searchFocus.unfocus();
+                    },
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.secureguard.mobile',
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: _pinLocation,
+                          width: 40,
+                          height: 40,
+                          child: const Icon(
+                            Icons.location_on,
+                            color: Colors.red,
+                            size: 40,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                // Search results dropdown
+                if (_showResults)
+                  Positioned(
+                    top: 0,
+                    left: 16,
+                    right: 16,
+                    child: Material(
+                      elevation: 4,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        constraints: const BoxConstraints(maxHeight: 240),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          itemCount: _searchResults.length,
+                          separatorBuilder: (_, _) =>
+                              const Divider(height: 1, color: AppColors.border),
+                          itemBuilder: (context, index) {
+                            final r = _searchResults[index];
+                            return ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.place_rounded,
+                                  size: 20, color: AppColors.primary),
+                              title: Text(
+                                r['display_name'] ?? '',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.inter(fontSize: 13),
+                              ),
+                              onTap: () => _selectSearchResult(r),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Confirm button
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SafeArea(
+              top: false,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context, _pinLocation),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+                child: Text(
+                  isThai ? 'ยืนยันตำแหน่ง' : 'Confirm Location',
+                  style: GoogleFonts.inter(
+                      fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

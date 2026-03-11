@@ -413,7 +413,9 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
               ElevatedButton(
                 onPressed: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const BookingScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => BookingScreen(serviceRate: rate),
+                  ),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,

@@ -9,7 +9,7 @@ import '../profile_settings_screen.dart';
 import '../ratings_reviews_screen.dart';
 import '../work_history_screen.dart';
 import '../contact_support_screen.dart';
-import '../../phone_input_screen.dart';
+
 
 class GuardProfileTab extends StatelessWidget {
   const GuardProfileTab({super.key});
@@ -18,25 +18,55 @@ class GuardProfileTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = GuardProfileStrings(isThai: isThai);
-    final topPadding = MediaQuery.of(context).padding.top;
-
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F7),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(height: topPadding + 8),
-            // Large title
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Text(
-                strings.profileHeader,
-                style: GoogleFonts.inter(
-                  fontSize: 34,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black,
-                ),
+            // SecureGuard green header
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
+              decoration: const BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.shield_rounded,
+                        color: Colors.white, size: 24),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'SecureGuard',
+                          style: GoogleFonts.inter(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Text(
+                          strings.profileHeader,
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: Colors.white.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
@@ -78,10 +108,6 @@ class GuardProfileTab extends StatelessWidget {
                 onTap: () => _navigateTo(context, const ContactSupportScreen()),
               ),
             ]),
-            const SizedBox(height: 24),
-
-            // Logout
-            _buildLogoutButton(context, strings),
             const SizedBox(height: 40),
           ],
         ),
@@ -257,39 +283,6 @@ class GuardProfileTab extends StatelessWidget {
     );
   }
 
-  Widget _buildLogoutButton(BuildContext context, GuardProfileStrings strings) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: GestureDetector(
-        onTap: () async {
-          await context.read<AuthProvider>().logout();
-          if (!context.mounted) return;
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
-            (route) => false,
-          );
-        },
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Center(
-            child: Text(
-              strings.menuLogout,
-              style: GoogleFonts.inter(
-                fontSize: 16,
-                color: const Color(0xFFFF3B30),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   void _navigateTo(BuildContext context, Widget screen) {
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));

@@ -36,16 +36,15 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
 
     return Scaffold(
       backgroundColor: AppColors.surface,
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _onRefresh,
-          color: AppColors.primary,
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(strings),
+      body: RefreshIndicator(
+        onRefresh: _onRefresh,
+        color: AppColors.primary,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeader(strings),
                 Padding(
                   padding: const EdgeInsets.all(20.0),
                   child: Column(
@@ -59,8 +58,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                     ],
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
@@ -69,71 +67,62 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
 
   Widget _buildHeader(GuardHomeStrings strings) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
       decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-          bottomLeft: Radius.circular(24),
-          bottomRight: Radius.circular(24),
-        ),
+        color: AppColors.primary,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              IconButton(
-                onPressed: () {
-                  final phone = context.read<AuthProvider>().phone;
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => RoleSelectionScreen(phone: phone),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-                color: AppColors.textPrimary,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
+          IconButton(
+            onPressed: () {
+              final phone = context.read<AuthProvider>().phone;
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => RoleSelectionScreen(phone: phone),
                 ),
-                child: const Icon(Icons.person, color: AppColors.primary),
-              ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    strings.greeting,
-                    style: GoogleFonts.inter(
-                      fontSize: 14,
-                      color: AppColors.textSecondary,
-                    ),
+              );
+            },
+            icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: Colors.white, size: 20),
+          ),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.shield_rounded,
+                color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'SecureGuard',
+                  style: GoogleFonts.inter(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
                   ),
-                  Text(
-                    context.watch<AuthProvider>().fullName ?? strings.sampleGuardName,
-                    style: GoogleFonts.inter(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                    ),
+                ),
+                Text(
+                  '${strings.greeting}, ${context.watch<AuthProvider>().fullName ?? strings.sampleGuardName}',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: Colors.white.withValues(alpha: 0.9),
                   ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
           IconButton(
             onPressed: () {},
-            icon: const Icon(Icons.notifications_none_rounded),
-            color: AppColors.textPrimary,
+            icon: const Icon(Icons.notifications_none_rounded,
+                color: Colors.white),
           ),
         ],
       ),

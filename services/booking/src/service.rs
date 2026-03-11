@@ -6,11 +6,12 @@ use uuid::Uuid;
 use shared::error::AppError;
 
 use crate::models::{
-    AssignGuardDto, AssignmentResponse, AssignmentRow, AssignmentStatus, CreateRequestDto,
-    CreateServiceRateDto, DailyEarning, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
-    GuardJobRow, GuardRatingsSummary, GuardRequestResponse, GuardRequestRow, ListRequestsQuery,
-    RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate, UpdateAssignmentStatusDto,
-    UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse, WorkHistoryRow,
+    AssignGuardDto, AssignmentResponse, AssignmentRow, AssignmentStatus, AvailableGuardResponse,
+    AvailableGuardRow, AvailableGuardsQuery, CreateRequestDto, CreateServiceRateDto, DailyEarning,
+    GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary,
+    GuardRequestResponse, GuardRequestRow, ListRequestsQuery, RatingSummaryRow, RequestStatus,
+    ReviewItem, ReviewRow, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto,
+    WorkHistoryItem, WorkHistoryResponse, WorkHistoryRow,
 };
 
 // =============================================================================
@@ -1065,4 +1066,69 @@ pub async fn delete_service_rate(db: &PgPool, id: Uuid) -> Result<(), AppError> 
     }
 
     Ok(())
+}
+
+// =============================================================================
+// Available Guards (customer-facing guard discovery)
+// =============================================================================
+
+pub async fn list_available_guards(
+    db: &PgPool,
+    query: AvailableGuardsQuery,
+) -> Result<Vec<AvailableGuardResponse>, AppError> {
+    let radius_km = query.radius_km.unwrap_or(50.0).min(200.0);
+    let limit = query.limit.unwrap_or(20).min(50);
+    let offset = query.offset.unwrap_or(0);
+
+    let rows = sqlx::query_as::<_, AvailableGuardRow>(
+        r#"
+        SELECT
+            u.id,
+            u.full_name,
+            u.avatar_url,
+            gp.years_of_experience AS experience_years,
+            gl.lat,
+            gl.lng,
+            (6371.0 * acos(
+                LEAST(1.0, GREATEST(-1.0,
+                    cos(radians($1::float8)) * cos(radians(gl.lat)) *
+                    cos(radians(gl.lng) - radians($2::float8)) +
+                    sin(radians($1::float8)) * sin(radians(gl.lat))
+                ))
+            )) AS distance_km,
+            gl.recorded_at AS last_seen_at,
+            COALESCE(jc.cnt, 0) AS completed_jobs
+        FROM auth.users u
+        INNER JOIN tracking.guard_locations gl ON gl.guard_id = u.id
+        LEFT JOIN auth.guard_profiles gp ON gp.user_id = u.id
+        LEFT JOIN (
+            SELECT a.guard_id, COUNT(*) AS cnt
+            FROM booking.assignments a
+            WHERE a.status = 'completed'
+            GROUP BY a.guard_id
+        ) jc ON jc.guard_id = u.id
+        WHERE u.role = 'guard'
+          AND u.is_active = true
+          AND u.approval_status = 'approved'
+          AND gl.recorded_at > NOW() - INTERVAL '30 minutes'
+          AND (6371.0 * acos(
+              LEAST(1.0, GREATEST(-1.0,
+                  cos(radians($1::float8)) * cos(radians(gl.lat)) *
+                  cos(radians(gl.lng) - radians($2::float8)) +
+                  sin(radians($1::float8)) * sin(radians(gl.lat))
+              ))
+          )) <= $3::float8
+        ORDER BY distance_km ASC
+        LIMIT $4 OFFSET $5
+        "#,
+    )
+    .bind(query.lat)
+    .bind(query.lng)
+    .bind(radius_km)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows.into_iter().map(AvailableGuardResponse::from).collect())
 }

@@ -51,6 +51,9 @@ dependencies:
   # State management
   provider: ^6.1.5
 
+  # Date/number formatting
+  intl: ^0.20.2
+
   # Image picker (for document/photo uploads)
   image_picker: ^1.1.2
 

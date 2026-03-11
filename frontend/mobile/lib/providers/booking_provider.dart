@@ -212,4 +212,45 @@ class BookingProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  // =========================================================================
+  // Available Guards (customer guard discovery)
+  // =========================================================================
+
+  List<Map<String, dynamic>> _availableGuards = [];
+  List<Map<String, dynamic>> get availableGuards => _availableGuards;
+
+  bool _isLoadingGuards = false;
+  bool get isLoadingGuards => _isLoadingGuards;
+
+  Future<void> fetchAvailableGuards(double lat, double lng) async {
+    _isLoadingGuards = true;
+    _error = null;
+    notifyListeners();
+    try {
+      _availableGuards = await _service.listAvailableGuards(
+        lat: lat,
+        lng: lng,
+      );
+    } catch (e) {
+      _error = e.toString();
+    }
+    _isLoadingGuards = false;
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> assignGuardToRequest(
+    String requestId,
+    String guardId,
+  ) async {
+    _error = null;
+    try {
+      final result = await _service.assignGuardToRequest(requestId, guardId);
+      return result;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
 }
