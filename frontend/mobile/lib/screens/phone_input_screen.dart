@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -200,19 +199,22 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                   ),
                   const SizedBox(height: 32),
                   // Phone input card
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(24),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                      child: Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: AppColors.background.withValues(alpha: 0.7),
-                          borderRadius: BorderRadius.circular(24),
-                          border: Border.all(
-                            color: _roleColor.withValues(alpha: 0.2),
-                          ),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: _roleColor.withValues(alpha: 0.2),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 15,
+                          offset: const Offset(0, 5),
                         ),
+                      ],
+                    ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -315,8 +317,6 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                             ),
                           ],
                         ),
-                      ),
-                    ),
                   ),
                   const SizedBox(height: 14),
                   // Info text

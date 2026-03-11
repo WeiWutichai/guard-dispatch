@@ -150,23 +150,25 @@ class _CustomerRegistrationScreenState
     final isThai = LanguageProvider.of(context).isThai;
     final strings = CustomerRegistrationStrings(isThai: isThai);
 
-    return Scaffold(
-      backgroundColor: AppColors.surface,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.textPrimary, size: 20),
-          onPressed: () {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => RoleSelectionScreen(phone: widget.phone),
-              ),
-            );
-          },
-        ),
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: AppColors.surface,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: AppColors.textPrimary, size: 20),
+            onPressed: () {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => RoleSelectionScreen(phone: widget.phone),
+                ),
+              );
+            },
+          ),
         title: Text(
           strings.appBarTitle,
           style: GoogleFonts.inter(
@@ -360,6 +362,7 @@ class _CustomerRegistrationScreenState
             ),
           ],
         ),
+      ),
       ),
     );
   }

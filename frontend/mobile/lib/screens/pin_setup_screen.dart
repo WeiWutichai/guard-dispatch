@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -355,22 +354,25 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
         children: [
           const SizedBox(height: 20),
           // Fingerprint icon in glassmorphism card
-          ClipRRect(
-            borderRadius: BorderRadius.circular(28),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 36,
-                  horizontal: 32,
+          Container(
+            padding: const EdgeInsets.symmetric(
+              vertical: 36,
+              horizontal: 32,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.2),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 15,
+                  offset: const Offset(0, 5),
                 ),
-                decoration: BoxDecoration(
-                  color: AppColors.background.withValues(alpha: 0.7),
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(
-                    color: AppColors.primary.withValues(alpha: 0.2),
-                  ),
-                ),
+              ],
+            ),
                 child: Column(
                   children: [
                     Container(
@@ -397,8 +399,6 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
                     ),
                   ],
                 ),
-              ),
-            ),
           ),
           const Spacer(),
           // Buttons

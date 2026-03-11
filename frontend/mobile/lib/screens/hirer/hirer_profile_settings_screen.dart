@@ -30,7 +30,7 @@ class _HirerProfileSettingsScreenState
   void initState() {
     super.initState();
     final auth = context.read<AuthProvider>();
-    _nameController.text = auth.fullName ?? '';
+    _nameController.text = auth.customerFullName ?? auth.fullName ?? '';
     _phoneController.text = auth.phone ?? '';
     _companyController.text = auth.companyName ?? '';
     _addressController.text = auth.customerAddress ?? '';

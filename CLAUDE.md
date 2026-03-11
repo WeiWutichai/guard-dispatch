@@ -101,7 +101,7 @@ nginx-gateway (port 80/443 — จุดเข้าเดียว)
 ```
 PostgreSQL: guard_dispatch_db
 ├── schema: auth         (users, sessions, roles, otp_codes, guard_profiles, customer_profiles)
-├── schema: booking      (requests, assignments, status)
+├── schema: booking      (requests, assignments, status, service_rates)
 ├── schema: tracking     (locations, history)
 ├── schema: notification (logs, templates)
 ├── schema: chat         (messages, attachments metadata)
@@ -156,6 +156,27 @@ CREATE TABLE chat.attachments (
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+
+### Service Rates Table
+```sql
+CREATE TABLE booking.service_rates (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        TEXT NOT NULL,
+  description TEXT,
+  min_price   DECIMAL(10,2) NOT NULL,
+  max_price   DECIMAL(10,2) NOT NULL,
+  base_fee    DECIMAL(10,2) NOT NULL,
+  min_hours   INTEGER NOT NULL DEFAULT 6,
+  notes       TEXT,
+  is_active   BOOLEAN NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_service_rates_active ON booking.service_rates(is_active);
+```
+> **Soft delete:** `is_active = false` instead of actual deletion. All public queries filter `WHERE is_active = true`.
+> **Price validation:** `min_price <= max_price`, all prices >= 0, name <= 200 chars — enforced in Rust service layer.
+> **Decimal type:** Uses `rust_decimal::Decimal` in Rust — utoipa requires `#[schema(value_type = f64)]` annotation.
 
 ---
 
@@ -389,10 +410,12 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   ├── main.dart               ← Entry point (MultiProvider wrap)
 │       │   ├── providers/
 │       │   │   ├── auth_provider.dart    ← Centralized auth state (Provider)
+│       │   │   ├── booking_provider.dart ← Booking/pricing/guard jobs state (Provider)
 │       │   │   └── tracking_provider.dart ← GPS tracking on/off state (Provider)
 │       │   ├── services/
 │       │   │   ├── api_client.dart      ← Dio HTTP client + JWT interceptor
 │       │   │   ├── auth_service.dart    ← Token storage + login/OTP
+│       │   │   ├── booking_service.dart ← Booking/pricing/guard API calls
 │       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
 │       │   │   ├── tracking_service.dart  ← WebSocket GPS streaming to backend
 │       │   │   └── language_service.dart
@@ -445,6 +468,15 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 ### Customers Page (/customers)
 - **Data Source:** `authApi.listCustomerApplicants({ approval_status: 'approved' })` — queries `customer_profiles` with approved status (NOT `listUsers` with `role='customer'` — guards who added customer profiles keep `role='guard'` in `auth.users`)
 - **Modal:** fetches `getCustomerProfile()` → shows full_name, contact_phone, email, company_name, address
+
+### Pricing Page (/pricing)
+- **Data Source:** `pricingApi.listServiceRates()` → `GET /booking/pricing/services` (public, no JWT)
+- **API Object:** `pricingApi` in `lib/api.ts` — `listServiceRates()`, `createServiceRate()`, `updateServiceRate()`, `deleteServiceRate()`
+- **Type:** `ServiceRateResponse` in `lib/api.ts` — maps to `booking.service_rates` table fields (snake_case)
+- **Local Type:** `ServiceRate` (camelCase) in page — mapped via `toServiceRate()` helper
+- **Tabs:** 2 tabs — "บริการ" (Services) manages service rates CRUD; "กฎราคา" (Price Rules) placeholder
+- **CRUD:** Admin can add/edit/delete service rates — delete calls `pricingApi.deleteServiceRate()` then reloads list (not optimistic)
+- **Loading:** Shows `Loader2` spinner in services tab while loading
 
 ### Map Page Architecture (/map)
 - **Auth Gate:** `useAuth()` — admin + customer only (guards see unauthorized screen)
@@ -595,8 +627,9 @@ RegistrationPendingScreen
 - iOS Keychain persists across app reinstalls — `isPinSet` อาจเป็น `true` แม้หลัง uninstall
 - `main.dart` ต้องเช็ค `auth.status == AuthStatus.authenticated` **ก่อน** `pinService.isPinSet`
 - PinLockScreen แสดงเฉพาะ authenticated users เท่านั้น — fresh install/unregistered → PhoneInputScreen
-- **Post-PIN navigation:** `_navigateToApp()` → `RoleSelectionScreen(phone)` (ไม่ใช่ dashboard ตรง) — ให้ user เลือก role ทุกครั้งหลัง unlock
-- **RoleSelectionScreen สำหรับ authenticated users:** ถ้า `auth.status == authenticated` → tap role → `pushReplacement` ไป dashboard ทันที (ไม่ผ่าน registration flow)
+- **Post-PIN navigation:** `_navigateToApp()` async → uses `auth.phone ?? AuthService.getStoredPhone()` for phone fallback → fire-and-forget `auth.fetchProfile()` if `fullName == null` (ห้าม await — ป้องกัน freeze) → `RoleSelectionScreen(phone)` (ไม่ใช่ dashboard ตรง)
+- **RoleSelectionScreen สำหรับ authenticated users:** ถ้า `auth.status == authenticated` → retries `fetchProfile()` if `auth.phone == null` → tap role → `pushReplacement` ไป dashboard ทันที (ไม่ผ่าน registration flow)
+- **PopScope(canPop: false):** Root-level screens (RoleSelectionScreen, HirerDashboardScreen, GuardDashboardScreen, CustomerRegistrationScreen) ต้อง wrap ด้วย `PopScope(canPop: false)` เพื่อป้องกัน iOS swipe-back gesture ทำ pop() บน single-route stack → จอดำ
 
 **Auth Service OTP & Profile Endpoints (main.rs):**
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
@@ -611,7 +644,7 @@ RegistrationPendingScreen
 - `GET /admin/customer-profile/:user_id` → `handlers::get_customer_profile` (admin JWT) — JOIN users + customer_profiles
 - `GET /admin/customer-applicants` → `handlers::list_customer_applicants` (admin JWT) — queries `customer_profiles` JOIN `auth.users`, filters by `customer_profiles.approval_status`. Returns `PaginatedUsers` with `role` forced to `"customer"`.
 - `PATCH /admin/customer-profile/:user_id/approval` → `handlers::update_customer_approval` (admin JWT) — updates `customer_profiles.approval_status` + `invalidate_user_cache()`
-- `GET /me` → `handlers::get_me` (JWT required) — returns `UserResponse { id, full_name, phone, email, role, avatar_url, approval_status, customer_approval_status }`. Used by `AuthProvider.fetchProfile()` for dashboard real data.
+- `GET /me` → `handlers::get_me` (JWT required) — returns `UserResponse { id, full_name, phone, email, role, avatar_url, approval_status, customer_approval_status, customer_full_name }`. `full_name` = guard name from `auth.users`, `customer_full_name` = customer name from `customer_profiles` (separate, never merged). Used by `AuthProvider.fetchProfile()` for dashboard real data.
 
 **Shared Modules:**
 - `shared::otp` — `OtpConfig`, `validate_thai_phone()`, `generate_otp()`, `to_international_format()`, `format_otp_message()`
@@ -624,10 +657,36 @@ RegistrationPendingScreen
 - `service::validate_profile_token(expected_purpose)`: async, takes redis + expected_purpose param — decodes JWT with purpose check, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
 - `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles`; then **SET role='guard'** + `invalidate_user_cache()` — role set only after successful save (atomic, no partial state on error)
 - `service::submit_customer_profile()`: validates address not empty; UPSERTs `auth.customer_profiles` with `approval_status='pending'`; then **SET role='customer' WHERE role IS NULL** + `invalidate_user_cache()` — guards keep their role if they also register as customer
+- `service::get_profile()`: LEFT JOIN `auth.users` + `customer_profiles` — returns `UserResponse` with **separated** names: `full_name` from `auth.users` (guard name), `customer_full_name` from `customer_profiles.full_name` (customer name, `skip_serializing_if None`). ห้าม merge — ถ้า customer has different name it must remain separate.
 - `service::get_customer_profile()`: JOIN `auth.users` + `auth.customer_profiles` — returns `CustomerProfileResponse` (uses `cp.approval_status` not `u.approval_status`)
 - `service::list_customer_applicants()`: JOIN `customer_profiles` + `auth.users`, filters by `cp.approval_status`, returns `PaginatedUsers` with `role` forced to `Some(UserRole::Customer)`
 - `service::update_customer_approval_status()`: UPDATE `customer_profiles.approval_status` + `invalidate_user_cache()`
 - file_key format for guard docs: `profiles/guard/{user_id}/{doc_type}.{ext}`
+
+**Booking Service — Pricing Endpoints (main.rs):**
+- `GET /pricing/services` → `handlers::list_service_rates` (public, no JWT) — returns active rates, `LIMIT 100`
+- `GET /pricing/services/{id}` → `handlers::get_service_rate` (public, no JWT) — returns single active rate (filters `is_active = true`)
+- `POST /pricing/services` → `handlers::create_service_rate` (admin JWT) — validates: name not empty, name ≤ 200 chars, prices ≥ 0, min_price ≤ max_price
+- `PUT /pricing/services/{id}` → `handlers::update_service_rate` (admin JWT) — partial update via COALESCE; merges with existing values before validating prices
+- `DELETE /pricing/services/{id}` → `handlers::delete_service_rate` (admin JWT) — soft delete (`is_active = false`), returns 204
+- **Validation:** `validate_prices()` helper checks all 3 price fields ≥ 0 and min_price ≤ max_price; applied on both create and update (with merged values)
+- **Decimal:** Uses `rust_decimal::Decimal` — utoipa annotation `#[schema(value_type = f64)]` required for OpenAPI compatibility
+
+**Booking Service — Request & Assignment Endpoints (main.rs):**
+- `POST /requests` → `handlers::create_request` (JWT) — customer creates guard request
+- `GET /requests` → `handlers::list_requests` (JWT) — list requests (customer sees own, admin sees all)
+- `GET /requests/{id}` → `handlers::get_request` (JWT) — single request detail (owner/admin/assigned guard)
+- `PUT /requests/{id}/cancel` → `handlers::cancel_request` (JWT) — cancel pending request (owner/admin)
+- `POST /requests/{id}/assign` → `handlers::assign_guard` (admin JWT) — assign guard to request
+- `GET /requests/{id}/assignments` → `handlers::get_assignments` (JWT) — list assignments for request
+- `PUT /assignments/{id}/status` → `handlers::update_assignment_status` (JWT) — guard updates own assignment status
+
+**Booking Service — Guard Endpoints (main.rs):**
+- `GET /guard/dashboard` → `handlers::guard_dashboard` (guard JWT)
+- `GET /guard/jobs` → `handlers::guard_jobs` (guard JWT) — query params: `status`, `limit`, `offset`
+- `GET /guard/earnings` → `handlers::guard_earnings` (guard JWT)
+- `GET /guard/work-history` → `handlers::guard_work_history` (guard JWT) — query params: `status`, `limit`, `offset`
+- `GET /guard/ratings` → `handlers::guard_ratings` (guard JWT)
 
 **Flutter Mobile:**
 - `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for both guard & customer), `reissueProfileToken(phone, {role})` (optional role param: `'guard'`/`'customer'`), `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`, `submitCustomerProfile({profileToken, address, companyName?})`, `loginWithPhone(phone, pinHash)`, `fetchProfile()`
@@ -635,16 +694,17 @@ RegistrationPendingScreen
   - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
   - `updateRole()` calls `POST /auth/profile/role`, updates local pending state with role
   - `loginWithPhone(phone, pinHash)` calls `POST /auth/login/phone` → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval.
-  - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_avatarUrl`, `_customerApprovalStatus`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
-  - `checkAuthStatus()`: checks stored access token **first** (tokens take priority over stale pending flag) → clears any stale `pendingApproval` flag → `fetchProfile()` → else checks `isPendingApproval()` → else unauthenticated
-  - Profile fields: `fullName`, `phone`, `avatarUrl`, `customerApprovalStatus` (getters) — used by dashboard screens instead of hardcoded mock data
+  - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_avatarUrl`, `_customerApprovalStatus`, `_customerFullName`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
+  - `checkAuthStatus()`: checks stored access token **first** (tokens take priority over stale pending flag) → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout/backend down should not log out user) → else checks `isPendingApproval()` → else unauthenticated. Only falls back to unauthenticated when tokens are actually cleared by interceptor (401 + refresh failure).
+  - Profile fields: `fullName`, `phone`, `avatarUrl`, `customerApprovalStatus`, `customerFullName` (getters) — used by dashboard screens instead of hardcoded mock data
+  - `customerFullName`: `String?` — customer display name from `customer_profiles.full_name` (separate from guard `fullName`). Hirer screens use `customerFullName ?? fullName` for display.
   - `customerApprovalStatus`: `String?` — `'pending'` | `'approved'` | `'rejected'` | `null` (no customer profile). Parsed from `GET /auth/me` response `customer_approval_status` field. Used by `RoleSelectionScreen` and `HirerDashboardScreen` for routing.
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
 - `AuthService`: `storeTokens()`, `storePhone()`, `getStoredPhone()`, `storeRole()`, `getRole()`, `clearRole()`, `markRegistered()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
   - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only; also stores `phone` and `date_of_birth` (ISO format) for edit flow
   - `getPendingProfile()` retrieves stored profile for pre-filling edit form
-- `ApiClient`: skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/profile/customer`, `/auth/login/phone`
+- `ApiClient`: auto-detects platform for default base URL — iOS → `http://localhost:80`, Android → `http://10.0.2.2:80` (override via `--dart-define=API_URL=...`). Skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/profile/customer`, `/auth/login/phone`
 - `main.dart` `home`: `Consumer<AuthProvider>` — shows loading spinner when `status == unknown` (async auth check in progress), routes to `RegistrationPendingScreen` when `status == pendingApproval`, `PinLockScreen` when authenticated + PIN set, else `PhoneInputScreen`
 - `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed). **Returning approved user handling:** if `registerWithOtp` returns "Please log in instead" (Conflict), auto-tries `loginWithPhone(phone, pinHash)` with the PIN just entered — if success → RoleSelectionScreen (authenticated → dashboard); if fail → `PinLoginScreen(phone)` for retry with original PIN.
 - `PinLoginScreen`: simple PIN entry screen for returning approved users whose tokens were cleared. Calls `loginWithPhone(phone, hashPin(pin))` → success → RoleSelectionScreen (authenticated → dashboard). Shows "บัญชีได้รับอนุมัติแล้ว" badge. i18n via `PinLoginStrings`.
@@ -656,7 +716,18 @@ RegistrationPendingScreen
 - **Dashboard real data:** After login, dashboard screens use `AuthProvider` profile fields (`fullName`, `phone`, `avatarUrl`) from `GET /auth/me` instead of hardcoded mock data:
   - `GuardHomeTab`: greeting uses `authProvider.fullName ?? strings.sampleGuardName`; registration check uses `authProvider.isAuthenticated` (not `AuthService.isRegistered()`); status toggle wired to `TrackingProvider` (not local `_isReady` state) — shows connecting/online/offline + GPS accuracy
   - `GuardProfileTab`: real name, formatted phone as ID (`086-320-8235`), avatar from URL or person icon fallback, "ยืนยันแล้ว" badge only (no "ยังไม่ได้ลงทะเบียน")
-  - `HirerProfileScreen`: real name, formatted phone as ID, avatar icon fallback
+  - `HirerProfileScreen`: uses `auth.customerFullName ?? auth.fullName` for customer display name, formatted phone as ID, avatar icon fallback
+  - `ServiceSelectionScreen`: loads service rates from API via `BookingProvider.fetchServiceRates()` → dynamic cards with icon selection based on service name keywords. Back button uses `pushAndRemoveUntil` → `RoleSelectionScreen(phone)` (ไม่ใช่ `Navigator.pop()` ซึ่งจะทำให้จอดำ)
+- `BookingProvider` (`booking_provider.dart`): `ChangeNotifier` for booking/guard state
+  - Guard: `fetchDashboard()`, `fetchJobs()`, `fetchEarnings()`, `updateAssignmentStatus()`, `fetchWorkHistory()`, `fetchRatings()`
+  - Customer: `fetchMyRequests()`, `createRequest()`, `cancelRequest()`
+  - Pricing: `fetchServiceRates()` — uses separate `_isLoadingRates` flag (not shared `_isLoading`)
+  - State: `serviceRates` (list), `myRequests` (list), `dashboard`, `currentJobs`, `completedJobs`, `earnings`, `workHistory`, `ratings`
+- `BookingService` (`booking_service.dart`): Dio-based HTTP client for booking API
+  - Guard: `getGuardDashboard()`, `getGuardJobs()`, `getGuardEarnings()`, `updateAssignmentStatus()`, `getGuardWorkHistory()`, `getGuardRatings()`
+  - Customer: `createRequest()`, `listMyRequests()`, `getRequest()`, `cancelRequest()`, `getAssignments()`
+  - Pricing: `listServiceRates()` → `GET /booking/pricing/services` — public, returns `List<Map<String, dynamic>>`
+- `main.dart`: `ChangeNotifierProvider(create: (_) => BookingProvider(BookingService(apiClient)))` registered in `MultiProvider`
 
 **GPS Tracking (Mobile → Backend):**
 - **TrackingService** (`tracking_service.dart`): WebSocket + GPS streaming
@@ -904,6 +975,11 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม reuse profile_token — ต้อง enforce single-use ด้วย `jti` + Redis `GETDEL` เหมือน phone_verified_token
 - ❌ ห้ามออก access_token/refresh_token หรือ INSERT session ใน `register_with_otp()` — endpoint ต้อง return HTTP 202 พร้อม `RegisterWithOtpResponse` เท่านั้น (ไม่มี token)
 - ❌ ห้ามใช้ plain `INSERT INTO auth.users` ใน `register_with_otp()` — **ต้องใช้ UPSERT** `ON CONFLICT (phone) DO UPDATE SET password_hash=EXCLUDED.password_hash, full_name=EXCLUDED.full_name, approval_status='pending', updated_at=NOW() WHERE auth.users.approval_status='pending'` + `fetch_optional` → None = phone registered with non-pending status → `AppError::Conflict("Please log in instead")`
+- ❌ ห้าม accept ราคาติดลบใน service rates — `validate_prices()` ต้องตรวจ `min_price >= 0`, `max_price >= 0`, `base_fee >= 0`
+- ❌ ห้าม accept `min_price > max_price` — ต้อง validate ทั้ง create และ update (update ต้อง merge กับค่าเดิมก่อน validate)
+- ❌ ห้าม return inactive service rates จาก public GET endpoints — ต้อง filter `WHERE is_active = true` เสมอ
+- ❌ ห้ามใช้ shared `_isLoading` flag ใน `BookingProvider` สำหรับ pricing — ต้องใช้ `_isLoadingRates` แยก (ป้องกัน cross-interference กับ guard/customer loading)
+- ❌ ห้าม optimistic delete ใน web admin pricing — ต้อง reload list จาก API หลัง delete (`loadServiceRates()`)
 - ❌ ห้าม upload ไฟล์ไปยัง S3/MinIO แบบ sequential loop — ใช้ `tokio::task::JoinSet` เพื่อ parallel upload เสมอ
 - ❌ ห้าม validate magic bytes ก่อนตรวจ file size — ต้องตรวจ size ก่อนเสมอ (ป้องกัน large allocation ก่อน reject)
 - ❌ ห้าม cast `response.data['field'] as String?` — ใช้ `raw is String ? raw : null` เพื่อป้องกัน crash
@@ -918,6 +994,13 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม navigate จาก `OtpVerificationScreen` ไป `PinSetupScreen` ถ้า `pinService.isPinSet == true` — returning user ต้อง skip PinSetup → ลอง registerWithOtp(storedPinHash) → auto-login หรือ PinLoginScreen
 - ❌ ห้ามแสดง `PinLockScreen` โดยตรวจเฉพาะ `pinService.isPinSet` — ต้องตรวจ `auth.status == AuthStatus.authenticated` ก่อนเสมอ (iOS Keychain persist ข้าม reinstall)
 - ❌ ห้าม navigate จาก `PinLockScreen` ไป dashboard ตรง — ต้องไป `RoleSelectionScreen(phone)` เสมอ เพื่อให้ user เลือก role (guard/customer) ทุกครั้งหลัง unlock
+- ❌ ห้าม `await fetchProfile()` ใน `PinLockScreen._navigateToApp()` — ต้อง fire-and-forget เท่านั้น (ป้องกัน 10s+ freeze ถ้า backend ช้า/ล่ม)
+- ❌ ห้าม fallback เป็น `unauthenticated` ใน `checkAuthStatus()` เมื่อ `fetchProfile()` fail แต่ tokens ยังอยู่ — ต้อง treat เป็น `authenticated` (network timeout ≠ invalid tokens)
+- ❌ ห้าม merge `customer_profiles.full_name` เข้ากับ `users.full_name` ใน backend `get_profile()` — ต้อง return แยกเป็น `full_name` (guard) + `customer_full_name` (customer)
+- ❌ ห้ามแสดง `auth.fullName` ตรงใน Hirer screens — ต้องใช้ `auth.customerFullName ?? auth.fullName` เพื่อแสดงชื่อ customer ที่ถูกต้อง
+- ❌ ห้าม root-level screens (RoleSelectionScreen, HirerDashboardScreen, GuardDashboardScreen, CustomerRegistrationScreen) ไม่มี `PopScope(canPop: false)` — ต้อง wrap เสมอเพื่อป้องกัน iOS swipe-back black screen
+- ❌ ห้ามใช้ `Navigator.pop()` ใน screens ที่ navigate มาด้วย `pushAndRemoveUntil` — ต้องใช้ `pushAndRemoveUntil` หรือ `pushReplacement` ไปหน้าที่ถูกต้องแทน (เช่น ServiceSelectionScreen back → RoleSelectionScreen)
+- ❌ ห้ามใช้ `http://10.0.2.2` เป็น default URL สำหรับ iOS Simulator — ต้อง auto-detect ด้วย `Platform.isIOS` → `localhost`, `Platform.isAndroid` → `10.0.2.2`
 - ❌ ห้ามบังคับ authenticated user ลงทะเบียนใหม่ใน `RoleSelectionScreen._onRoleTap()` — ถ้า `auth.status == authenticated` ต้องตรวจ `customerApprovalStatus` ก่อน route (approved→dashboard, pending→pending screen, null→registration)
 - ❌ ห้ามใช้ `auth.role != 'customer'` เป็น gate ของ `HirerDashboardScreen` — ต้องใช้ `auth.customerApprovalStatus != 'approved'` เพราะ guard ที่เพิ่ม customer profile ยังมี `role='guard'` ใน `auth.users`
 - ❌ ห้ามใช้ `authApi.listUsers({ role: 'customer' })` สำหรับหน้า customers — ต้องใช้ `authApi.listCustomerApplicants({ approval_status: 'approved' })` เพราะ guard ที่เพิ่ม customer profile ไม่มี `role='customer'` ใน `auth.users`

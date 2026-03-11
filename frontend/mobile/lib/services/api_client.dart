@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'auth_service.dart';
 
@@ -5,15 +7,17 @@ import 'auth_service.dart';
 ///
 /// Reads the API base URL from the `API_URL` build-time env var
 /// (passed via `--dart-define=API_URL=...`). Falls back to
-/// `http://10.0.2.2:80` (Android emulator → host loopback).
+/// platform-appropriate loopback: iOS → localhost, Android → 10.0.2.2.
 ///
 /// Automatically attaches Bearer token from FlutterSecureStorage
 /// and handles 401 responses with token refresh.
 class ApiClient {
-  static const _defaultBaseUrl = String.fromEnvironment(
-    'API_URL',
-    defaultValue: 'http://10.0.2.2:80',
-  );
+  static const _envBaseUrl = String.fromEnvironment('API_URL');
+
+  static String get _defaultBaseUrl {
+    if (_envBaseUrl.isNotEmpty) return _envBaseUrl;
+    return Platform.isIOS ? 'http://localhost:80' : 'http://10.0.2.2:80';
+  }
 
   late final Dio dio;
 

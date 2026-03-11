@@ -428,7 +428,27 @@ pub async fn get_profile(
     user_id: Uuid,
 ) -> Result<UserResponse, AppError> {
     if let Some(cached) = get_cached_user(redis, &user_id).await? {
-        return Ok(cached);
+        // Only use cache if it has profile data populated.
+        // Avoids stale cache from before profile LEFT JOIN was added.
+        let has_profile_data = cached.customer_full_name.is_some()
+            || cached.company_name.is_some()
+            || cached.gender.is_some()
+            || cached.customer_approval_status.is_some()
+            || cached.customer_address.is_some();
+        let is_customer = cached
+            .role
+            .as_ref()
+            .is_some_and(|r| matches!(r, UserRole::Customer));
+        let is_guard = cached
+            .role
+            .as_ref()
+            .is_some_and(|r| matches!(r, UserRole::Guard));
+
+        // Use cache only if: no role / admin, OR has relevant profile data
+        if (!is_customer && !is_guard) || has_profile_data {
+            return Ok(cached);
+        }
+        // Otherwise fall through to fresh DB query + re-cache
     }
 
     // Single query with LEFT JOINs to pull profile-specific fields.
@@ -486,21 +506,18 @@ pub async fn get_profile(
     .await?
     .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
-    // Prefer customer_profiles.full_name over users.full_name for customers
-    let full_name = row.cp_full_name
-        .filter(|s| !s.is_empty())
-        .unwrap_or(row.full_name);
-
+    // Return guard name (auth.users) and customer name (customer_profiles) separately
     let response = UserResponse {
         id: row.id,
         email: row.email,
         phone: row.phone,
-        full_name,
+        full_name: row.full_name,
         role: row.role,
         avatar_url: row.avatar_url,
         is_active: row.is_active,
         approval_status: row.approval_status,
         created_at: row.created_at,
+        customer_full_name: row.cp_full_name.filter(|s| !s.is_empty()),
         company_name: row.cp_company_name,
         contact_phone: row.cp_contact_phone,
         gender: row.gp_gender,
@@ -1622,6 +1639,7 @@ pub async fn list_customer_applicants(
             is_active: r.is_active,
             approval_status: r.cp_approval_status,
             created_at: r.created_at,
+            customer_full_name: None,
             company_name: None,
             contact_phone: None,
             gender: None,

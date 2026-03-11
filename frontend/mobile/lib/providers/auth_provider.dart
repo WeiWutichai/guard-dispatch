@@ -47,6 +47,7 @@ class AuthProvider extends ChangeNotifier {
   String? _dateOfBirth;
   int? _yearsOfExperience;
   String? _previousWorkplace;
+  String? _customerFullName;
   String? _customerApprovalStatus;
   String? _customerAddress;
   final ApiClient _apiClient = ApiClient();
@@ -62,6 +63,8 @@ class AuthProvider extends ChangeNotifier {
   String? get dateOfBirth => _dateOfBirth;
   int? get yearsOfExperience => _yearsOfExperience;
   String? get previousWorkplace => _previousWorkplace;
+  /// Customer-only: full name from customer_profiles (may differ from guard name).
+  String? get customerFullName => _customerFullName;
   /// Customer profile approval status (from customer_profiles.approval_status).
   /// null = no customer profile submitted, 'pending'/'approved'/'rejected'.
   String? get customerAddress => _customerAddress;
@@ -82,10 +85,24 @@ class AuthProvider extends ChangeNotifier {
       if (await AuthService.isPendingApproval()) {
         await AuthService.clearPendingApproval();
       }
-      _status = AuthStatus.authenticated;
       _role = await AuthService.getRole();
+      final profileOk = await fetchProfile();
+      // Re-check tokens — interceptor may have cleared them on 401 + refresh failure
+      final stillHasToken = await AuthService.getAccessToken();
+      if (stillHasToken == null) {
+        // Tokens were cleared by interceptor (401 + refresh failure) — truly unauthenticated
+        debugPrint('[AuthProvider] tokens cleared after fetchProfile, falling back to unauthenticated');
+        _status = AuthStatus.unauthenticated;
+        notifyListeners();
+        return;
+      }
+      // Tokens still valid — user is authenticated even if profile fetch failed
+      // (e.g. network timeout, backend down). Profile data will load on next app open.
+      if (!profileOk) {
+        debugPrint('[AuthProvider] fetchProfile failed but tokens still valid, treating as authenticated');
+      }
+      _status = AuthStatus.authenticated;
       notifyListeners();
-      await fetchProfile();
       return;
     }
 
@@ -101,11 +118,16 @@ class AuthProvider extends ChangeNotifier {
   }
 
   /// Fetch the authenticated user's profile from GET /auth/me.
-  Future<void> fetchProfile() async {
+  /// Returns true if profile was loaded successfully.
+  Future<bool> fetchProfile() async {
     try {
       final response = await _apiClient.dio.get('/auth/me');
-      debugPrint('fetchProfile response: ${response.data}');
+      debugPrint('[AuthProvider] fetchProfile response: ${response.data}');
       final data = response.data['data'];
+      if (data == null) {
+        debugPrint('[AuthProvider] fetchProfile: response.data["data"] is null!');
+        return false;
+      }
       _fullName = data['full_name'] as String?;
       _phone = data['phone'] as String?;
       _avatarUrl = data['avatar_url'] as String?;
@@ -115,14 +137,20 @@ class AuthProvider extends ChangeNotifier {
       _dateOfBirth = data['date_of_birth'] as String?;
       _yearsOfExperience = data['years_of_experience'] as int?;
       _previousWorkplace = data['previous_workplace'] as String?;
+      _customerFullName = data['customer_full_name'] as String?;
       _customerAddress = data['customer_address'] as String?;
       _customerApprovalStatus = data['customer_approval_status'] as String?;
       final role = data['role'] as String?;
       if (role != null) _role = role;
-      debugPrint('fullName set to: $_fullName, phone: $_phone, role: $_role');
+      debugPrint('[AuthProvider] profile loaded: fullName=$_fullName, phone=$_phone, role=$_role, gender=$_gender, customerApproval=$_customerApprovalStatus');
       notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      debugPrint('[AuthProvider] fetchProfile DioError: ${e.response?.statusCode} ${e.response?.data} ${e.message}');
+      return false;
     } catch (e) {
-      debugPrint('fetchProfile error: $e');
+      debugPrint('[AuthProvider] fetchProfile error: $e');
+      return false;
     }
   }
 
@@ -325,10 +353,10 @@ class AuthProvider extends ChangeNotifier {
       AuthService.clearPendingApproval(),
     ]);
 
-    _status = AuthStatus.authenticated;
     _role = role;
+    await fetchProfile(); // Load profile BEFORE notifying UI
+    _status = AuthStatus.authenticated;
     notifyListeners();
-    await fetchProfile();
     return true;
   }
 
@@ -350,6 +378,7 @@ class AuthProvider extends ChangeNotifier {
     _dateOfBirth = null;
     _yearsOfExperience = null;
     _previousWorkplace = null;
+    _customerFullName = null;
     _customerAddress = null;
     _customerApprovalStatus = null;
     notifyListeners();

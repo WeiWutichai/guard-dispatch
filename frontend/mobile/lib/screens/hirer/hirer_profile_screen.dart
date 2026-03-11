@@ -153,7 +153,7 @@ class HirerProfileScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        auth.fullName ?? s.sampleHirerName,
+                        auth.customerFullName ?? auth.fullName ?? s.sampleHirerName,
                         style: GoogleFonts.inter(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,

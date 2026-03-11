@@ -1,16 +1,56 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../services/language_service.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/booking_provider.dart';
 import 'booking_screen.dart';
 import '../notification_screen.dart';
+import '../role_selection_screen.dart';
 
-class ServiceSelectionScreen extends StatelessWidget {
+class ServiceSelectionScreen extends StatefulWidget {
   const ServiceSelectionScreen({super.key});
+
+  @override
+  State<ServiceSelectionScreen> createState() => _ServiceSelectionScreenState();
+}
+
+class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<BookingProvider>().fetchServiceRates();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Auto-refresh when app comes back to foreground
+    if (state == AppLifecycleState.resumed) {
+      context.read<BookingProvider>().fetchServiceRates();
+    }
+  }
+
+  Future<void> _onRefresh() async {
+    await context.read<BookingProvider>().fetchServiceRates();
+  }
 
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
+    final booking = context.watch<BookingProvider>();
+    final rates = booking.serviceRates;
+    final isLoading = booking.isLoadingRates && rates.isEmpty;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -18,62 +58,54 @@ class ServiceSelectionScreen extends StatelessWidget {
         children: [
           _buildHeader(context, isThai),
           Expanded(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              child: Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  children: [
-                    _buildTitleSection(isThai),
-                    const SizedBox(height: 24),
-                    _buildServiceCard(
-                      context: context,
-                      isThai: isThai,
-                      title: isThai
-                          ? 'เจ้าหน้าที่รักษาความปลอดภัย'
-                          : 'Security Guard',
-                      subtitle: isThai
-                          ? 'สำหรับรักษาความปลอดภัยบ้าน สำนักงาน หรือสถานที่ต่างๆ'
-                          : 'For home, office, or various locations',
-                      price: '600-1200',
-                      rating: '4.8/5',
-                      details: [
-                        isThai ? 'ขั้นต่ำ 6 ชั่วโมง' : 'Min 6 hours',
-                        isThai
-                            ? 'บริการในกรุงเทพฯ และปริมณฑล'
-                            : 'Bangkok & vicinity',
-                        isThai ? 'คะแนนเฉลี่ย 4.8/5' : 'Avg Rating 4.8/5',
-                      ],
-                      icon: Icons.security_rounded,
-                      color: AppColors.primary,
+            child: isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : RefreshIndicator(
+                    onRefresh: _onRefresh,
+                    color: AppColors.primary,
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(
+                        parent: BouncingScrollPhysics(),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Column(
+                          children: [
+                            _buildTitleSection(isThai),
+                            const SizedBox(height: 24),
+                            ...rates.map((rate) => Padding(
+                              padding: const EdgeInsets.only(bottom: 20),
+                              child: _buildServiceCard(
+                                context: context,
+                                isThai: isThai,
+                                rate: rate,
+                              ),
+                            )),
+                            if (rates.isEmpty)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 40),
+                                child: Text(
+                                  isThai
+                                      ? 'ยังไม่มีบริการในระบบ'
+                                      : 'No services available',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 16,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            if (rates.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              const Divider(color: AppColors.border),
+                              const SizedBox(height: 32),
+                              _buildStatsSection(isThai),
+                              const SizedBox(height: 40),
+                            ],
+                          ],
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 20),
-                    _buildServiceCard(
-                      context: context,
-                      isThai: isThai,
-                      title: isThai ? 'บอดี้การ์ด' : 'Bodyguard',
-                      subtitle: isThai
-                          ? 'สำหรับคุ้มครองส่วนตัว ติดตาม หรือป้องกันภัยส่วนบุคคล'
-                          : 'For personal protection or escort',
-                      price: '800-1600',
-                      rating: '4.9/5',
-                      details: [
-                        isThai ? 'ขั้นต่ำ 4 ชั่วโมง' : 'Min 4 hours',
-                        isThai ? 'บริการทั่วประเทศ' : 'Nationwide service',
-                        isThai ? 'คะแนนเฉลี่ย 4.9/5' : 'Avg Rating 4.9/5',
-                      ],
-                      icon: Icons.person_search_rounded,
-                      color: AppColors.primary,
-                    ),
-                    const SizedBox(height: 32),
-                    const Divider(color: AppColors.border),
-                    const SizedBox(height: 32),
-                    _buildStatsSection(isThai),
-                    const SizedBox(height: 40),
-                  ],
-                ),
-              ),
-            ),
+                  ),
           ),
         ],
       ),
@@ -92,7 +124,16 @@ class ServiceSelectionScreen extends StatelessWidget {
           Row(
             children: [
               IconButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () {
+                  final phone = context.read<AuthProvider>().phone;
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RoleSelectionScreen(phone: phone),
+                    ),
+                    (route) => false,
+                  );
+                },
                 icon: const Icon(
                   Icons.arrow_back_ios_new_rounded,
                   color: Colors.white,
@@ -204,14 +245,26 @@ class ServiceSelectionScreen extends StatelessWidget {
   Widget _buildServiceCard({
     required BuildContext context,
     required bool isThai,
-    required String title,
-    required String subtitle,
-    required String price,
-    required String rating,
-    required List<String> details,
-    required IconData icon,
-    required Color color,
+    required Map<String, dynamic> rate,
   }) {
+    final name = rate['name'] as String? ?? '';
+    final description = rate['description'] as String? ?? '';
+    final minPrice = (rate['min_price'] as num?)?.toInt() ?? 0;
+    final maxPrice = (rate['max_price'] as num?)?.toInt() ?? 0;
+    final baseFee = (rate['base_fee'] as num?)?.toInt() ?? 0;
+    final minHours = rate['min_hours'] as int? ?? 4;
+    final notes = rate['notes'] as String? ?? '';
+
+    // Pick icon based on service name keywords
+    final IconData icon;
+    if (name.contains('บอดี้การ์ด') || name.toLowerCase().contains('bodyguard')) {
+      icon = Icons.person_search_rounded;
+    } else if (name.contains('อีเวนต์') || name.toLowerCase().contains('event')) {
+      icon = Icons.event_rounded;
+    } else {
+      icon = Icons.security_rounded;
+    }
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -235,7 +288,7 @@ class ServiceSelectionScreen extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: color,
+                  color: AppColors.primary,
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Icon(icon, color: Colors.white, size: 32),
@@ -246,57 +299,91 @@ class ServiceSelectionScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      title,
+                      name,
                       style: GoogleFonts.inter(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                         color: AppColors.textPrimary,
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      subtitle,
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        color: AppColors.textSecondary,
-                        height: 1.4,
+                    if (description.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        description,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: AppColors.textSecondary,
+                          height: 1.4,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
             ],
           ),
           const SizedBox(height: 20),
-          ...details.map(
-            (detail) => Padding(
+          // Min hours
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                const Icon(Icons.access_time_rounded,
+                    size: 16, color: AppColors.textSecondary),
+                const SizedBox(width: 10),
+                Text(
+                  isThai
+                      ? 'ขั้นต่ำ $minHours ชั่วโมง'
+                      : 'Min $minHours hours',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Base fee
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                const Icon(Icons.payments_outlined,
+                    size: 16, color: AppColors.textSecondary),
+                const SizedBox(width: 10),
+                Text(
+                  isThai
+                      ? 'ค่าพื้นฐาน ฿$baseFee'
+                      : 'Base fee ฿$baseFee',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Notes
+          if (notes.isNotEmpty)
+            Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
-                  Icon(
-                    detail.contains('ชั่วโมง') || detail.contains('hours')
-                        ? Icons.access_time_rounded
-                        : detail.contains('กรุงเทพ') ||
-                              detail.contains('Bangkok') ||
-                              detail.contains('ทั่วประเทศ') ||
-                              detail.contains('Nationwide')
-                        ? Icons.location_on_outlined
-                        : Icons.star_outline_rounded,
-                    size: 16,
-                    color: AppColors.textSecondary,
-                  ),
+                  const Icon(Icons.info_outline_rounded,
+                      size: 16, color: AppColors.textSecondary),
                   const SizedBox(width: 10),
-                  Text(
-                    detail,
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      color: AppColors.textSecondary,
+                  Expanded(
+                    child: Text(
+                      notes,
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-          ),
           const SizedBox(height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -305,15 +392,15 @@ class ServiceSelectionScreen extends StatelessWidget {
                 text: TextSpan(
                   children: [
                     TextSpan(
-                      text: '฿$price',
+                      text: '฿$minPrice-$maxPrice',
                       style: GoogleFonts.inter(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
-                        color: color,
+                        color: AppColors.primary,
                       ),
                     ),
                     TextSpan(
-                      text: '/${isThai ? 'วัน' : 'day'}',
+                      text: '/${isThai ? 'ชม.' : 'hr'}',
                       style: GoogleFonts.inter(
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
@@ -329,7 +416,7 @@ class ServiceSelectionScreen extends StatelessWidget {
                   MaterialPageRoute(builder: (_) => const BookingScreen()),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: color,
+                  backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
                   elevation: 0,
                   padding: const EdgeInsets.symmetric(

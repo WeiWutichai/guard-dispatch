@@ -72,6 +72,9 @@ pub struct UserResponse {
     pub is_active: bool,
     pub approval_status: ApprovalStatus,
     pub created_at: DateTime<Utc>,
+    /// Customer-only: full name from customer_profiles (may differ from guard name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer_full_name: Option<String>,
     /// Customer-only: company name from customer_profiles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub company_name: Option<String>,
@@ -130,6 +133,7 @@ impl From<UserRow> for UserResponse {
             is_active: row.is_active,
             approval_status: row.approval_status,
             created_at: row.created_at,
+            customer_full_name: None,
             company_name: None,
             contact_phone: None,
             gender: None,

@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../providers/auth_provider.dart';
+import '../services/auth_service.dart';
 import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
@@ -88,8 +89,16 @@ class _PinLockScreenState extends State<PinLockScreen> {
     });
   }
 
-  void _navigateToApp() {
-    final phone = context.read<AuthProvider>().phone;
+  Future<void> _navigateToApp() async {
+    final auth = context.read<AuthProvider>();
+    // Use provider phone first, fallback to stored phone
+    final phone = auth.phone ?? await AuthService.getStoredPhone();
+    if (!mounted) return;
+    // Fire-and-forget: retry fetchProfile in background — don't block navigation
+    // (startup may have failed due to timeout; RoleSelectionScreen will also retry)
+    if (auth.fullName == null) {
+      auth.fetchProfile();
+    }
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => RoleSelectionScreen(phone: phone)),

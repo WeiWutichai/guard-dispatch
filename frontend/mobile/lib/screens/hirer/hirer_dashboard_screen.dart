@@ -50,8 +50,10 @@ class _HirerDashboardScreenState extends State<HirerDashboardScreen> {
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
 
-    return Scaffold(
-      body: IndexedStack(index: _selectedIndex, children: _screens),
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        body: IndexedStack(index: _selectedIndex, children: _screens),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -92,6 +94,7 @@ class _HirerDashboardScreenState extends State<HirerDashboardScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
