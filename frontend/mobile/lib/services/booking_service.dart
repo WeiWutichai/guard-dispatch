@@ -90,6 +90,7 @@ class BookingService {
     double? offeredPrice,
     String? specialInstructions,
     String urgency = 'medium',
+    int? bookedHours,
   }) async {
     final response = await _apiClient.dio.post(
       '/booking/requests',
@@ -103,6 +104,7 @@ class BookingService {
         if (specialInstructions != null && specialInstructions.isNotEmpty)
           'special_instructions': specialInstructions,
         'urgency': urgency,
+        'booked_hours': ?bookedHours,
       },
     );
     return response.data['data'] as Map<String, dynamic>;
@@ -202,5 +204,60 @@ class BookingService {
       data: {'guard_id': guardId},
     );
     return response.data['data'] as Map<String, dynamic>;
+  }
+
+  // =========================================================================
+  // Accept / Decline Assignment (guard response)
+  // =========================================================================
+
+  /// PUT /booking/assignments/{id}/accept — guard accepts or declines.
+  Future<Map<String, dynamic>> acceptDeclineAssignment(
+    String assignmentId,
+    bool accept,
+  ) async {
+    final response = await _apiClient.dio.put(
+      '/booking/assignments/$assignmentId/accept',
+      data: {'accept': accept},
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  // =========================================================================
+  // Payments (simulated)
+  // =========================================================================
+
+  /// POST /booking/payments — create simulated payment.
+  Future<Map<String, dynamic>> createPayment({
+    required String requestId,
+    required double amount,
+    required String paymentMethod,
+  }) async {
+    final response = await _apiClient.dio.post(
+      '/booking/payments',
+      data: {
+        'request_id': requestId,
+        'amount': amount,
+        'payment_method': paymentMethod,
+      },
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  // =========================================================================
+  // Active Job (guard countdown)
+  // =========================================================================
+
+  /// PUT /booking/assignments/{id}/start — guard starts the job.
+  Future<Map<String, dynamic>> startJob(String assignmentId) async {
+    final response = await _apiClient.dio.put(
+      '/booking/assignments/$assignmentId/start',
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// GET /booking/guard/active-job — get guard's current active job.
+  Future<Map<String, dynamic>?> getActiveJob() async {
+    final response = await _apiClient.dio.get('/booking/guard/active-job');
+    return response.data['data'] as Map<String, dynamic>?;
   }
 }

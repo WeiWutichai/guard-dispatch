@@ -1,11 +1,74 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
-import '../notification_screen.dart';
+import 'payment_success_screen.dart';
 
-class PaymentScreen extends StatelessWidget {
-  const PaymentScreen({super.key});
+class PaymentScreen extends StatefulWidget {
+  final String requestId;
+  final double totalAmount;
+  final double subtotal;
+  final double baseFee;
+  final double tip;
+  final int bookedHours;
+  final int guardCount;
+  final String guardName;
+
+  const PaymentScreen({
+    super.key,
+    required this.requestId,
+    required this.totalAmount,
+    required this.subtotal,
+    required this.baseFee,
+    required this.tip,
+    required this.bookedHours,
+    required this.guardCount,
+    required this.guardName,
+  });
+
+  @override
+  State<PaymentScreen> createState() => _PaymentScreenState();
+}
+
+class _PaymentScreenState extends State<PaymentScreen> {
+  String _selectedMethod = 'promptpay';
+  bool _isPaying = false;
+
+  Future<void> _pay() async {
+    final isThai = LanguageProvider.of(context).isThai;
+    setState(() => _isPaying = true);
+    try {
+      await context.read<BookingProvider>().makePayment(
+            requestId: widget.requestId,
+            amount: widget.totalAmount,
+            paymentMethod: _selectedMethod,
+          );
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PaymentSuccessScreen(
+            guardName: widget.guardName,
+            totalAmount: widget.totalAmount,
+            bookedHours: widget.bookedHours,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'เกิดข้อผิดพลาด: $e' : 'Error: $e'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isPaying = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,24 +113,28 @@ class PaymentScreen extends StatelessWidget {
                     isThai ? 'เลือกวิธีการชำระเงิน' : 'Select Payment Method',
                   ),
                   const SizedBox(height: 16),
-                  _buildPaymentMethod(
+                  _buildPaymentOption(
+                    'promptpay',
                     Icons.qr_code_rounded,
                     'PromptPay',
                     isThai
                         ? 'สแกน QR Code เพื่อชำระเงิน'
                         : 'Scan QR for payment',
                   ),
-                  _buildPaymentMethod(
+                  _buildPaymentOption(
+                    'credit_card',
                     Icons.credit_card_rounded,
                     isThai ? 'บัตรเครดิต' : 'Credit Card',
                     'Visa, MasterCard, JCB',
                   ),
-                  _buildPaymentMethod(
+                  _buildPaymentOption(
+                    'debit_card',
                     Icons.account_balance_wallet_outlined,
                     isThai ? 'บัตรเดบิต' : 'Debit Card',
                     isThai ? 'บัตรเดบิตทุกธนาคาร' : 'All local banks',
                   ),
-                  _buildPaymentMethod(
+                  _buildPaymentOption(
+                    'mobile_banking',
                     Icons.smartphone_rounded,
                     'Mobile Banking',
                     isThai ? 'แอปธนาคารบนมือถือ' : 'Mobile Banking App',
@@ -128,25 +195,16 @@ class PaymentScreen extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const NotificationScreen(isGuard: false),
-              ),
-            ),
-            icon: const Icon(
-              Icons.notifications_none_rounded,
-              color: Colors.white,
-            ),
-          ),
-          const Icon(Icons.person_outline_rounded, color: Colors.white),
         ],
       ),
     );
   }
 
   Widget _buildSummaryCard(bool isThai) {
+    final hoursLabel = isThai
+        ? '${widget.bookedHours} ชม. × ${widget.guardCount} คน'
+        : '${widget.bookedHours} hrs × ${widget.guardCount}';
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -167,11 +225,23 @@ class PaymentScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           _buildSummaryRow(
-            isThai ? 'ค่าบริการ (6 ชั่วโมง x 1 คน)' : 'Service (6 hrs x 1)',
-            '฿1,000',
+            '${isThai ? "ค่าบริการ" : "Service"} ($hoursLabel)',
+            '฿${widget.subtotal.toStringAsFixed(0)}',
           ),
-          const SizedBox(height: 12),
-          _buildSummaryRow(isThai ? 'ทิปหรือโบนัสพิเศษ' : 'Tip/Bonus', '฿200'),
+          if (widget.baseFee > 0) ...[
+            const SizedBox(height: 12),
+            _buildSummaryRow(
+              isThai ? 'ค่าดำเนินการ' : 'Service Fee',
+              '฿${widget.baseFee.toStringAsFixed(0)}',
+            ),
+          ],
+          if (widget.tip > 0) ...[
+            const SizedBox(height: 12),
+            _buildSummaryRow(
+              isThai ? 'ทิปหรือโบนัสพิเศษ' : 'Tip/Bonus',
+              '฿${widget.tip.toStringAsFixed(0)}',
+            ),
+          ],
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 16),
             child: Divider(color: AppColors.border),
@@ -188,7 +258,7 @@ class PaymentScreen extends StatelessWidget {
                 ),
               ),
               Text(
-                '฿1,200',
+                '฿${widget.totalAmount.toStringAsFixed(0)}',
                 style: GoogleFonts.inter(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
@@ -284,59 +354,91 @@ class PaymentScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildPaymentMethod(IconData icon, String title, String subtitle) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 24, color: AppColors.textSecondary),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
+  Widget _buildPaymentOption(
+      String method, IconData icon, String title, String subtitle) {
+    final isSelected = _selectedMethod == method;
+
+    return GestureDetector(
+      onTap: () => setState(() => _selectedMethod = method),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppColors.primary.withValues(alpha: 0.05)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? AppColors.primary : AppColors.border,
+            width: isSelected ? 2 : 1,
           ),
-        ],
+        ),
+        child: Row(
+          children: [
+            Icon(icon,
+                size: 24,
+                color:
+                    isSelected ? AppColors.primary : AppColors.textSecondary),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: isSelected
+                          ? AppColors.primary
+                          : AppColors.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              const Icon(Icons.check_circle_rounded,
+                  color: AppColors.primary, size: 22),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildPayButton(bool isThai) {
-    return ElevatedButton(
-      onPressed: () {},
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.primary.withValues(alpha: 0.4),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        minimumSize: const Size(double.infinity, 56),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      child: Text(
-        '${isThai ? 'ชำระเงิน' : 'Pay'} ฿1,200',
-        style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold),
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: ElevatedButton(
+        onPressed: _isPaying ? null : _pay,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.5),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+        child: _isPaying
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                    color: Colors.white, strokeWidth: 2.5),
+              )
+            : Text(
+                '${isThai ? "ชำระเงิน" : "Pay"} ฿${widget.totalAmount.toStringAsFixed(0)}',
+                style: GoogleFonts.inter(
+                    fontSize: 16, fontWeight: FontWeight.bold),
+              ),
       ),
     );
   }

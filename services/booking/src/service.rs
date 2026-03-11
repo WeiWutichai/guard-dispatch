@@ -6,12 +6,14 @@ use uuid::Uuid;
 use shared::error::AppError;
 
 use crate::models::{
-    AssignGuardDto, AssignmentResponse, AssignmentRow, AssignmentStatus, AvailableGuardResponse,
-    AvailableGuardRow, AvailableGuardsQuery, CreateRequestDto, CreateServiceRateDto, DailyEarning,
+    AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse, AssignmentRow,
+    AssignmentStatus, AvailableGuardResponse, AvailableGuardRow, AvailableGuardsQuery,
+    CreatePaymentDto, CreateRequestDto, CreateServiceRateDto, DailyEarning,
     GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary,
-    GuardRequestResponse, GuardRequestRow, ListRequestsQuery, RatingSummaryRow, RequestStatus,
-    ReviewItem, ReviewRow, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto,
-    WorkHistoryItem, WorkHistoryResponse, WorkHistoryRow,
+    GuardRequestResponse, GuardRequestRow, ListRequestsQuery, PaymentResponse, PaymentRow,
+    RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate,
+    UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse,
+    WorkHistoryRow,
 };
 
 // =============================================================================
@@ -39,9 +41,9 @@ pub async fn create_request(
 
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        INSERT INTO booking.guard_requests (customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, urgency)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::urgency_level)
-        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
+        INSERT INTO booking.guard_requests (customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, urgency, booked_hours)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::urgency_level, $9)
+        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
         "#,
     )
     .bind(customer_id)
@@ -52,6 +54,7 @@ pub async fn create_request(
     .bind(price)
     .bind(&req.special_instructions)
     .bind(&urgency_str)
+    .bind(req.booked_hours)
     .fetch_one(db)
     .await?;
 
@@ -114,7 +117,7 @@ pub async fn list_requests(
         // Guard sees assigned requests
         sqlx::query_as::<_, GuardRequestRow>(
             r#"
-            SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address, gr.description, gr.offered_price, gr.special_instructions, gr.status, gr.urgency, gr.created_at, gr.updated_at
+            SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address, gr.description, gr.offered_price, gr.special_instructions, gr.status, gr.urgency, gr.booked_hours, gr.created_at, gr.updated_at
             FROM booking.guard_requests gr
             INNER JOIN booking.assignments a ON a.request_id = gr.id
             WHERE a.guard_id = $1
@@ -158,7 +161,7 @@ pub async fn get_request(
 ) -> Result<GuardRequestResponse, AppError> {
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         "#,
@@ -185,7 +188,7 @@ pub async fn cancel_request(
 
     let existing = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         FOR UPDATE
@@ -214,7 +217,7 @@ pub async fn cancel_request(
         UPDATE booking.guard_requests
         SET status = 'cancelled'::request_status, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, customer_id, location_lat, location_lng, address, description, status, urgency, created_at, updated_at
+        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
         "#,
     )
     .bind(request_id)
@@ -252,7 +255,7 @@ pub async fn assign_guard(
     // Verify request exists and is pending (lock row)
     let request = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         FOR UPDATE
@@ -285,12 +288,12 @@ pub async fn assign_guard(
         _ => {}
     }
 
-    // Create assignment
+    // Create assignment with pending_acceptance (guard must accept first)
     let assignment = sqlx::query_as::<_, AssignmentRow>(
         r#"
-        INSERT INTO booking.assignments (request_id, guard_id)
-        VALUES ($1, $2)
-        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at
+        INSERT INTO booking.assignments (request_id, guard_id, status)
+        VALUES ($1, $2, 'pending_acceptance'::assignment_status)
+        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
         "#,
     )
     .bind(request_id)
@@ -298,13 +301,7 @@ pub async fn assign_guard(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Update request status to assigned
-    sqlx::query(
-        "UPDATE booking.guard_requests SET status = 'assigned'::request_status, updated_at = NOW() WHERE id = $1",
-    )
-    .bind(request_id)
-    .execute(&mut *tx)
-    .await?;
+    // Do NOT update request status yet — wait for guard to accept
 
     tx.commit().await?;
 
@@ -326,7 +323,7 @@ pub async fn update_assignment_status(
 
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
-        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at
+        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
         FROM booking.assignments
         WHERE id = $1
         FOR UPDATE
@@ -347,10 +344,12 @@ pub async fn update_assignment_status(
     // Validate status transitions
     let valid_transition = matches!(
         (&existing.status, &req.status),
-        (AssignmentStatus::Assigned, AssignmentStatus::EnRoute)
+        (AssignmentStatus::Accepted, AssignmentStatus::EnRoute)
+            | (AssignmentStatus::Assigned, AssignmentStatus::EnRoute)
             | (AssignmentStatus::EnRoute, AssignmentStatus::Arrived)
             | (AssignmentStatus::Arrived, AssignmentStatus::Completed)
             | (AssignmentStatus::Assigned, AssignmentStatus::Cancelled)
+            | (AssignmentStatus::Accepted, AssignmentStatus::Cancelled)
             | (AssignmentStatus::EnRoute, AssignmentStatus::Cancelled)
     );
 
@@ -384,7 +383,7 @@ pub async fn update_assignment_status(
         UPDATE booking.assignments
         SET status = $2::assignment_status, arrived_at = $3, completed_at = $4
         WHERE id = $1
-        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at
+        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
         "#,
     )
     .bind(assignment_id)
@@ -425,7 +424,7 @@ pub async fn get_assignments(
 ) -> Result<Vec<AssignmentResponse>, AppError> {
     let rows = sqlx::query_as::<_, AssignmentRow>(
         r#"
-        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at
+        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
         FROM booking.assignments
         WHERE request_id = $1
         ORDER BY assigned_at DESC
@@ -478,15 +477,17 @@ pub async fn get_guard_jobs(
         Some(s) => {
             sqlx::query_as::<_, GuardJobRow>(
                 r#"
-                SELECT gr.id, gr.customer_id, u.full_name AS customer_name,
+                SELECT gr.id, gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name,
+                       COALESCE(cp.contact_phone, u.phone) AS customer_phone,
                        gr.address, gr.description, gr.special_instructions,
-                       gr.status, gr.urgency, gr.offered_price,
+                       gr.status, gr.urgency, gr.offered_price, gr.booked_hours,
                        gr.created_at, gr.updated_at,
                        a.id AS assignment_id, a.status AS assignment_status,
-                       a.assigned_at, a.arrived_at, a.completed_at
+                       a.assigned_at, a.arrived_at, a.completed_at, a.started_at
                 FROM booking.guard_requests gr
                 INNER JOIN booking.assignments a ON a.request_id = gr.id
                 INNER JOIN auth.users u ON u.id = gr.customer_id
+                LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
                 WHERE a.guard_id = $1 AND a.status = $2::assignment_status
                 ORDER BY gr.created_at DESC
                 LIMIT $3 OFFSET $4
@@ -502,15 +503,17 @@ pub async fn get_guard_jobs(
         None => {
             sqlx::query_as::<_, GuardJobRow>(
                 r#"
-                SELECT gr.id, gr.customer_id, u.full_name AS customer_name,
+                SELECT gr.id, gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name,
+                       COALESCE(cp.contact_phone, u.phone) AS customer_phone,
                        gr.address, gr.description, gr.special_instructions,
-                       gr.status, gr.urgency, gr.offered_price,
+                       gr.status, gr.urgency, gr.offered_price, gr.booked_hours,
                        gr.created_at, gr.updated_at,
                        a.id AS assignment_id, a.status AS assignment_status,
-                       a.assigned_at, a.arrived_at, a.completed_at
+                       a.assigned_at, a.arrived_at, a.completed_at, a.started_at
                 FROM booking.guard_requests gr
                 INNER JOIN booking.assignments a ON a.request_id = gr.id
                 INNER JOIN auth.users u ON u.id = gr.customer_id
+                LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
                 WHERE a.guard_id = $1
                 ORDER BY gr.created_at DESC
                 LIMIT $2 OFFSET $3
@@ -545,7 +548,12 @@ pub async fn get_guard_dashboard_summary(
         total: Option<rust_decimal::Decimal>,
     }
 
-    let (today_count, today_earnings, week_earnings, last_week_earnings, pending_count, active_job) = tokio::join!(
+    #[derive(sqlx::FromRow)]
+    struct CountRow2 {
+        count: Option<i64>,
+    }
+
+    let (today_count, today_earnings, week_earnings, last_week_earnings, pending_count, pending_acceptance_count, active_job) = tokio::join!(
         // Today's assigned jobs
         sqlx::query_as::<_, CountRow>(
             r#"
@@ -601,19 +609,31 @@ pub async fn get_guard_dashboard_summary(
         )
         .bind(guard_id)
         .fetch_one(db),
-        // Active job (assigned/en_route/arrived)
+        // Pending acceptance count (jobs waiting for guard to accept)
+        sqlx::query_as::<_, CountRow2>(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM booking.assignments a
+            WHERE a.guard_id = $1 AND a.status = 'pending_acceptance'
+            "#,
+        )
+        .bind(guard_id)
+        .fetch_one(db),
+        // Active job (accepted/assigned/en_route/arrived)
         sqlx::query_as::<_, GuardJobRow>(
             r#"
-            SELECT gr.id, gr.customer_id, u.full_name AS customer_name,
+            SELECT gr.id, gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name,
+                   COALESCE(cp.contact_phone, u.phone) AS customer_phone,
                    gr.address, gr.description, gr.special_instructions,
-                   gr.status, gr.urgency, gr.offered_price,
+                   gr.status, gr.urgency, gr.offered_price, gr.booked_hours,
                    gr.created_at, gr.updated_at,
                    a.id AS assignment_id, a.status AS assignment_status,
-                   a.assigned_at, a.arrived_at, a.completed_at
+                   a.assigned_at, a.arrived_at, a.completed_at, a.started_at
             FROM booking.guard_requests gr
             INNER JOIN booking.assignments a ON a.request_id = gr.id
             INNER JOIN auth.users u ON u.id = gr.customer_id
-            WHERE a.guard_id = $1 AND a.status IN ('assigned', 'en_route', 'arrived')
+            LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
+            WHERE a.guard_id = $1 AND a.status IN ('accepted', 'assigned', 'en_route', 'arrived')
             ORDER BY a.assigned_at DESC
             LIMIT 1
             "#,
@@ -643,6 +663,10 @@ pub async fn get_guard_dashboard_summary(
             .and_then(|d| d.to_f64())
             .unwrap_or(0.0),
         pending_jobs_count: pending_count
+            .map_err(AppError::from)?
+            .count
+            .unwrap_or(0),
+        pending_acceptance_count: pending_acceptance_count
             .map_err(AppError::from)?
             .count
             .unwrap_or(0),
@@ -775,7 +799,7 @@ pub async fn get_guard_work_history(
                     sqlx::query_as::<_, WorkHistoryRow>(
                         r#"
                         SELECT gr.id, a.id AS assignment_id,
-                               u.full_name AS customer_name, gr.address, gr.description,
+                               COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.description,
                                gr.offered_price, a.status AS assignment_status,
                                a.assigned_at, a.arrived_at, a.completed_at,
                                EXTRACT(EPOCH FROM (a.completed_at - a.arrived_at))::bigint / 60 AS duration_minutes,
@@ -783,6 +807,7 @@ pub async fn get_guard_work_history(
                         FROM booking.guard_requests gr
                         INNER JOIN booking.assignments a ON a.request_id = gr.id
                         INNER JOIN auth.users u ON u.id = gr.customer_id
+                        LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
                         LEFT JOIN reviews.guard_reviews rv ON rv.assignment_id = a.id
                         WHERE a.guard_id = $1 AND a.status = $2::assignment_status
                         ORDER BY a.assigned_at DESC
@@ -799,7 +824,7 @@ pub async fn get_guard_work_history(
                     sqlx::query_as::<_, WorkHistoryRow>(
                         r#"
                         SELECT gr.id, a.id AS assignment_id,
-                               u.full_name AS customer_name, gr.address, gr.description,
+                               COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.description,
                                gr.offered_price, a.status AS assignment_status,
                                a.assigned_at, a.arrived_at, a.completed_at,
                                EXTRACT(EPOCH FROM (a.completed_at - a.arrived_at))::bigint / 60 AS duration_minutes,
@@ -807,6 +832,7 @@ pub async fn get_guard_work_history(
                         FROM booking.guard_requests gr
                         INNER JOIN booking.assignments a ON a.request_id = gr.id
                         INNER JOIN auth.users u ON u.id = gr.customer_id
+                        LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
                         LEFT JOIN reviews.guard_reviews rv ON rv.assignment_id = a.id
                         WHERE a.guard_id = $1
                         ORDER BY a.assigned_at DESC
@@ -860,10 +886,11 @@ pub async fn get_guard_ratings(
         .fetch_one(db),
         sqlx::query_as::<_, ReviewRow>(
             r#"
-            SELECT r.id, u.full_name AS customer_name,
+            SELECT r.id, COALESCE(cp.full_name, u.full_name) AS customer_name,
                    r.overall_rating, r.review_text, r.created_at
             FROM reviews.guard_reviews r
             INNER JOIN auth.users u ON u.id = r.customer_id
+            LEFT JOIN auth.customer_profiles cp ON cp.user_id = r.customer_id
             WHERE r.guard_id = $1
             ORDER BY r.created_at DESC
             LIMIT 20
@@ -1066,6 +1093,300 @@ pub async fn delete_service_rate(db: &PgPool, id: Uuid) -> Result<(), AppError> 
     }
 
     Ok(())
+}
+
+// =============================================================================
+// Accept / Decline Assignment (guard response to pending_acceptance)
+// =============================================================================
+
+pub async fn accept_or_decline_assignment(
+    db: &PgPool,
+    assignment_id: Uuid,
+    guard_id: Uuid,
+    req: AcceptDeclineDto,
+) -> Result<AssignmentResponse, AppError> {
+    let mut tx = db.begin().await?;
+
+    let existing = sqlx::query_as::<_, AssignmentRow>(
+        r#"
+        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        FROM booking.assignments
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    if existing.guard_id != guard_id {
+        return Err(AppError::Forbidden(
+            "You can only respond to your own assignments".to_string(),
+        ));
+    }
+
+    if existing.status != AssignmentStatus::PendingAcceptance {
+        return Err(AppError::BadRequest(
+            "Assignment is not pending acceptance".to_string(),
+        ));
+    }
+
+    let new_status = if req.accept { "accepted" } else { "declined" };
+
+    let row = sqlx::query_as::<_, AssignmentRow>(
+        r#"
+        UPDATE booking.assignments
+        SET status = $2::assignment_status
+        WHERE id = $1
+        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(new_status)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if req.accept {
+        // Update request status to assigned when guard accepts
+        sqlx::query(
+            "UPDATE booking.guard_requests SET status = 'assigned'::request_status, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(existing.request_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(AssignmentResponse::from(row))
+}
+
+// =============================================================================
+// Create Payment (simulated — records payment, updates request status)
+// =============================================================================
+
+pub async fn create_payment(
+    db: &PgPool,
+    customer_id: Uuid,
+    req: CreatePaymentDto,
+) -> Result<PaymentResponse, AppError> {
+    let valid_methods = ["promptpay", "credit_card", "debit_card", "mobile_banking"];
+    if !valid_methods.contains(&req.payment_method.as_str()) {
+        return Err(AppError::BadRequest(format!(
+            "Invalid payment method: {}. Must be one of: {}",
+            req.payment_method,
+            valid_methods.join(", ")
+        )));
+    }
+
+    let mut tx = db.begin().await?;
+
+    // Verify request exists and belongs to customer
+    let request = sqlx::query_as::<_, GuardRequestRow>(
+        r#"
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
+        FROM booking.guard_requests
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(req.request_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Guard request not found".to_string()))?;
+
+    if request.customer_id != customer_id {
+        return Err(AppError::Forbidden(
+            "You can only pay for your own requests".to_string(),
+        ));
+    }
+
+    if request.status != RequestStatus::Assigned {
+        return Err(AppError::BadRequest(
+            "Can only pay for assigned requests (guard must accept first)".to_string(),
+        ));
+    }
+
+    // Create payment record (simulated — immediately completed)
+    let payment = sqlx::query_as::<_, PaymentRow>(
+        r#"
+        INSERT INTO booking.payments (request_id, customer_id, amount, payment_method, status, paid_at)
+        VALUES ($1, $2, $3, $4, 'completed', NOW())
+        RETURNING id, request_id, customer_id, amount, payment_method, status, paid_at, created_at
+        "#,
+    )
+    .bind(req.request_id)
+    .bind(customer_id)
+    .bind(req.amount)
+    .bind(&req.payment_method)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Update request to in_progress (payment triggers guard to start)
+    sqlx::query(
+        "UPDATE booking.guard_requests SET status = 'in_progress'::request_status, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(req.request_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(PaymentResponse::from(payment))
+}
+
+// =============================================================================
+// Start Job (guard starts countdown timer)
+// =============================================================================
+
+pub async fn start_job(
+    db: &PgPool,
+    assignment_id: Uuid,
+    guard_id: Uuid,
+) -> Result<ActiveJobResponse, AppError> {
+    let mut tx = db.begin().await?;
+
+    let existing = sqlx::query_as::<_, AssignmentRow>(
+        r#"
+        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        FROM booking.assignments
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    if existing.guard_id != guard_id {
+        return Err(AppError::Forbidden(
+            "You can only start your own assignments".to_string(),
+        ));
+    }
+
+    if existing.status != AssignmentStatus::Arrived {
+        return Err(AppError::BadRequest(
+            "Can only start job after arriving at location".to_string(),
+        ));
+    }
+
+    if existing.started_at.is_some() {
+        return Err(AppError::BadRequest("Job already started".to_string()));
+    }
+
+    let now = Utc::now();
+
+    sqlx::query(
+        "UPDATE booking.assignments SET started_at = $2 WHERE id = $1",
+    )
+    .bind(assignment_id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+
+    // Fetch request details for response
+    #[derive(sqlx::FromRow)]
+    struct RequestInfo {
+        customer_name: Option<String>,
+        address: String,
+        booked_hours: Option<i32>,
+        offered_price: Option<rust_decimal::Decimal>,
+    }
+
+    let info = sqlx::query_as::<_, RequestInfo>(
+        r#"
+        SELECT COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours, gr.offered_price
+        FROM booking.guard_requests gr
+        INNER JOIN auth.users u ON u.id = gr.customer_id
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
+        WHERE gr.id = $1
+        "#,
+    )
+    .bind(existing.request_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let booked_hours = info.booked_hours.unwrap_or(6);
+    let remaining_seconds = (booked_hours as i64) * 3600;
+
+    Ok(ActiveJobResponse {
+        assignment_id,
+        request_id: existing.request_id,
+        customer_name: info.customer_name.unwrap_or_else(|| "-".to_string()),
+        address: info.address,
+        booked_hours,
+        started_at: Some(now),
+        remaining_seconds: Some(remaining_seconds),
+        assignment_status: AssignmentStatus::Arrived,
+        offered_price: info.offered_price.and_then(|d| d.to_f64()),
+    })
+}
+
+// =============================================================================
+// Get Active Job (guard's current active job with countdown)
+// =============================================================================
+
+pub async fn get_active_job(
+    db: &PgPool,
+    guard_id: Uuid,
+) -> Result<Option<ActiveJobResponse>, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct ActiveJobRow {
+        assignment_id: Uuid,
+        request_id: Uuid,
+        customer_name: Option<String>,
+        address: String,
+        booked_hours: Option<i32>,
+        started_at: Option<chrono::DateTime<Utc>>,
+        assignment_status: AssignmentStatus,
+        offered_price: Option<rust_decimal::Decimal>,
+    }
+
+    let row = sqlx::query_as::<_, ActiveJobRow>(
+        r#"
+        SELECT a.id AS assignment_id, gr.id AS request_id,
+               COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours,
+               a.started_at, a.status AS assignment_status, gr.offered_price
+        FROM booking.assignments a
+        INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
+        INNER JOIN auth.users u ON u.id = gr.customer_id
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
+        WHERE a.guard_id = $1 AND a.status IN ('accepted', 'assigned', 'en_route', 'arrived')
+        ORDER BY a.assigned_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(guard_id)
+    .fetch_optional(db)
+    .await?;
+
+    match row {
+        None => Ok(None),
+        Some(r) => {
+            let booked_hours = r.booked_hours.unwrap_or(6);
+            let remaining_seconds = r.started_at.map(|start| {
+                let elapsed = Utc::now().signed_duration_since(start).num_seconds();
+                let total = (booked_hours as i64) * 3600;
+                (total - elapsed).max(0)
+            });
+
+            Ok(Some(ActiveJobResponse {
+                assignment_id: r.assignment_id,
+                request_id: r.request_id,
+                customer_name: r.customer_name.unwrap_or_else(|| "-".to_string()),
+                address: r.address,
+                booked_hours,
+                started_at: r.started_at,
+                remaining_seconds,
+                assignment_status: r.assignment_status,
+                offered_price: r.offered_price.and_then(|d| d.to_f64()),
+            }))
+        }
+    }
 }
 
 // =============================================================================

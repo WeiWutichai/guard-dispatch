@@ -32,7 +32,10 @@ pub enum UrgencyLevel {
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "assignment_status", rename_all = "snake_case")]
 pub enum AssignmentStatus {
+    PendingAcceptance,
     Assigned,
+    Accepted,
+    Declined,
     EnRoute,
     Arrived,
     Completed,
@@ -53,6 +56,7 @@ pub struct CreateRequestDto {
     pub special_instructions: Option<String>,
     #[serde(default = "default_urgency")]
     pub urgency: UrgencyLevel,
+    pub booked_hours: Option<i32>,
 }
 
 fn default_urgency() -> UrgencyLevel {
@@ -76,6 +80,19 @@ pub struct ListRequestsQuery {
     pub offset: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AcceptDeclineDto {
+    pub accept: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreatePaymentDto {
+    pub request_id: Uuid,
+    #[schema(value_type = f64)]
+    pub amount: rust_decimal::Decimal,
+    pub payment_method: String,
+}
+
 // =============================================================================
 // Response DTOs
 // =============================================================================
@@ -92,6 +109,7 @@ pub struct GuardRequestResponse {
     pub special_instructions: Option<String>,
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
+    pub booked_hours: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -105,6 +123,33 @@ pub struct AssignmentResponse {
     pub assigned_at: DateTime<Utc>,
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaymentResponse {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub customer_id: Uuid,
+    #[schema(value_type = f64)]
+    pub amount: rust_decimal::Decimal,
+    pub payment_method: String,
+    pub status: String,
+    pub paid_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ActiveJobResponse {
+    pub assignment_id: Uuid,
+    pub request_id: Uuid,
+    pub customer_name: String,
+    pub address: String,
+    pub booked_hours: i32,
+    pub started_at: Option<DateTime<Utc>>,
+    pub remaining_seconds: Option<i64>,
+    pub assignment_status: AssignmentStatus,
+    pub offered_price: Option<f64>,
 }
 
 // =============================================================================
@@ -123,6 +168,7 @@ pub struct GuardRequestRow {
     pub special_instructions: Option<String>,
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
+    pub booked_hours: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -141,6 +187,7 @@ impl From<GuardRequestRow> for GuardRequestResponse {
             special_instructions: row.special_instructions,
             status: row.status,
             urgency: row.urgency,
+            booked_hours: row.booked_hours,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
@@ -156,12 +203,14 @@ pub struct GuardJobResponse {
     pub id: Uuid,
     pub customer_id: Uuid,
     pub customer_name: String,
+    pub customer_phone: Option<String>,
     pub address: String,
     pub description: Option<String>,
     pub special_instructions: Option<String>,
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
     pub offered_price: Option<f64>,
+    pub booked_hours: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub assignment_id: Uuid,
@@ -169,6 +218,7 @@ pub struct GuardJobResponse {
     pub assigned_at: DateTime<Utc>,
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -176,12 +226,14 @@ pub struct GuardJobRow {
     pub id: Uuid,
     pub customer_id: Uuid,
     pub customer_name: Option<String>,
+    pub customer_phone: Option<String>,
     pub address: String,
     pub description: Option<String>,
     pub special_instructions: Option<String>,
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
     pub offered_price: Option<rust_decimal::Decimal>,
+    pub booked_hours: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub assignment_id: Uuid,
@@ -189,6 +241,7 @@ pub struct GuardJobRow {
     pub assigned_at: DateTime<Utc>,
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 impl From<GuardJobRow> for GuardJobResponse {
@@ -198,12 +251,14 @@ impl From<GuardJobRow> for GuardJobResponse {
             id: row.id,
             customer_id: row.customer_id,
             customer_name: row.customer_name.unwrap_or_else(|| "-".to_string()),
+            customer_phone: row.customer_phone,
             address: row.address,
             description: row.description,
             special_instructions: row.special_instructions,
             status: row.status,
             urgency: row.urgency,
             offered_price: row.offered_price.and_then(|d| d.to_f64()),
+            booked_hours: row.booked_hours,
             created_at: row.created_at,
             updated_at: row.updated_at,
             assignment_id: row.assignment_id,
@@ -211,6 +266,7 @@ impl From<GuardJobRow> for GuardJobResponse {
             assigned_at: row.assigned_at,
             arrived_at: row.arrived_at,
             completed_at: row.completed_at,
+            started_at: row.started_at,
         }
     }
 }
@@ -222,6 +278,7 @@ pub struct GuardDashboardSummary {
     pub week_earnings: f64,
     pub last_week_earnings: f64,
     pub pending_jobs_count: i64,
+    pub pending_acceptance_count: i64,
     pub active_job: Option<GuardJobResponse>,
 }
 
@@ -250,6 +307,7 @@ pub struct AssignmentRow {
     pub assigned_at: DateTime<Utc>,
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 impl From<AssignmentRow> for AssignmentResponse {
@@ -262,6 +320,34 @@ impl From<AssignmentRow> for AssignmentResponse {
             assigned_at: row.assigned_at,
             arrived_at: row.arrived_at,
             completed_at: row.completed_at,
+            started_at: row.started_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct PaymentRow {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub customer_id: Uuid,
+    pub amount: rust_decimal::Decimal,
+    pub payment_method: String,
+    pub status: String,
+    pub paid_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<PaymentRow> for PaymentResponse {
+    fn from(row: PaymentRow) -> Self {
+        Self {
+            id: row.id,
+            request_id: row.request_id,
+            customer_id: row.customer_id,
+            amount: row.amount,
+            payment_method: row.payment_method,
+            status: row.status,
+            paid_at: row.paid_at,
+            created_at: row.created_at,
         }
     }
 }

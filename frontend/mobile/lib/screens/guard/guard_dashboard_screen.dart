@@ -18,13 +18,19 @@ class GuardDashboardScreen extends StatefulWidget {
 class _GuardDashboardScreenState extends State<GuardDashboardScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _tabs = [
-    const GuardHomeTab(),
+  late final List<Widget> _tabs = [
+    GuardHomeTab(onSwitchTab: _switchTab),
     const GuardJobsTab(),
-    const ChatListScreen(),
+    const ChatListScreen(actingRole: 'guard'),
     const GuardIncomeTab(),
     const GuardProfileTab(),
   ];
+
+  void _switchTab(int index) {
+    setState(() {
+      _currentIndex = index;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

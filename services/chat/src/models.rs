@@ -25,6 +25,7 @@ pub struct IncomingChatMessage {
     pub conversation_id: Uuid,
     pub content: Option<String>,
     pub message_type: Option<MessageType>,
+    pub sender_role: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, ToSchema)]
@@ -34,6 +35,7 @@ pub struct OutgoingChatMessage {
     pub sender_id: Uuid,
     pub content: Option<String>,
     pub message_type: MessageType,
+    pub sender_role: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -45,6 +47,12 @@ pub struct OutgoingChatMessage {
 pub struct CreateConversationRequest {
     pub request_id: Uuid,
     pub participant_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ListConversationsQuery {
+    /// Acting role: "guard" or "customer". Determines which counterpart name to show.
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -73,6 +81,7 @@ pub struct EnrichedConversationResponse {
     pub last_message_at: Option<DateTime<Utc>>,
     pub participant_name: Option<String>,
     pub participant_avatar: Option<String>,
+    pub unread_count: Option<i64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -82,6 +91,7 @@ pub struct MessageResponse {
     pub sender_id: Uuid,
     pub content: Option<String>,
     pub message_type: MessageType,
+    pub sender_role: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -126,6 +136,7 @@ pub struct EnrichedConversationRow {
     pub last_message_at: Option<DateTime<Utc>>,
     pub participant_name: Option<String>,
     pub participant_avatar: Option<String>,
+    pub unread_count: Option<i64>,
 }
 
 impl From<EnrichedConversationRow> for EnrichedConversationResponse {
@@ -138,6 +149,7 @@ impl From<EnrichedConversationRow> for EnrichedConversationResponse {
             last_message_at: row.last_message_at,
             participant_name: row.participant_name,
             participant_avatar: row.participant_avatar,
+            unread_count: row.unread_count,
         }
     }
 }
@@ -149,6 +161,7 @@ pub struct MessageRow {
     pub sender_id: Uuid,
     pub content: Option<String>,
     pub message_type: MessageType,
+    pub sender_role: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -160,6 +173,7 @@ impl From<MessageRow> for MessageResponse {
             sender_id: row.sender_id,
             content: row.content,
             message_type: row.message_type,
+            sender_role: row.sender_role,
             created_at: row.created_at,
         }
     }
@@ -173,6 +187,7 @@ impl From<MessageRow> for OutgoingChatMessage {
             sender_id: row.sender_id,
             content: row.content,
             message_type: row.message_type,
+            sender_role: row.sender_role,
             created_at: row.created_at,
         }
     }

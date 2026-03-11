@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../../call_screen.dart';
 import '../../../theme/colors.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../providers/booking_provider.dart';
+import '../../../providers/chat_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
+import '../../chat_screen.dart';
+import '../active_job_screen.dart';
+import '../guard_job_detail_screen.dart';
 
 class GuardJobsTab extends StatefulWidget {
   const GuardJobsTab({super.key});
@@ -168,10 +174,25 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
       child: ListView.builder(
         padding: const EdgeInsets.all(20),
         itemCount: jobs.length,
-        itemBuilder: (context, index) => Padding(
-          padding: EdgeInsets.only(bottom: index < jobs.length - 1 ? 16 : 0),
-          child: _buildJobCard(jobs[index], strings, isThai),
-        ),
+        itemBuilder: (context, index) {
+          final job = jobs[index];
+          return Padding(
+            padding: EdgeInsets.only(bottom: index < jobs.length - 1 ? 16 : 0),
+            child: GestureDetector(
+              onTap: () async {
+                final provider = context.read<BookingProvider>();
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => GuardJobDetailScreen(job: job),
+                  ),
+                );
+                if (mounted) provider.fetchJobs();
+              },
+              child: _buildJobCard(job, strings, isThai),
+            ),
+          );
+        },
       ),
     );
   }
@@ -220,6 +241,37 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     );
   }
 
+  /// Parse the description field into structured detail lines.
+  /// The booking screen builds it as "Label: Value\n..." so we split and
+  /// assign icons per known prefix.
+  List<_DetailLine> _parseDescription(String description, bool isThai) {
+    final lines = description.split('\n').where((l) => l.trim().isNotEmpty);
+    final result = <_DetailLine>[];
+    for (final line in lines) {
+      final lower = line.toLowerCase();
+      IconData icon;
+      if (lower.startsWith('บริการ:') || lower.startsWith('service:')) {
+        icon = Icons.shield_rounded;
+      } else if (lower.startsWith('วันที่:') || lower.startsWith('date:')) {
+        icon = Icons.calendar_today_rounded;
+      } else if (lower.startsWith('ระยะเวลา:') || lower.startsWith('duration:')) {
+        icon = Icons.access_time_rounded;
+      } else if (lower.startsWith('จำนวน') || lower.startsWith('guards:')) {
+        icon = Icons.people_rounded;
+      } else if (lower.startsWith('บริการเพิ่มเติม:') || lower.startsWith('additional:')) {
+        icon = Icons.add_circle_outline_rounded;
+      } else if (lower.startsWith('อุปกรณ์:') || lower.startsWith('equipment:')) {
+        icon = Icons.construction_rounded;
+      } else if (lower.startsWith('รายละเอียดงาน:') || lower.startsWith('job details:')) {
+        icon = Icons.description_rounded;
+      } else {
+        icon = Icons.info_outline_rounded;
+      }
+      result.add(_DetailLine(icon: icon, text: line.trim()));
+    }
+    return result;
+  }
+
   Widget _buildJobCard(Map<String, dynamic> job, GuardJobsStrings strings, bool isThai) {
     final customerName = job['customer_name'] as String? ?? '-';
     final address = job['address'] as String? ?? '-';
@@ -227,9 +279,12 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     final description = job['description'] as String? ?? '';
     final specialInstructions = job['special_instructions'] as String?;
     final assignmentStatus = job['assignment_status'] as String? ?? 'assigned';
+    final bookedHours = (job['booked_hours'] as num?)?.toInt();
+    final urgency = job['urgency'] as String?;
 
     final statusLabel = _getStatusLabel(assignmentStatus, isThai);
     final statusColor = _getStatusColor(assignmentStatus);
+    final detailLines = _parseDescription(description, isThai);
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -241,6 +296,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Status + Price row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -276,6 +332,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
             ],
           ),
           const SizedBox(height: 16),
+
+          // Customer name
           Text(
             customerName,
             style: GoogleFonts.inter(
@@ -284,11 +342,14 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
               color: AppColors.textPrimary,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
+
+          // Address
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Icon(Icons.location_on_rounded, color: AppColors.primary, size: 16),
-              const SizedBox(width: 4),
+              const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   address,
@@ -299,37 +360,197 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
               ),
             ],
           ),
-          if (description.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Divider(color: AppColors.border),
+
+          // Urgency badge + booked hours (quick info row)
+          if (urgency != null || bookedHours != null) ...[
             const SizedBox(height: 12),
-            Text(
-              description,
-              style: GoogleFonts.inter(fontSize: 15, color: AppColors.textPrimary),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                if (urgency != null)
+                  _buildInfoChip(
+                    Icons.flag_rounded,
+                    _urgencyLabel(urgency, isThai),
+                    _urgencyColor(urgency),
+                  ),
+                if (bookedHours != null)
+                  _buildInfoChip(
+                    Icons.access_time_rounded,
+                    '$bookedHours ${isThai ? "ชม." : "hrs"}',
+                    AppColors.info,
+                  ),
+              ],
             ),
           ],
-          if (specialInstructions != null && specialInstructions.isNotEmpty) ...[
+
+          // Structured description details
+          if (detailLines.isNotEmpty) ...[
             const SizedBox(height: 16),
-            Text(
-              isThai ? 'คำสั่งพิเศษ' : 'Special Instructions',
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textPrimary,
+            const Divider(color: AppColors.border),
+            const SizedBox(height: 12),
+            ...detailLines.map((d) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(d.icon, size: 16, color: AppColors.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          d.text,
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            color: AppColors.textPrimary,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+
+          // Special instructions
+          if (specialInstructions != null && specialInstructions.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded,
+                          size: 16, color: Color(0xFFF59E0B)),
+                      const SizedBox(width: 6),
+                      Text(
+                        isThai ? 'หมายเหตุ' : 'Notes',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF92400E),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    specialInstructions,
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: const Color(0xFF78350F),
+                      height: 1.4,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              specialInstructions,
-              style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
-            ),
           ],
-          if (assignmentStatus == 'assigned' || assignmentStatus == 'en_route') ...[
+          if (assignmentStatus == 'pending_acceptance') ...[
+            const SizedBox(height: 20),
+            _buildAcceptDeclineButtons(job, isThai),
+          ] else if (assignmentStatus == 'accepted' ||
+              assignmentStatus == 'assigned' ||
+              assignmentStatus == 'en_route' ||
+              assignmentStatus == 'arrived') ...[
             const SizedBox(height: 20),
             _buildStatusActionButton(job, isThai),
+            const SizedBox(height: 12),
+            _buildCallChatRow(job, isThai),
           ],
         ],
       ),
+    );
+  }
+
+  Widget _buildAcceptDeclineButtons(Map<String, dynamic> job, bool isThai) {
+    final assignmentId = job['assignment_id'] as String? ?? '';
+
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton(
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  title: Text(
+                    isThai ? 'ปฏิเสธงาน' : 'Decline Job',
+                    style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+                  ),
+                  content: Text(
+                    isThai
+                        ? 'คุณต้องการปฏิเสธงานนี้หรือไม่?'
+                        : 'Are you sure you want to decline this job?',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text(isThai ? 'ยกเลิก' : 'Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        context
+                            .read<BookingProvider>()
+                            .declineAssignment(assignmentId);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.danger,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: Text(isThai ? 'ปฏิเสธ' : 'Decline'),
+                    ),
+                  ],
+                ),
+              );
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.danger,
+              side: const BorderSide(color: AppColors.danger),
+              minimumSize: const Size(0, 48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+            ),
+            child: Text(
+              isThai ? 'ปฏิเสธ' : 'Decline',
+              style:
+                  GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 2,
+          child: ElevatedButton(
+            onPressed: () {
+              context.read<BookingProvider>().acceptAssignment(assignmentId);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              minimumSize: const Size(0, 48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+            ),
+            child: Text(
+              isThai ? 'รับงาน' : 'Accept',
+              style:
+                  GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -338,18 +559,56 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     final status = job['assignment_status'] as String? ?? 'assigned';
 
     String buttonLabel;
-    String nextStatus;
-    if (status == 'assigned') {
+    if (status == 'accepted') {
       buttonLabel = isThai ? 'เริ่มเดินทาง' : 'Start Route';
-      nextStatus = 'en_route';
-    } else {
+    } else if (status == 'en_route') {
       buttonLabel = isThai ? 'ถึงจุดหมาย' : 'Arrived';
-      nextStatus = 'arrived';
+    } else if (status == 'arrived') {
+      buttonLabel = isThai ? 'เริ่มงาน' : 'Start Job';
+    } else {
+      buttonLabel = isThai ? 'เริ่มเดินทาง' : 'Start Route';
     }
 
     return ElevatedButton(
-      onPressed: () {
-        context.read<BookingProvider>().updateAssignmentStatus(assignmentId, nextStatus);
+      onPressed: () async {
+        if (status == 'arrived') {
+          // Start job → navigate to ActiveJobScreen
+          try {
+            final result = await context
+                .read<BookingProvider>()
+                .startActiveJob(assignmentId);
+            if (!mounted) return;
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ActiveJobScreen(
+                  assignmentId: assignmentId,
+                  customerName: job['customer_name'] as String?,
+                  address: job['address'] as String?,
+                  bookedHours: (job['booked_hours'] as num?)?.toInt() ?? 6,
+                  remainingSeconds:
+                      (result['remaining_seconds'] as num?)?.toInt() ??
+                          (((job['booked_hours'] as num?)?.toInt() ?? 6) * 3600),
+                ),
+              ),
+            );
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error: $e'),
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: AppColors.danger,
+              ),
+            );
+          }
+        } else {
+          final nextStatus =
+              (status == 'accepted' || status == 'assigned') ? 'en_route' : 'arrived';
+          context
+              .read<BookingProvider>()
+              .updateAssignmentStatus(assignmentId, nextStatus);
+        }
       },
       style: ElevatedButton.styleFrom(
         backgroundColor: AppColors.primary,
@@ -365,8 +624,105 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     );
   }
 
+  Widget _buildCallChatRow(Map<String, dynamic> job, bool isThai) {
+    final customerName = job['customer_name'] as String? ?? '-';
+
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CallScreen(userName: customerName),
+                ),
+              );
+            },
+            icon: const Icon(Icons.phone_rounded, size: 18),
+            label: Text(
+              isThai ? 'โทร' : 'Call',
+              style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: const BorderSide(color: AppColors.primary),
+              minimumSize: const Size(0, 44),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: ElevatedButton.icon(
+            onPressed: () => _openChat(job, isThai),
+            icon: const Icon(Icons.chat_rounded, size: 18),
+            label: Text(
+              isThai ? 'แชท' : 'Chat',
+              style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              minimumSize: const Size(0, 44),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openChat(Map<String, dynamic> job, bool isThai) async {
+    final requestId = job['id'] as String? ?? '';
+    final customerId = job['customer_id'] as String? ?? '';
+    final customerName = job['customer_name'] as String? ?? '-';
+    final authProvider = context.read<AuthProvider>();
+    final chatProvider = context.read<ChatProvider>();
+    var myUserId = authProvider.userId;
+    if (myUserId == null) {
+      await authProvider.fetchProfile();
+      myUserId = authProvider.userId;
+    }
+
+    if (myUserId == null || requestId.isEmpty || customerId.isEmpty) return;
+    try {
+      final conversationId = await chatProvider
+          .getOrCreateConversation(requestId, myUserId, customerId);
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversationId: conversationId,
+            requestId: requestId,
+            userName: customerName,
+            userRole: isThai ? 'ลูกค้า' : 'Client',
+            actingRole: 'guard',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    }
+  }
+
   String _getStatusLabel(String status, bool isThai) {
     switch (status) {
+      case 'pending_acceptance':
+        return isThai ? 'รอตอบรับ' : 'Pending';
+      case 'accepted':
+        return isThai ? 'ตอบรับแล้ว' : 'Accepted';
       case 'assigned':
         return isThai ? 'ได้รับมอบหมาย' : 'Assigned';
       case 'en_route':
@@ -375,6 +731,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return isThai ? 'ถึงจุดหมาย' : 'Arrived';
       case 'completed':
         return isThai ? 'เสร็จสิ้น' : 'Completed';
+      case 'declined':
+        return isThai ? 'ปฏิเสธแล้ว' : 'Declined';
       default:
         return status;
     }
@@ -382,6 +740,10 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
 
   Color _getStatusColor(String status) {
     switch (status) {
+      case 'pending_acceptance':
+        return const Color(0xFFF59E0B);
+      case 'accepted':
+        return AppColors.info;
       case 'assigned':
         return AppColors.info;
       case 'en_route':
@@ -390,8 +752,57 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return AppColors.success;
       case 'completed':
         return AppColors.textSecondary;
+      case 'declined':
+        return AppColors.danger;
       default:
         return AppColors.textSecondary;
+    }
+  }
+
+  Widget _buildInfoChip(IconData icon, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _urgencyLabel(String urgency, bool isThai) {
+    switch (urgency) {
+      case 'urgent':
+        return isThai ? 'เร่งด่วน' : 'Urgent';
+      case 'scheduled':
+        return isThai ? 'ตามกำหนด' : 'Scheduled';
+      default:
+        return isThai ? 'ปกติ' : 'Normal';
+    }
+  }
+
+  Color _urgencyColor(String urgency) {
+    switch (urgency) {
+      case 'urgent':
+        return AppColors.danger;
+      case 'scheduled':
+        return AppColors.info;
+      default:
+        return AppColors.success;
     }
   }
 
@@ -427,4 +838,10 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
       ),
     );
   }
+}
+
+class _DetailLine {
+  final IconData icon;
+  final String text;
+  const _DetailLine({required this.icon, required this.text});
 }

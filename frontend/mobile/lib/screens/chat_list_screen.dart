@@ -8,7 +8,8 @@ import '../l10n/app_strings.dart';
 import 'chat_screen.dart';
 
 class ChatListScreen extends StatefulWidget {
-  const ChatListScreen({super.key});
+  final String? actingRole;
+  const ChatListScreen({super.key, this.actingRole});
 
   @override
   State<ChatListScreen> createState() => _ChatListScreenState();
@@ -19,7 +20,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<ChatProvider>().fetchConversations();
+      context.read<ChatProvider>().fetchConversations(role: widget.actingRole);
     });
   }
 
@@ -70,12 +71,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
     }
 
     return RefreshIndicator(
-      onRefresh: () => context.read<ChatProvider>().fetchConversations(),
+      onRefresh: () => context.read<ChatProvider>().fetchConversations(role: widget.actingRole),
       child: ListView.builder(
         padding: EdgeInsets.zero,
         itemCount: provider.conversations.length,
         itemBuilder: (context, index) {
           final conv = provider.conversations[index];
+          final unread = conv['unread_count'] as int? ?? 0;
           return _buildChatItem(
             context,
             conversationId: conv['id'] as String? ?? '',
@@ -83,6 +85,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             message: conv['last_message'] as String? ?? '',
             time: _formatTime(conv['last_message_at'] as String?),
             avatarUrl: conv['participant_avatar'] as String?,
+            unreadCount: unread,
             isThai: isThai,
           );
         },
@@ -173,19 +176,30 @@ class _ChatListScreenState extends State<ChatListScreen> {
     required String message,
     required String time,
     required String? avatarUrl,
+    required int unreadCount,
     required bool isThai,
   }) {
+    final hasUnread = unreadCount > 0;
     return InkWell(
-      onTap: () {
-        Navigator.push(
+      onTap: () async {
+        final chatProvider = context.read<ChatProvider>();
+        final role = widget.actingRole;
+        await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => ChatScreen(
+              conversationId: conversationId,
+              requestId: '',
               userName: name,
               userRole: isThai ? 'ลูกค้า' : 'Client',
+              actingRole: role,
             ),
           ),
         );
+        // Refresh conversations to update unread counts after returning
+        if (mounted) {
+          chatProvider.fetchConversations(role: role);
+        }
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -224,7 +238,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           name,
                           style: GoogleFonts.inter(
                             fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: hasUnread ? FontWeight.w800 : FontWeight.bold,
                             color: AppColors.textPrimary,
                           ),
                           maxLines: 1,
@@ -234,19 +248,49 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       if (time.isNotEmpty)
                         Text(
                           time,
-                          style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary),
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: hasUnread ? AppColors.primary : AppColors.textSecondary,
+                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                          ),
                         ),
                     ],
                   ),
-                  if (message.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      message,
-                      style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          message.isNotEmpty ? message : (isThai ? 'ยังไม่มีข้อความ' : 'No messages yet'),
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            color: hasUnread ? AppColors.textPrimary : AppColors.textSecondary,
+                            fontWeight: hasUnread ? FontWeight.w600 : FontWeight.normal,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (hasUnread) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            unreadCount > 99 ? '99+' : '$unreadCount',
+                            style: GoogleFonts.inter(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),

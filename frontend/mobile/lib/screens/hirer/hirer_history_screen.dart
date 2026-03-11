@@ -202,6 +202,35 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
         .toList();
   }
 
+  /// Parse description into structured lines with icons (same logic as guard jobs).
+  List<_DetailLine> _parseDescription(String description) {
+    final lines = description.split('\n').where((l) => l.trim().isNotEmpty);
+    final result = <_DetailLine>[];
+    for (final line in lines) {
+      final lower = line.toLowerCase();
+      IconData icon;
+      if (lower.startsWith('บริการ:') || lower.startsWith('service:')) {
+        icon = Icons.shield_rounded;
+      } else if (lower.startsWith('วันที่:') || lower.startsWith('date:')) {
+        icon = Icons.calendar_today_rounded;
+      } else if (lower.startsWith('ระยะเวลา:') || lower.startsWith('duration:')) {
+        icon = Icons.access_time_rounded;
+      } else if (lower.startsWith('จำนวน') || lower.startsWith('guards:')) {
+        icon = Icons.people_rounded;
+      } else if (lower.startsWith('บริการเพิ่มเติม:') || lower.startsWith('additional:')) {
+        icon = Icons.add_circle_outline_rounded;
+      } else if (lower.startsWith('อุปกรณ์:') || lower.startsWith('equipment:')) {
+        icon = Icons.construction_rounded;
+      } else if (lower.startsWith('รายละเอียดงาน:') || lower.startsWith('job details:')) {
+        icon = Icons.description_rounded;
+      } else {
+        icon = Icons.info_outline_rounded;
+      }
+      result.add(_DetailLine(icon: icon, text: line.trim()));
+    }
+    return result;
+  }
+
   Widget _buildRequestCard(
     Map<String, dynamic> req,
     bool isThai,
@@ -211,13 +240,15 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
     final statusLabel = _statusLabel(status, s);
     final statusColor = _statusColor(status);
     final address = req['address'] as String? ?? '';
-    final description = req['description'] as String?;
+    final description = req['description'] as String? ?? '';
+    final specialInstructions = req['special_instructions'] as String?;
     final price = req['offered_price'];
     final createdAt = req['created_at'] as String? ?? '';
     final urgency = req['urgency'] as String? ?? 'medium';
+    final bookedHours = (req['booked_hours'] as num?)?.toInt();
 
-    // Format date
     final dateDisplay = _formatDate(createdAt, isThai);
+    final detailLines = _parseDescription(description);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -236,138 +267,161 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Status + Price header
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.shield_rounded,
-                  color: AppColors.primary,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      address,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    if (description != null && description.isNotEmpty)
-                      Text(
-                        description,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
                   color: statusColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text(
-                  statusLabel,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.circle, color: statusColor, size: 8),
+                    const SizedBox(width: 6),
+                    Text(
+                      statusLabel,
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: statusColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (price != null)
+                Text(
+                  '฿${(price is num ? price : double.tryParse(price.toString()) ?? 0).toStringAsFixed(0)}',
                   style: GoogleFonts.inter(
-                    fontSize: 10,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: statusColor,
+                    color: AppColors.primary,
                   ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Address
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.location_on_rounded, color: AppColors.primary, size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  address,
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Divider(color: AppColors.border, height: 1),
-          ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+
+          // Urgency + booked hours + created date chips
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
             children: [
-              Column(
+              _buildChip(
+                Icons.flag_rounded,
+                _urgencyLabel(urgency, isThai),
+                _urgencyChipColor(urgency),
+              ),
+              if (bookedHours != null)
+                _buildChip(
+                  Icons.access_time_rounded,
+                  '$bookedHours ${isThai ? "ชม." : "hrs"}',
+                  AppColors.info,
+                ),
+              _buildChip(
+                Icons.calendar_today_rounded,
+                dateDisplay,
+                AppColors.textSecondary,
+              ),
+            ],
+          ),
+
+          // Structured description details
+          if (detailLines.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Divider(color: AppColors.border, height: 1),
+            const SizedBox(height: 10),
+            ...detailLines.map((d) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(d.icon, size: 15, color: AppColors.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          d.text,
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: AppColors.textPrimary,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+
+          // Special instructions
+          if (specialInstructions != null && specialInstructions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      const Icon(
-                        Icons.calendar_today_rounded,
-                        size: 14,
-                        color: AppColors.textSecondary,
-                      ),
+                      const Icon(Icons.warning_amber_rounded,
+                          size: 14, color: Color(0xFFF59E0B)),
                       const SizedBox(width: 6),
                       Text(
-                        dateDisplay,
+                        isThai ? 'หมายเหตุ' : 'Notes',
                         style: GoogleFonts.inter(
                           fontSize: 12,
-                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF92400E),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.priority_high_rounded,
-                        size: 14,
-                        color: AppColors.textSecondary,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        _urgencyLabel(urgency, isThai),
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    specialInstructions,
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: const Color(0xFF78350F),
+                      height: 1.4,
+                    ),
                   ),
                 ],
               ),
-              if (price != null)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      s.total,
-                      style: GoogleFonts.inter(
-                        fontSize: 10,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    Text(
-                      '฿${(price is num ? price : double.tryParse(price.toString()) ?? 0).toStringAsFixed(0)}',
-                      style: GoogleFonts.inter(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primary,
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          ),
+            ),
+          ],
+
           // Cancel button for pending requests
           if (status == 'pending') ...[
             const SizedBox(height: 12),
@@ -392,6 +446,39 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildChip(IconData icon, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _urgencyChipColor(String urgency) {
+    return switch (urgency) {
+      'high' || 'critical' => Colors.red,
+      'low' => AppColors.success,
+      _ => const Color(0xFFF59E0B),
+    };
   }
 
   Future<void> _cancelRequest(String requestId) async {
@@ -477,4 +564,10 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
       return isoDate.substring(0, 10);
     }
   }
+}
+
+class _DetailLine {
+  final IconData icon;
+  final String text;
+  const _DetailLine({required this.icon, required this.text});
 }

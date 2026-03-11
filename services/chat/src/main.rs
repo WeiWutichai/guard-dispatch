@@ -29,6 +29,7 @@ use crate::state::AppState;
         handlers::create_conversation,
         handlers::list_conversations,
         handlers::list_messages,
+        handlers::mark_read,
         handlers::upload_attachment,
         handlers::get_signed_url,
     ),
@@ -124,6 +125,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/conversations/{id}/messages",
             get(handlers::list_messages),
+        )
+        .route(
+            "/conversations/{id}/read",
+            axum::routing::put(handlers::mark_read),
         )
         // REST — Attachments (image upload + signed URL)
         .route("/attachments", post(handlers::upload_attachment))

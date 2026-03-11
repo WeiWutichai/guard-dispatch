@@ -419,7 +419,7 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
 │       │   │   ├── tracking_service.dart  ← WebSocket GPS streaming to backend
 │       │   │   └── language_service.dart
-│       │   ├── screens/                ← 32+ screens (guard/customer/common)
+│       │   ├── screens/                ← 39 screens (guard/hirer/common)
 │       │   │   ├── phone_input_screen.dart           ← OTP: กรอกเบอร์โทร
 │       │   │   ├── otp_verification_screen.dart      ← OTP: กรอกรหัส 6 หลัก
 │       │   │   ├── set_password_screen.dart          ← OTP: ตั้งรหัสผ่าน + ข้อมูล
@@ -677,9 +677,18 @@ RegistrationPendingScreen
 - `GET /requests` → `handlers::list_requests` (JWT) — list requests (customer sees own, admin sees all)
 - `GET /requests/{id}` → `handlers::get_request` (JWT) — single request detail (owner/admin/assigned guard)
 - `PUT /requests/{id}/cancel` → `handlers::cancel_request` (JWT) — cancel pending request (owner/admin)
-- `POST /requests/{id}/assign` → `handlers::assign_guard` (admin JWT) — assign guard to request
+- `POST /requests/{id}/assign` → `handlers::assign_guard` (JWT: admin or request owner) — assign guard to request. Admin can assign to any request; customer can assign only to own pending request (`request.customer_id == user.user_id`)
 - `GET /requests/{id}/assignments` → `handlers::get_assignments` (JWT) — list assignments for request
 - `PUT /assignments/{id}/status` → `handlers::update_assignment_status` (JWT) — guard updates own assignment status
+
+**Booking Service — Available Guards Endpoint (main.rs):**
+- `GET /available-guards` → `handlers::available_guards` (JWT) — list nearby available guards for customer
+  - Query params: `lat` (required), `lng` (required), `radius_km` (optional, default 50, max 200), `limit` (optional, default 20, max 50), `offset` (optional, default 0)
+  - Returns `Vec<AvailableGuardResponse>` — guards with `role='guard'`, `is_active=true`, `approval_status='approved'`, GPS location within last 30 minutes, within radius_km
+  - **Haversine distance:** Calculated in SQL using `6371 * acos(...)` with `LEAST/GREATEST` clamping to prevent NaN from floating-point rounding
+  - **Models:** `AvailableGuardsQuery` (query params), `AvailableGuardRow` (sqlx::FromRow), `AvailableGuardResponse` (API response — includes `id`, `full_name`, `avatar_url`, `experience_years`, `lat`, `lng`, `distance_km`, `last_seen_at`, `completed_jobs`, `rating`, `review_count`)
+  - **Placeholder ratings:** `rating = 4.5 + (completed_jobs * 0.01).min(0.4)`, `review_count = completed_jobs.min(200)` — TODO: replace with real reviews table
+  - Ordered by distance ascending
 
 **Booking Service — Guard Endpoints (main.rs):**
 - `GET /guard/dashboard` → `handlers::guard_dashboard` (guard JWT)
@@ -718,14 +727,17 @@ RegistrationPendingScreen
   - `GuardProfileTab`: real name, formatted phone as ID (`086-320-8235`), avatar from URL or person icon fallback, "ยืนยันแล้ว" badge only (no "ยังไม่ได้ลงทะเบียน")
   - `HirerProfileScreen`: uses `auth.customerFullName ?? auth.fullName` for customer display name, formatted phone as ID, avatar icon fallback
   - `ServiceSelectionScreen`: loads service rates from API via `BookingProvider.fetchServiceRates()` → dynamic cards with icon selection based on service name keywords. Back button uses `pushAndRemoveUntil` → `RoleSelectionScreen(phone)` (ไม่ใช่ `Navigator.pop()` ซึ่งจะทำให้จอดำ)
+  - `BookingScreen`: customer fills booking form → `createRequest()` → extracts `requestId` from response → `Navigator.pushReplacement` to `GuardSearchingScreen(requestId, lat, lng)`
+  - `GuardSearchingScreen`: accepts `requestId` (String?), `lat` (double), `lng` (double). Flow: 2-second radar animation → `fetchAvailableGuards(lat, lng)` → display guard card list (name, avatar, distance, rating, completed jobs, experience) → customer taps "ยืนยันการจอง" → `assignGuardToRequest(requestId, guardId)` → success bottom sheet → pop to dashboard. Empty state: "ไม่พบเจ้าหน้าที่" + retry button. i18n via `LanguageProvider`.
 - `BookingProvider` (`booking_provider.dart`): `ChangeNotifier` for booking/guard state
   - Guard: `fetchDashboard()`, `fetchJobs()`, `fetchEarnings()`, `updateAssignmentStatus()`, `fetchWorkHistory()`, `fetchRatings()`
-  - Customer: `fetchMyRequests()`, `createRequest()`, `cancelRequest()`
+  - Customer: `fetchMyRequests()`, `createRequest()`, `cancelRequest()`, `fetchAvailableGuards(lat, lng)`, `assignGuardToRequest(requestId, guardId)`
   - Pricing: `fetchServiceRates()` — uses separate `_isLoadingRates` flag (not shared `_isLoading`)
-  - State: `serviceRates` (list), `myRequests` (list), `dashboard`, `currentJobs`, `completedJobs`, `earnings`, `workHistory`, `ratings`
+  - State: `serviceRates` (list), `myRequests` (list), `availableGuards` (list), `dashboard`, `currentJobs`, `completedJobs`, `earnings`, `workHistory`, `ratings`
+  - `_isLoadingGuards`: separate flag for available guards loading (not shared with `_isLoading` or `_isLoadingRates`)
 - `BookingService` (`booking_service.dart`): Dio-based HTTP client for booking API
   - Guard: `getGuardDashboard()`, `getGuardJobs()`, `getGuardEarnings()`, `updateAssignmentStatus()`, `getGuardWorkHistory()`, `getGuardRatings()`
-  - Customer: `createRequest()`, `listMyRequests()`, `getRequest()`, `cancelRequest()`, `getAssignments()`
+  - Customer: `createRequest()`, `listMyRequests()`, `getRequest()`, `cancelRequest()`, `getAssignments()`, `listAvailableGuards({lat, lng, radiusKm, limit})`, `assignGuardToRequest(requestId, guardId)`
   - Pricing: `listServiceRates()` → `GET /booking/pricing/services` — public, returns `List<Map<String, dynamic>>`
 - `main.dart`: `ChangeNotifierProvider(create: (_) => BookingProvider(BookingService(apiClient)))` registered in `MultiProvider`
 
@@ -745,6 +757,16 @@ RegistrationPendingScreen
   - Permission errors auto-revert toggle to OFF
 - **main.dart**: `ChangeNotifierProvider(create: (_) => TrackingProvider(TrackingService()))` registered in `MultiProvider`
 - **GuardHomeTab**: `context.watch<TrackingProvider>()` replaces local `_isReady` state; shows GPS accuracy when online
+
+**Unified SecureGuard Header Pattern (Flutter Mobile):**
+- All guard-side screens (4 tabs + 4 detail screens) and hirer profile settings use the same green header design:
+  - `Container` with `AppColors.primary` background, `BorderRadius.vertical(bottom: Radius.circular(32))`, `EdgeInsets.fromLTRB(12, 60, 24, 30)` padding
+  - Top row: back button (where applicable) + shield icon (white alpha 0.2 bg, rounded 12) + "SecureGuard" title (bold 20 white) + subtitle (13 white alpha 0.9) + optional action icons
+  - Screens with tabs (jobs, income, work history): embed `TabBar`/sub-tab navigation inside the green header using `Colors.white.withValues(alpha: 0.15)` pill container, white selected indicator, `AppColors.primary` selected text color
+  - Manual top padding (60px) instead of `SafeArea` — provides status bar clearance on all devices
+  - Guard home tab header: back arrow → `RoleSelectionScreen(phone)`, greeting text with `authProvider.fullName`, notification bell
+  - Detail screens (profile_settings, ratings_reviews, contact_support, work_history): green header + back arrow + shield icon + title
+- ❌ ห้ามใช้ `AppBar` หรือ `AppColors.deepBlue` ใน guard/hirer screens — ใช้ custom `Container` header ด้วย `AppColors.primary` เท่านั้น
 
 **Web Admin Map (Reverse Geocoding):**
 - `reverseGeocode()` in `lib/api.ts` — Nominatim reverse geocode with ~500m grid cache (capped at 500 entries)
@@ -978,6 +1000,9 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม accept ราคาติดลบใน service rates — `validate_prices()` ต้องตรวจ `min_price >= 0`, `max_price >= 0`, `base_fee >= 0`
 - ❌ ห้าม accept `min_price > max_price` — ต้อง validate ทั้ง create และ update (update ต้อง merge กับค่าเดิมก่อน validate)
 - ❌ ห้าม return inactive service rates จาก public GET endpoints — ต้อง filter `WHERE is_active = true` เสมอ
+- ❌ ห้าม query `available-guards` โดยไม่ filter `recorded_at > NOW() - INTERVAL '30 minutes'` — guards ที่ offline (ไม่มี GPS update ภายใน 30 นาที) ต้องไม่แสดง
+- ❌ ห้ามใช้ `acos()` โดยไม่ clamp ด้วย `LEAST(1.0, GREATEST(-1.0, ...))` ใน Haversine calculation — floating-point rounding อาจทำให้ค่าเกิน [-1,1] → NaN
+- ❌ ห้ามให้ non-admin, non-owner assign guard — `assign_guard` handler ต้องตรวจ `request.customer_id == user.user_id` สำหรับ non-admin users
 - ❌ ห้ามใช้ shared `_isLoading` flag ใน `BookingProvider` สำหรับ pricing — ต้องใช้ `_isLoadingRates` แยก (ป้องกัน cross-interference กับ guard/customer loading)
 - ❌ ห้าม optimistic delete ใน web admin pricing — ต้อง reload list จาก API หลัง delete (`loadServiceRates()`)
 - ❌ ห้าม upload ไฟล์ไปยัง S3/MinIO แบบ sequential loop — ใช้ `tokio::task::JoinSet` เพื่อ parallel upload เสมอ
@@ -1043,3 +1068,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม start GPS stream ก่อน WebSocket connected — `_startGpsStream()` เรียกเฉพาะเมื่อ `_isConnected == true`
 - ❌ ห้ามสร้าง WS listener ใหม่โดยไม่ cancel อันเก่า — `_connectWebSocket()` ต้อง `await _wsSub?.cancel()` ก่อนเสมอ (ป้องกัน orphaned subscriptions)
 - ❌ ห้ามใช้ local state (`_isReady`) สำหรับ guard online toggle — ใช้ `context.watch<TrackingProvider>().isOnline` เท่านั้น
+- ❌ ห้ามใช้ `AppBar` widget หรือ `AppColors.deepBlue` ใน guard/hirer screens — ใช้ custom `Container` header ด้วย `AppColors.primary` + `BorderRadius.vertical(bottom: Radius.circular(32))` เท่านั้น (unified SecureGuard header pattern)
+- ❌ ห้ามใช้ `SafeArea` ใน screens ที่มี green header — ใช้ manual top padding (`EdgeInsets.fromLTRB(12, 60, 24, 30)`) แทน
+- ❌ ห้ามใช้ shared `_isLoadingGuards` flag ร่วมกับ `_isLoading` หรือ `_isLoadingRates` — ต้องแยก flag สำหรับ available guards loading
+- ❌ ห้ามให้ non-owner customer assign guard ไปยัง request ของคนอื่น — backend `assign_guard` ตรวจ `request.customer_id == user.user_id` สำหรับ non-admin

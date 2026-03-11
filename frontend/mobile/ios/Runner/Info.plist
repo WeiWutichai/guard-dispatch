@@ -70,6 +70,10 @@
 	<string>ใช้เพื่อส่งตำแหน่งของคุณขณะปฏิบัติงาน</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>ใช้เพื่อส่งตำแหน่งของคุณขณะปฏิบัติงาน แม้แอปจะทำงานอยู่เบื้องหลัง</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>ใช้เพื่ออัปโหลดเอกสารและรูปถ่ายในการสมัครงาน</string>
 	<key>NSCameraUsageDescription</key>

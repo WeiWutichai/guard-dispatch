@@ -39,19 +39,23 @@ class _BookingScreenState extends State<BookingScreen> {
 
   // Equipment
   final Map<String, bool> _equipment = {
-    'radio': false,
-    'cctv': false,
     'flashlight': false,
-    'first_aid': false,
+    'handcuffs': false,
+    'baton': false,
+    'uniform': false,
+    'uniform_polo': false,
+    'other': false,
   };
+  final _otherEquipmentController = TextEditingController();
 
   // Additional services
   final Map<String, bool> _services = {
-    'patrol': false,
-    'id_check': false,
-    'vip_escort': false,
-    'daily_report': false,
+    'has_pets': false,
+    'plant_care': false,
+    'utilities': false,
+    'other': false,
   };
+  final _otherServiceController = TextEditingController();
 
   // Pricing
   int _guardCount = 1;
@@ -84,6 +88,8 @@ class _BookingScreenState extends State<BookingScreen> {
     _jobDetailsController.dispose();
     _notesController.dispose();
     _tipController.dispose();
+    _otherEquipmentController.dispose();
+    _otherServiceController.dispose();
     super.dispose();
   }
 
@@ -319,6 +325,7 @@ class _BookingScreenState extends State<BookingScreen> {
             offeredPrice: _total,
             specialInstructions: notes.isNotEmpty ? notes : null,
             urgency: _deriveUrgency(),
+            bookedHours: _selectedHours,
           );
       if (!mounted) return;
       final requestId = result['id']?.toString();
@@ -329,6 +336,12 @@ class _BookingScreenState extends State<BookingScreen> {
             requestId: requestId,
             lat: lat,
             lng: lng,
+            totalAmount: _total,
+            subtotal: _subtotal,
+            baseFee: _baseFee,
+            tip: _tip,
+            bookedHours: _selectedHours,
+            guardCount: _guardCount,
           ),
         ),
       );
@@ -846,35 +859,47 @@ class _BookingScreenState extends State<BookingScreen> {
       title: isThai ? 'อุปกรณ์รักษาความปลอดภัย' : 'Security Equipment',
       child: Column(
         children: [
-          _buildCheckboxTile(
-            key: 'radio',
-            map: _equipment,
-            icon: Icons.settings_input_antenna_rounded,
-            label: isThai ? 'วิทยุสื่อสาร' : 'Two-Way Radio',
-            desc: isThai ? 'สื่อสารระหว่างทีม' : 'Team communication',
-          ),
-          _buildCheckboxTile(
-            key: 'cctv',
-            map: _equipment,
-            icon: Icons.videocam_rounded,
-            label: isThai ? 'กล้องวงจรปิด' : 'CCTV Camera',
-            desc: isThai ? 'บันทึกภาพเหตุการณ์' : 'Event recording',
-          ),
-          _buildCheckboxTile(
-            key: 'flashlight',
-            map: _equipment,
-            icon: Icons.flashlight_on_rounded,
-            label: isThai ? 'ไฟฉาย' : 'Flashlight',
-            desc: isThai ? 'ตรวจสอบพื้นที่มืด' : 'Dark area inspection',
-          ),
-          _buildCheckboxTile(
-            key: 'first_aid',
-            map: _equipment,
-            icon: Icons.medical_services_rounded,
-            label: isThai ? 'อุปกรณ์ปฐมพยาบาล' : 'First Aid Kit',
-            desc: isThai ? 'เตรียมพร้อมเหตุฉุกเฉิน' : 'Emergency readiness',
-            isLast: true,
-          ),
+          _buildSimpleCheckbox('flashlight', _equipment,
+              isThai ? 'ไฟฉาย' : 'Flashlight'),
+          _buildSimpleCheckbox('handcuffs', _equipment,
+              isThai ? 'กุญแจมือถือ' : 'Handcuffs'),
+          _buildSimpleCheckbox('baton', _equipment,
+              isThai ? 'กระบอง, กระบองไฟจราจร' : 'Baton, Traffic Baton'),
+          _buildSimpleCheckbox('uniform', _equipment,
+              isThai ? 'ชุดยูนิฟอร์ม รปภ.' : 'Guard Uniform'),
+          _buildSimpleCheckbox('uniform_polo', _equipment,
+              isThai ? 'ชุดเครื่องแบบ รปภ.+เสื้อโปโล' : 'Guard Uniform + Polo'),
+          _buildSimpleCheckbox('other', _equipment,
+              isThai ? 'อื่นๆ' : 'Other'),
+          if (_equipment['other'] == true)
+            Padding(
+              padding: const EdgeInsets.only(left: 36, top: 4, bottom: 4),
+              child: TextField(
+                controller: _otherEquipmentController,
+                decoration: InputDecoration(
+                  hintText: 'Other (${isThai ? "โปรดระบุ" : "please specify"})',
+                  hintStyle: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.primary),
+                  ),
+                ),
+                style: GoogleFonts.inter(fontSize: 14),
+              ),
+            ),
         ],
       ),
     );
@@ -890,35 +915,43 @@ class _BookingScreenState extends State<BookingScreen> {
       title: isThai ? 'บริการเพิ่มเติม' : 'Additional Services',
       child: Column(
         children: [
-          _buildCheckboxTile(
-            key: 'patrol',
-            map: _services,
-            icon: Icons.directions_walk_rounded,
-            label: isThai ? 'ลาดตระเวน' : 'Patrol Service',
-            desc: isThai ? 'ตรวจตราพื้นที่รอบนอก' : 'Perimeter patrol',
-          ),
-          _buildCheckboxTile(
-            key: 'id_check',
-            map: _services,
-            icon: Icons.badge_rounded,
-            label: isThai ? 'ตรวจสอบตัวตน' : 'ID Verification',
-            desc: isThai ? 'ตรวจบัตรผู้เข้า-ออก' : 'Entry/exit ID check',
-          ),
-          _buildCheckboxTile(
-            key: 'vip_escort',
-            map: _services,
-            icon: Icons.security_rounded,
-            label: 'VIP Escort',
-            desc: isThai ? 'คุ้มกันบุคคลสำคัญ' : 'VIP protection detail',
-          ),
-          _buildCheckboxTile(
-            key: 'daily_report',
-            map: _services,
-            icon: Icons.summarize_rounded,
-            label: isThai ? 'รายงานประจำวัน' : 'Daily Report',
-            desc: isThai ? 'สรุปเหตุการณ์ประจำวัน' : 'Daily event summary',
-            isLast: true,
-          ),
+          _buildSimpleCheckbox('has_pets', _services,
+              isThai ? 'มีสัตว์เลี้ยง' : 'Has Pets'),
+          _buildSimpleCheckbox('plant_care', _services,
+              isThai ? 'ดูแลต้นไม้' : 'Plant Care'),
+          _buildSimpleCheckbox('utilities', _services,
+              isThai ? 'ปิด/เปิดน้ำ-ไฟฟ้า' : 'Turn On/Off Utilities'),
+          _buildSimpleCheckbox('other', _services,
+              isThai ? 'อื่นๆ' : 'Other'),
+          if (_services['other'] == true)
+            Padding(
+              padding: const EdgeInsets.only(left: 36, top: 4, bottom: 4),
+              child: TextField(
+                controller: _otherServiceController,
+                decoration: InputDecoration(
+                  hintText: 'Other (${isThai ? "โปรดระบุ" : "please specify"})',
+                  hintStyle: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.primary),
+                  ),
+                ),
+                style: GoogleFonts.inter(fontSize: 14),
+              ),
+            ),
         ],
       ),
     );
@@ -1171,83 +1204,46 @@ class _BookingScreenState extends State<BookingScreen> {
     );
   }
 
-  Widget _buildCheckboxTile({
-    required String key,
-    required Map<String, bool> map,
-    required IconData icon,
-    required String label,
-    required String desc,
-    bool isLast = false,
-  }) {
+  Widget _buildSimpleCheckbox(
+      String key, Map<String, bool> map, String label) {
     final isChecked = map[key] ?? false;
-    return Column(
-      children: [
-        GestureDetector(
-          onTap: () => setState(() => map[key] = !isChecked),
-          behavior: HitTestBehavior.opaque,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isChecked
-                        ? AppColors.primary.withValues(alpha: 0.1)
-                        : const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(icon,
-                      size: 20,
-                      color: isChecked
-                          ? AppColors.primary
-                          : AppColors.textSecondary),
+    return GestureDetector(
+      onTap: () => setState(() => map[key] = !isChecked),
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                color: isChecked ? AppColors.primary : Colors.white,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: isChecked ? AppColors.primary : AppColors.border,
+                  width: 1.5,
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        label,
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      Text(
-                        desc,
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: isChecked ? AppColors.primary : Colors.white,
-                    borderRadius: BorderRadius.circular(7),
-                    border: Border.all(
-                      color: isChecked ? AppColors.primary : AppColors.border,
-                      width: 2,
-                    ),
-                  ),
-                  child: isChecked
-                      ? const Icon(Icons.check_rounded,
-                          size: 16, color: Colors.white)
-                      : null,
-                ),
-              ],
+              ),
+              child: isChecked
+                  ? const Icon(Icons.check_rounded,
+                      size: 15, color: Colors.white)
+                  : null,
             ),
-          ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ],
         ),
-        if (!isLast) const Divider(height: 1, color: AppColors.border),
-      ],
+      ),
     );
   }
 
@@ -1324,14 +1320,21 @@ class _BookingScreenState extends State<BookingScreen> {
 
   String _equipmentLabel(String key, bool isThai) {
     switch (key) {
-      case 'radio':
-        return isThai ? 'วิทยุสื่อสาร' : 'Radio';
-      case 'cctv':
-        return isThai ? 'กล้องวงจรปิด' : 'CCTV';
       case 'flashlight':
         return isThai ? 'ไฟฉาย' : 'Flashlight';
-      case 'first_aid':
-        return isThai ? 'ปฐมพยาบาล' : 'First Aid';
+      case 'handcuffs':
+        return isThai ? 'กุญแจมือถือ' : 'Handcuffs';
+      case 'baton':
+        return isThai ? 'กระบอง' : 'Baton';
+      case 'uniform':
+        return isThai ? 'ชุดยูนิฟอร์ม รปภ.' : 'Guard Uniform';
+      case 'uniform_polo':
+        return isThai ? 'ชุดเครื่องแบบ+โปโล' : 'Uniform + Polo';
+      case 'other':
+        final text = _otherEquipmentController.text.trim();
+        return text.isNotEmpty
+            ? text
+            : (isThai ? 'อื่นๆ' : 'Other');
       default:
         return key;
     }
@@ -1339,14 +1342,17 @@ class _BookingScreenState extends State<BookingScreen> {
 
   String _serviceLabel(String key, bool isThai) {
     switch (key) {
-      case 'patrol':
-        return isThai ? 'ลาดตระเวน' : 'Patrol';
-      case 'id_check':
-        return isThai ? 'ตรวจสอบตัวตน' : 'ID Check';
-      case 'vip_escort':
-        return 'VIP Escort';
-      case 'daily_report':
-        return isThai ? 'รายงานประจำวัน' : 'Daily Report';
+      case 'has_pets':
+        return isThai ? 'มีสัตว์เลี้ยง' : 'Has Pets';
+      case 'plant_care':
+        return isThai ? 'ดูแลต้นไม้' : 'Plant Care';
+      case 'utilities':
+        return isThai ? 'ปิด/เปิดน้ำ-ไฟฟ้า' : 'Utilities';
+      case 'other':
+        final text = _otherServiceController.text.trim();
+        return text.isNotEmpty
+            ? text
+            : (isThai ? 'อื่นๆ' : 'Other');
       default:
         return key;
     }

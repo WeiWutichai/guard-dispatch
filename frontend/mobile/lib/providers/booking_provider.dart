@@ -73,7 +73,11 @@ class BookingProvider extends ChangeNotifier {
       _currentJobs = allJobs
           .where((j) {
             final s = j['assignment_status'] as String?;
-            return s == 'assigned' || s == 'en_route' || s == 'arrived';
+            return s == 'pending_acceptance' ||
+                s == 'accepted' ||
+                s == 'assigned' ||
+                s == 'en_route' ||
+                s == 'arrived';
           })
           .toList();
       _completedJobs = allJobs
@@ -180,6 +184,7 @@ class BookingProvider extends ChangeNotifier {
     double? offeredPrice,
     String? specialInstructions,
     String urgency = 'medium',
+    int? bookedHours,
   }) async {
     _error = null;
     try {
@@ -191,6 +196,7 @@ class BookingProvider extends ChangeNotifier {
         offeredPrice: offeredPrice,
         specialInstructions: specialInstructions,
         urgency: urgency,
+        bookedHours: bookedHours,
       );
       // Refresh list after creating
       await fetchMyRequests();
@@ -247,6 +253,105 @@ class BookingProvider extends ChangeNotifier {
     try {
       final result = await _service.assignGuardToRequest(requestId, guardId);
       return result;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  // =========================================================================
+  // Guard Accept/Decline Assignment
+  // =========================================================================
+
+  Future<void> acceptAssignment(String assignmentId) async {
+    _error = null;
+    try {
+      await _service.acceptDeclineAssignment(assignmentId, true);
+      await fetchJobs();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> declineAssignment(String assignmentId) async {
+    _error = null;
+    try {
+      await _service.acceptDeclineAssignment(assignmentId, false);
+      await fetchJobs();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  // =========================================================================
+  // Payment (Customer)
+  // =========================================================================
+
+  Future<Map<String, dynamic>> makePayment({
+    required String requestId,
+    required double amount,
+    required String paymentMethod,
+  }) async {
+    _error = null;
+    try {
+      final result = await _service.createPayment(
+        requestId: requestId,
+        amount: amount,
+        paymentMethod: paymentMethod,
+      );
+      return result;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  // =========================================================================
+  // Active Job (Guard)
+  // =========================================================================
+
+  Map<String, dynamic>? _activeJob;
+  Map<String, dynamic>? get activeJob => _activeJob;
+
+  Future<void> fetchActiveJob() async {
+    _error = null;
+    try {
+      _activeJob = await _service.getActiveJob();
+      notifyListeners();
+    } catch (e) {
+      _activeJob = null;
+      _error = e.toString();
+      notifyListeners();
+    }
+  }
+
+  Future<Map<String, dynamic>> startActiveJob(String assignmentId) async {
+    _error = null;
+    try {
+      final result = await _service.startJob(assignmentId);
+      _activeJob = result;
+      notifyListeners();
+      return result;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  // =========================================================================
+  // Get Assignments for a Request (Customer polling)
+  // =========================================================================
+
+  Future<List<Map<String, dynamic>>> getAssignments(String requestId) async {
+    try {
+      return await _service.getAssignments(requestId);
     } catch (e) {
       _error = e.toString();
       notifyListeners();

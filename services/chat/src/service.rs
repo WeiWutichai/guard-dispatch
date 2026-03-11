@@ -62,7 +62,14 @@ pub async fn create_conversation(
 pub async fn list_conversations(
     db: &PgPool,
     user_id: Uuid,
+    acting_role: &str,
 ) -> Result<Vec<EnrichedConversationResponse>, AppError> {
+    // $2 = true when acting as customer → show guard name
+    // $2 = false when acting as guard   → show customer name
+    let is_customer = acting_role == "customer";
+
+    let acting_role_str = acting_role.to_string();
+
     let rows = sqlx::query_as::<_, EnrichedConversationRow>(
         r#"
         SELECT c.id, c.request_id, c.created_at,
@@ -72,21 +79,45 @@ pub async fn list_conversations(
             (SELECT m.created_at FROM chat.messages m
              WHERE m.conversation_id = c.id
              ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
-            (SELECT u.full_name FROM chat.conversation_participants cp2
-             INNER JOIN auth.users u ON u.id = cp2.user_id
-             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1
-             LIMIT 1) AS participant_name,
-            (SELECT u.avatar_url FROM chat.conversation_participants cp2
-             INNER JOIN auth.users u ON u.id = cp2.user_id
-             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1
-             LIMIT 1) AS participant_avatar
+            CASE
+                WHEN $2 THEN
+                    (SELECT u2.full_name FROM booking.assignments a2
+                     INNER JOIN auth.users u2 ON u2.id = a2.guard_id
+                     WHERE a2.request_id = c.request_id LIMIT 1)
+                ELSE
+                    COALESCE(cp_cust.full_name, u_cust.full_name)
+            END AS participant_name,
+            CASE
+                WHEN $2 THEN
+                    (SELECT u2.avatar_url FROM booking.assignments a2
+                     INNER JOIN auth.users u2 ON u2.id = a2.guard_id
+                     WHERE a2.request_id = c.request_id LIMIT 1)
+                ELSE
+                    u_cust.avatar_url
+            END AS participant_avatar,
+            (SELECT COUNT(*) FROM chat.messages m2
+             WHERE m2.conversation_id = c.id
+               AND m2.sender_role IS DISTINCT FROM $3
+               AND m2.created_at > COALESCE(
+                   (SELECT rr.read_at FROM chat.read_receipts rr
+                    WHERE rr.conversation_id = c.id
+                      AND rr.user_id = $1
+                      AND rr.user_role = $3),
+                   '1970-01-01'::timestamptz
+               )
+            ) AS unread_count
         FROM chat.conversations c
         INNER JOIN chat.conversation_participants cp ON cp.conversation_id = c.id
+        INNER JOIN booking.guard_requests gr ON gr.id = c.request_id
+        INNER JOIN auth.users u_cust ON u_cust.id = gr.customer_id
+        LEFT JOIN auth.customer_profiles cp_cust ON cp_cust.user_id = gr.customer_id
         WHERE cp.user_id = $1
         ORDER BY last_message_at DESC NULLS LAST
         "#,
     )
     .bind(user_id)
+    .bind(is_customer)
+    .bind(&acting_role_str)
     .fetch_all(db)
     .await?;
 
@@ -132,15 +163,16 @@ pub async fn send_message(
 
     let row = sqlx::query_as::<_, MessageRow>(
         r#"
-        INSERT INTO chat.messages (conversation_id, sender_id, content, message_type)
-        VALUES ($1, $2, $3, $4::message_type)
-        RETURNING id, conversation_id, sender_id, content, message_type, created_at
+        INSERT INTO chat.messages (conversation_id, sender_id, content, message_type, sender_role)
+        VALUES ($1, $2, $3, $4::message_type, $5)
+        RETURNING id, conversation_id, sender_id, content, message_type, sender_role, created_at
         "#,
     )
     .bind(msg.conversation_id)
     .bind(sender_id)
     .bind(&msg.content)
     .bind(&mtype_str)
+    .bind(&msg.sender_role)
     .fetch_one(db)
     .await?;
 
@@ -196,7 +228,7 @@ pub async fn list_messages(
 
     let rows = sqlx::query_as::<_, MessageRow>(
         r#"
-        SELECT id, conversation_id, sender_id, content, message_type, created_at
+        SELECT id, conversation_id, sender_id, content, message_type, sender_role, created_at
         FROM chat.messages
         WHERE conversation_id = $1
         ORDER BY created_at DESC
@@ -314,4 +346,31 @@ pub async fn get_attachment(
     .fetch_optional(db)
     .await?
     .ok_or_else(|| AppError::NotFound("Attachment not found".to_string()))
+}
+
+// =============================================================================
+// Mark Conversation as Read
+// =============================================================================
+
+pub async fn mark_read(
+    db: &PgPool,
+    conversation_id: Uuid,
+    user_id: Uuid,
+    user_role: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO chat.read_receipts (conversation_id, user_id, user_role, read_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (conversation_id, user_id, user_role)
+        DO UPDATE SET read_at = NOW()
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .bind(user_role)
+    .execute(db)
+    .await?;
+
+    Ok(())
 }

@@ -36,6 +36,7 @@ enum AuthStatus {
 /// ```
 class AuthProvider extends ChangeNotifier {
   AuthStatus _status = AuthStatus.unknown;
+  String? _userId;
   String? _role;
   String? _fullName;
   String? _phone;
@@ -53,6 +54,7 @@ class AuthProvider extends ChangeNotifier {
   final ApiClient _apiClient = ApiClient();
 
   AuthStatus get status => _status;
+  String? get userId => _userId;
   String? get role => _role;
   String? get fullName => _fullName;
   String? get phone => _phone;
@@ -128,6 +130,8 @@ class AuthProvider extends ChangeNotifier {
         debugPrint('[AuthProvider] fetchProfile: response.data["data"] is null!');
         return false;
       }
+      final rawId = data['id'];
+      _userId = rawId is String ? rawId : rawId?.toString();
       _fullName = data['full_name'] as String?;
       _phone = data['phone'] as String?;
       _avatarUrl = data['avatar_url'] as String?;
@@ -368,6 +372,7 @@ class AuthProvider extends ChangeNotifier {
       AuthService.clearRole(),
     ]);
     _status = AuthStatus.unauthenticated;
+    _userId = null;
     _role = null;
     _fullName = null;
     _phone = null;

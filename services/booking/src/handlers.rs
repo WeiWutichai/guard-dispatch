@@ -8,10 +8,11 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AssignGuardDto, AssignmentResponse, AvailableGuardResponse, AvailableGuardsQuery,
-    CreateRequestDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
-    GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
-    ListRequestsQuery, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto,
+    AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse,
+    AvailableGuardResponse, AvailableGuardsQuery, CreatePaymentDto, CreateRequestDto,
+    CreateServiceRateDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
+    GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListRequestsQuery,
+    PaymentResponse, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto,
     WorkHistoryResponse,
 };
 use crate::state::AppState;
@@ -343,6 +344,115 @@ pub async fn guard_ratings(
     }
     let ratings = crate::service::get_guard_ratings(&state.db, user.user_id).await?;
     Ok(Json(ApiResponse::success(ratings)))
+}
+
+// =============================================================================
+// Accept / Decline Assignment
+// =============================================================================
+
+#[utoipa::path(
+    put,
+    path = "/assignments/{id}/accept",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment UUID")),
+    request_body = AcceptDeclineDto,
+    responses(
+        (status = 200, description = "Assignment accepted/declined", body = AssignmentResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
+pub async fn accept_decline_assignment(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<AcceptDeclineDto>,
+) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let assignment =
+        crate::service::accept_or_decline_assignment(&state.db, id, user.user_id, req).await?;
+    Ok(Json(ApiResponse::success(assignment)))
+}
+
+// =============================================================================
+// Create Payment (simulated)
+// =============================================================================
+
+#[utoipa::path(
+    post,
+    path = "/payments",
+    tag = "Payments",
+    security(("bearer" = [])),
+    request_body = CreatePaymentDto,
+    responses(
+        (status = 200, description = "Payment created", body = PaymentResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn create_payment(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(req): Json<CreatePaymentDto>,
+) -> Result<Json<ApiResponse<PaymentResponse>>, AppError> {
+    let payment = crate::service::create_payment(&state.db, user.user_id, req).await?;
+    Ok(Json(ApiResponse::success(payment)))
+}
+
+// =============================================================================
+// Start Job (guard starts countdown)
+// =============================================================================
+
+#[utoipa::path(
+    put,
+    path = "/assignments/{id}/start",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment UUID")),
+    responses(
+        (status = 200, description = "Job started", body = ActiveJobResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
+pub async fn start_job(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<ActiveJobResponse>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let job = crate::service::start_job(&state.db, id, user.user_id).await?;
+    Ok(Json(ApiResponse::success(job)))
+}
+
+// =============================================================================
+// Get Active Job (guard's current job with countdown info)
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/guard/active-job",
+    tag = "Guard",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Active job info", body = Option<ActiveJobResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden — guard only", body = ErrorBody),
+    ),
+)]
+pub async fn get_active_job(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<Option<ActiveJobResponse>>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let job = crate::service::get_active_job(&state.db, user.user_id).await?;
+    Ok(Json(ApiResponse::success(job)))
 }
 
 // =============================================================================

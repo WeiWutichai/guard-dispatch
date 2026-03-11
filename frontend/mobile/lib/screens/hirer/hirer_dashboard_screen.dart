@@ -41,7 +41,7 @@ class _HirerDashboardScreenState extends State<HirerDashboardScreen> {
 
   final List<Widget> _screens = [
     const ServiceSelectionScreen(),
-    const ChatListScreen(),
+    const ChatListScreen(actingRole: 'customer'),
     const HirerHistoryScreen(),
     const HirerProfileScreen(),
   ];

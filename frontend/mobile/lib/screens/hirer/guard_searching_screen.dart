@@ -5,17 +5,30 @@ import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
+import 'waiting_for_guard_screen.dart';
 
 class GuardSearchingScreen extends StatefulWidget {
   final String? requestId;
   final double lat;
   final double lng;
+  final double totalAmount;
+  final double subtotal;
+  final double baseFee;
+  final double tip;
+  final int bookedHours;
+  final int guardCount;
 
   const GuardSearchingScreen({
     super.key,
     this.requestId,
     required this.lat,
     required this.lng,
+    this.totalAmount = 0,
+    this.subtotal = 0,
+    this.baseFee = 0,
+    this.tip = 0,
+    this.bookedHours = 6,
+    this.guardCount = 1,
   });
 
   @override
@@ -64,7 +77,7 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
     }
   }
 
-  Future<void> _assignGuard(String guardId) async {
+  Future<void> _assignGuard(String guardId, Map<String, dynamic> guard) async {
     if (widget.requestId == null) return;
     final isThai = LanguageProvider.of(context).isThai;
 
@@ -73,13 +86,32 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
       _assigningGuardId = guardId;
     });
     try {
-      await context.read<BookingProvider>().assignGuardToRequest(
+      final assignment = await context.read<BookingProvider>().assignGuardToRequest(
             widget.requestId!,
             guardId,
           );
       if (!mounted) return;
-      // Show success bottom sheet then pop
-      _showSuccessSheet(isThai);
+      final assignmentId = assignment['id']?.toString() ?? '';
+      // Navigate to waiting screen instead of success sheet
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => WaitingForGuardScreen(
+            requestId: widget.requestId!,
+            assignmentId: assignmentId,
+            guardName: guard['full_name'] as String? ?? '-',
+            guardRating: (guard['rating'] as num?)?.toDouble() ?? 4.5,
+            guardDistance: (guard['distance_km'] as num?)?.toDouble() ?? 0,
+            guardAvatarUrl: guard['avatar_url'] as String?,
+            totalAmount: widget.totalAmount,
+            subtotal: widget.subtotal,
+            baseFee: widget.baseFee,
+            tip: widget.tip,
+            bookedHours: widget.bookedHours,
+            guardCount: widget.guardCount,
+          ),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -97,81 +129,6 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
         });
       }
     }
-  }
-
-  void _showSuccessSheet(bool isThai) {
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        padding: const EdgeInsets.all(32),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    AppColors.primary.withValues(alpha: 0.15),
-                    AppColors.primary.withValues(alpha: 0.05),
-                  ],
-                ),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.check_circle_rounded,
-                  size: 56, color: AppColors.primary),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              isThai ? 'จับคู่สำเร็จ!' : 'Guard Assigned!',
-              style: GoogleFonts.inter(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              isThai
-                  ? 'เจ้าหน้าที่ รปภ. กำลังเดินทางมาหาคุณ'
-                  : 'Your security guard is on the way',
-              style: GoogleFonts.inter(
-                  fontSize: 14, color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).popUntil((route) => route.isFirst);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
-                ),
-                child: Text(
-                  isThai ? 'กลับหน้าหลัก' : 'Back to Home',
-                  style: GoogleFonts.inter(
-                      fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-            SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -686,7 +643,7 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
               height: 46,
               child: ElevatedButton(
                 onPressed:
-                    _isAssigning ? null : () => _assignGuard(guardId),
+                    _isAssigning ? null : () => _assignGuard(guardId, guard),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   disabledBackgroundColor:

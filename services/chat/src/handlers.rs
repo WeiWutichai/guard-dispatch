@@ -22,7 +22,8 @@ pub struct AttachmentUploadForm {
 
 use crate::models::{
     AttachmentResponse, ConversationResponse, CreateConversationRequest,
-    EnrichedConversationResponse, IncomingChatMessage, ListMessagesQuery, MessageResponse,
+    EnrichedConversationResponse, IncomingChatMessage, ListConversationsQuery,
+    ListMessagesQuery, MessageResponse,
 };
 use crate::state::AppState;
 
@@ -130,6 +131,7 @@ pub async fn create_conversation(
     path = "/conversations",
     tag = "Conversations",
     security(("bearer" = [])),
+    params(ListConversationsQuery),
     responses(
         (status = 200, description = "List of conversations with last message and participant info", body = Vec<EnrichedConversationResponse>),
         (status = 401, description = "Unauthorized", body = ErrorBody),
@@ -138,8 +140,11 @@ pub async fn create_conversation(
 pub async fn list_conversations(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
+    Query(query): Query<ListConversationsQuery>,
 ) -> Result<Json<ApiResponse<Vec<EnrichedConversationResponse>>>, AppError> {
-    let conversations = crate::service::list_conversations(&state.db, user.user_id).await?;
+    let acting_role = query.role.as_deref().unwrap_or(&user.role);
+    let conversations =
+        crate::service::list_conversations(&state.db, user.user_id, acting_role).await?;
     Ok(Json(ApiResponse::success(conversations)))
 }
 
@@ -166,6 +171,31 @@ pub async fn list_messages(
 ) -> Result<Json<ApiResponse<Vec<MessageResponse>>>, AppError> {
     let messages = crate::service::list_messages(&state.db, id, user.user_id, &user.role, query).await?;
     Ok(Json(ApiResponse::success(messages)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/conversations/{id}/read",
+    tag = "Conversations",
+    security(("bearer" = [])),
+    params(
+        ("id" = Uuid, Path, description = "Conversation UUID"),
+        ListConversationsQuery,
+    ),
+    responses(
+        (status = 200, description = "Marked as read"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn mark_read(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ListConversationsQuery>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let acting_role = query.role.as_deref().unwrap_or(&user.role);
+    crate::service::mark_read(&state.db, id, user.user_id, acting_role).await?;
+    Ok(Json(ApiResponse::success(())))
 }
 
 #[utoipa::path(
@@ -270,6 +300,7 @@ pub async fn upload_attachment(
         conversation_id,
         content: original_filename,
         message_type: Some(crate::models::MessageType::Image),
+        sender_role: None,
     };
     let outgoing =
         crate::service::send_message(&state.db, &state.redis_pubsub, user.user_id, msg).await?;

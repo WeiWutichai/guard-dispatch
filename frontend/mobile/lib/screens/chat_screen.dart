@@ -1,15 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/colors.dart';
+import '../providers/chat_provider.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import 'call_screen.dart';
 
 class ChatScreen extends StatefulWidget {
+  final String conversationId;
+  final String requestId;
   final String userName;
   final String userRole;
+  final String? actingRole;
 
-  const ChatScreen({super.key, required this.userName, required this.userRole});
+  const ChatScreen({
+    super.key,
+    required this.conversationId,
+    required this.requestId,
+    required this.userName,
+    required this.userRole,
+    this.actingRole,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -17,84 +29,67 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final chatProvider = context.read<ChatProvider>();
+      chatProvider.fetchMessages(widget.conversationId).then((_) {
+        _scrollToBottom();
+      });
+      chatProvider.connectToConversation(widget.conversationId);
+      // Mark as read on open
+      chatProvider.markRead(widget.conversationId, role: widget.actingRole);
+    });
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _scrollController.dispose();
+    try {
+      context.read<ChatProvider>().disconnect();
+    } catch (_) {}
+    super.dispose();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _handleSend() {
+    final text = _messageController.text.trim();
+    if (text.isEmpty) return;
+
+    context.read<ChatProvider>().sendMessage(
+      widget.conversationId,
+      text,
+      senderRole: widget.actingRole,
+    );
+    _messageController.clear();
+    _scrollToBottom();
+  }
 
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final s = ChatStrings(isThai: isThai);
+    final chatProvider = context.watch<ChatProvider>();
 
-    // Mock messages for display
-    final List<Widget> messages = [
-      _buildMessageBubble(
-        text: isThai
-            ? "สวัสดีครับ คุณสมชาย วีรชน เจ้าหน้าที่รักษาความปลอดภัยที่ได้รับมอบหมาย"
-            : "Hello, Somchai Wirachon, your assigned security officer.",
-        isMe: false,
-        time: "14:30",
-      ),
-      _buildMessageBubble(
-        text: isThai
-            ? "ผมกำลังเดินทางไปยังสถานที่ของคุณ คาดว่าจะถึงใน 15 นาที"
-            : "I'm on my way to your location, expected in 15 mins.",
-        isMe: false,
-        time: "14:31",
-      ),
-      _buildMessageBubble(
-        text: isThai
-            ? "สวัสดีครับ ขอบคุณที่แจ้งให้ทราบ"
-            : "Hello, thanks for letting me know.",
-        isMe: true,
-        time: "14:32",
-      ),
-      _buildMessageBubble(
-        text: isThai
-            ? "ถ้ามีข้อสงสัยหรือต้องการติดต่ออะไร สามารถโทรหาผมได้ตลอดเวลาครับ"
-            : "If you have questions, feel free to call anytime.",
-        isMe: false,
-        time: "14:33",
-      ),
-      _buildSystemEvent(
-        context,
-        s,
-        title: isThai ? 'การลงชื่อเข้างาน' : 'Check-in Notification',
-        time: '14:45',
-        details: isThai
-            ? 'คุณ สมชาย วีรชน ได้เช็คอินที่ อาคารสำนักงาน สุขุมวิท 23'
-            : 'Somchai Wirachon checked in at Sukhumvit 23 Office.',
-        gps: '15/02/2568  14:45',
-      ),
-      _buildMessageBubble(
-        text: isThai
-            ? "ผมถึงแล้วครับ เริ่มปฏิบัติงานเลยครับ"
-            : "I've arrived. Starting duty now.",
-        isMe: false,
-        time: "14:48",
-      ),
-      _buildReportCard(
-        context,
-        s,
-        index: 1,
-        time: '15:45',
-        location: isThai ? 'อาคารสำนักงาน สุขุมวิท 23' : 'Sukhumvit 23 Office',
-        imageUrl:
-            'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=400',
-        status: isThai
-            ? 'ปกติ พื้นที่ปลอดภัย ไม่มีเหตุการณ์ผิดปกติ'
-            : 'Normal, area secure, no incidents.',
-      ),
-      _buildReportCard(
-        context,
-        s,
-        index: 2,
-        time: '16:45',
-        location: isThai ? 'อาคารสำนักงาน สุขุมวิท 23' : 'Sukhumvit 23 Office',
-        imageUrl:
-            'https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=400',
-        status: isThai
-            ? 'ตรวจรอบอาคารเรียบร้อย ทุกจุดปลอดภัย'
-            : 'Patrolled around building, all secure.',
-      ),
-    ];
+    // Scroll to bottom when new messages arrive
+    if (chatProvider.messages.isNotEmpty) {
+      _scrollToBottom();
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
@@ -111,8 +106,16 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             CircleAvatar(
               radius: 18,
-              backgroundImage: const NetworkImage(
-                'https://i.pravatar.cc/150?u=1',
+              backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+              child: Text(
+                widget.userName.isNotEmpty
+                    ? widget.userName[0].toUpperCase()
+                    : '?',
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
+                ),
               ),
             ),
             const SizedBox(width: 12),
@@ -128,10 +131,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 Text(
-                  s.online,
+                  widget.userRole,
                   style: GoogleFonts.inter(
                     fontSize: 11,
-                    color: AppColors.success,
+                    color: AppColors.textSecondary,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -152,306 +155,176 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: const Icon(Icons.call_outlined),
             color: AppColors.textSecondary,
           ),
-          IconButton(
-            onPressed: () {},
-            icon: const Icon(Icons.more_vert_rounded),
-            color: AppColors.textSecondary,
-          ),
         ],
       ),
       body: Column(
         children: [
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-              itemCount: messages.length,
-              itemBuilder: (context, index) => messages[index],
-            ),
-          ),
+          Expanded(child: _buildMessageList(chatProvider)),
           _buildMessageInput(s),
         ],
       ),
     );
   }
 
+  Widget _buildMessageList(ChatProvider chatProvider) {
+    if (chatProvider.isLoadingMessages) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final messages = chatProvider.messages;
+
+    if (messages.isEmpty) {
+      final isThai = LanguageProvider.of(context).isThai;
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.chat_bubble_outline_rounded,
+              size: 48,
+              color: AppColors.textSecondary.withValues(alpha: 0.4),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              isThai ? 'เริ่มสนทนา' : 'Start a conversation',
+              style: GoogleFonts.inter(
+                fontSize: 15,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      itemCount: messages.length,
+      itemBuilder: (context, index) {
+        final msg = messages[index];
+        final senderRole = msg['sender_role'] as String?;
+        // Use sender_role to determine sides: if sender_role matches my acting role → right (me)
+        final isMe = widget.actingRole != null && senderRole == widget.actingRole;
+        final content = msg['content'] as String? ?? '';
+        final createdAt = msg['created_at'] as String?;
+        final time = _formatMessageTime(createdAt);
+        final isLastInGroup = index == messages.length - 1 ||
+            (messages[index + 1]['sender_role'] as String?) != senderRole;
+
+        return _buildMessageBubble(
+          text: content,
+          isMe: isMe,
+          time: time,
+          showReadStatus: isMe && isLastInGroup,
+        );
+      },
+    );
+  }
+
+  String _formatMessageTime(String? isoString) {
+    if (isoString == null) return '';
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '';
+    }
+  }
+
   Widget _buildMessageBubble({
     required String text,
     required bool isMe,
     required String time,
+    bool showReadStatus = false,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        mainAxisAlignment: isMe
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
+        mainAxisAlignment:
+            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: isMe ? AppColors.primary : const Color(0xFFEDF2F7),
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(12),
-                  topRight: const Radius.circular(12),
-                  bottomLeft: Radius.circular(isMe ? 12 : 2),
-                  bottomRight: Radius.circular(isMe ? 2 : 12),
+          if (!isMe) ...[
+            CircleAvatar(
+              radius: 14,
+              backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+              child: Text(
+                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
                 ),
               ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Flexible(
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.7,
+              ),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: isMe ? AppColors.primary : Colors.white,
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isMe ? 16 : 4),
+                  bottomRight: Radius.circular(isMe ? 4 : 16),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(
-                    text,
-                    style: GoogleFonts.inter(
-                      color: isMe ? Colors.white : AppColors.textPrimary,
-                      fontSize: 13,
-                      height: 1.4,
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      text,
+                      style: GoogleFonts.inter(
+                        color: isMe ? Colors.white : AppColors.textPrimary,
+                        fontSize: 14,
+                        height: 1.4,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    time,
-                    style: GoogleFonts.inter(
-                      color: isMe
-                          ? Colors.white.withValues(alpha: 0.7)
-                          : AppColors.textSecondary,
-                      fontSize: 10,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        time,
+                        style: GoogleFonts.inter(
+                          color: isMe
+                              ? Colors.white.withValues(alpha: 0.7)
+                              : AppColors.textSecondary,
+                          fontSize: 10,
+                        ),
+                      ),
+                      if (isMe) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          showReadStatus ? Icons.done_all : Icons.done,
+                          size: 14,
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ),
             ),
           ),
-          if (isMe) const SizedBox(width: 40) else const SizedBox(width: 40),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSystemEvent(
-    BuildContext context,
-    ChatStrings s, {
-    required String title,
-    required String time,
-    required String details,
-    required String gps,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0FDF4),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFDCFCE7)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.assignment_turned_in_outlined,
-                size: 16,
-                color: AppColors.success,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: GoogleFonts.inter(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.success,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            details,
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              color: AppColors.textPrimary,
-              height: 1.4,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(
-                Icons.access_time,
-                size: 12,
-                color: AppColors.textSecondary,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                gps,
-                style: GoogleFonts.inter(
-                  fontSize: 10,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              const Icon(
-                Icons.location_on_outlined,
-                size: 12,
-                color: AppColors.success,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                s.viewLocation,
-                style: GoogleFonts.inter(
-                  fontSize: 10,
-                  color: AppColors.success,
-                  decoration: TextDecoration.underline,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildReportCard(
-    BuildContext context,
-    ChatStrings s, {
-    required int index,
-    required String time,
-    required String location,
-    required String imageUrl,
-    required String status,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.description_outlined,
-                      size: 14,
-                      color: AppColors.textSecondary,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      s.hourlyReport,
-                      style: GoogleFonts.inter(
-                        fontSize: 10,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${s.hourlyReport} ที่ $index',
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.access_time,
-                      size: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      time,
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Icon(
-                      Icons.location_on_outlined,
-                      size: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      location,
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.photo_outlined,
-                      size: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      s.photoReport,
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(0),
-            child: Image.network(
-              imageUrl,
-              height: 160,
-              width: double.infinity,
-              fit: BoxFit.cover,
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(12)),
-            ),
-            child: Row(
-              children: [
-                const Text('📝', style: TextStyle(fontSize: 14)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    status,
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+          if (isMe) const SizedBox(width: 8),
         ],
       ),
     );
@@ -471,20 +344,12 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       child: Row(
         children: [
-          IconButton(
-            onPressed: () {},
-            icon: const Icon(
-              Icons.attach_file_rounded,
-              color: AppColors.textSecondary,
-            ),
-          ),
           Expanded(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppColors.border),
+                color: const Color(0xFFF5F5F5),
+                borderRadius: BorderRadius.circular(24),
               ),
               child: TextField(
                 controller: _messageController,
@@ -492,26 +357,28 @@ class _ChatScreenState extends State<ChatScreen> {
                   hintText: s.typeMessage,
                   border: InputBorder.none,
                   hintStyle: GoogleFonts.inter(
-                    fontSize: 13,
+                    fontSize: 14,
                     color: AppColors.textSecondary,
                   ),
                 ),
-                style: GoogleFonts.inter(fontSize: 13),
+                style: GoogleFonts.inter(fontSize: 14),
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _handleSend(),
               ),
             ),
           ),
           const SizedBox(width: 8),
           GestureDetector(
-            onTap: () {},
+            onTap: _handleSend,
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.success.withValues(alpha: 0.2),
+                color: AppColors.primary,
                 shape: BoxShape.circle,
               ),
               child: const Icon(
                 Icons.send_rounded,
-                color: AppColors.success,
+                color: Colors.white,
                 size: 20,
               ),
             ),

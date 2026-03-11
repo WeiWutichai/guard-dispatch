@@ -4,7 +4,7 @@ import '../theme/colors.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import 'withdrawal_approval_screen.dart';
-import 'chat_screen.dart';
+import 'chat_list_screen.dart';
 import 'call_screen.dart';
 import 'notification_screen.dart';
 
@@ -620,14 +620,7 @@ class DashboardScreen extends StatelessWidget {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => ChatScreen(
-                              userName: isThai
-                                  ? 'เจ้าหน้าที่สมชาย'
-                                  : 'Guard Somchai',
-                              userRole: isThai
-                                  ? 'เจ้าหน้าที่รปภ.'
-                                  : 'Security Guard',
-                            ),
+                            builder: (_) => const ChatListScreen(),
                           ),
                         );
                       },

@@ -10,7 +10,9 @@ import '../../../l10n/app_strings.dart';
 import '../../role_selection_screen.dart';
 
 class GuardHomeTab extends StatefulWidget {
-  const GuardHomeTab({super.key});
+  final void Function(int)? onSwitchTab;
+
+  const GuardHomeTab({super.key, this.onSwitchTab});
 
   @override
   State<GuardHomeTab> createState() => _GuardHomeTabState();
@@ -334,10 +336,14 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
   }
 
   Widget _buildAlertCard(GuardHomeStrings strings) {
+    final isThai = LanguageProvider.of(context).isThai;
     final isOnline = context.watch<TrackingProvider>().isOnline;
     final dashboard = context.watch<BookingProvider>().dashboard;
+    final pendingAcceptance =
+        (dashboard?['pending_acceptance_count'] as num?) ?? 0;
     final pendingJobs = (dashboard?['pending_jobs_count'] as num?) ?? 0;
-    final hasPendingJobs = pendingJobs > 0;
+    final totalPending = pendingAcceptance.toInt() + pendingJobs.toInt();
+    final hasPendingJobs = totalPending > 0;
 
     return Container(
       width: double.infinity,
@@ -383,9 +389,13 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           const SizedBox(height: 8),
           Text(
             isOnline
-                ? (hasPendingJobs
-                    ? strings.newJobsCount(pendingJobs.toInt())
-                    : strings.noNewJobsMsg)
+                ? (pendingAcceptance > 0
+                    ? (isThai
+                        ? 'มีงานใหม่รอการตอบรับ ${pendingAcceptance.toInt()} รายการ!'
+                        : '${pendingAcceptance.toInt()} new job(s) waiting for your response!')
+                    : (hasPendingJobs
+                        ? strings.newJobsCount(totalPending)
+                        : strings.noNewJobsMsg))
                 : strings.setAvailableMsg,
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(
@@ -396,7 +406,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           if (isOnline && hasPendingJobs) ...[
             const SizedBox(height: 20),
             ElevatedButton(
-              onPressed: () {},
+              onPressed: () => widget.onSwitchTab?.call(1),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,

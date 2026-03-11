@@ -29,8 +29,12 @@ use crate::state::AppState;
         handlers::cancel_request,
         handlers::assign_guard,
         handlers::update_assignment_status,
+        handlers::accept_decline_assignment,
         handlers::get_assignments,
         handlers::available_guards,
+        handlers::create_payment,
+        handlers::start_job,
+        handlers::get_active_job,
         handlers::guard_dashboard,
         handlers::guard_jobs,
         handlers::guard_earnings,
@@ -49,8 +53,12 @@ use crate::state::AppState;
         models::CreateRequestDto,
         models::AssignGuardDto,
         models::UpdateAssignmentStatusDto,
+        models::AcceptDeclineDto,
+        models::CreatePaymentDto,
         models::GuardRequestResponse,
         models::AssignmentResponse,
+        models::PaymentResponse,
+        models::ActiveJobResponse,
         models::AvailableGuardResponse,
         models::GuardJobResponse,
         models::GuardDashboardSummary,
@@ -72,6 +80,7 @@ use crate::state::AppState;
         (name = "Assignments", description = "Guard assignment management"),
         (name = "Guards", description = "Available guards discovery"),
         (name = "Guard", description = "Guard-specific endpoints (dashboard, jobs, earnings)"),
+        (name = "Payments", description = "Payment management"),
         (name = "Pricing", description = "Service rate management"),
     ),
 )]
@@ -110,10 +119,18 @@ async fn main() -> anyhow::Result<()> {
             "/assignments/{id}/status",
             put(handlers::update_assignment_status),
         )
+        .route(
+            "/assignments/{id}/accept",
+            put(handlers::accept_decline_assignment),
+        )
+        .route("/assignments/{id}/start", put(handlers::start_job))
+        // Payments
+        .route("/payments", post(handlers::create_payment))
         // Available guards (customer discovery)
         .route("/available-guards", get(handlers::available_guards))
         // Guard-specific endpoints
         .route("/guard/dashboard", get(handlers::guard_dashboard))
+        .route("/guard/active-job", get(handlers::get_active_job))
         .route("/guard/jobs", get(handlers::guard_jobs))
         .route("/guard/earnings", get(handlers::guard_earnings))
         .route("/guard/work-history", get(handlers::guard_work_history))
