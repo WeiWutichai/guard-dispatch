@@ -101,10 +101,10 @@ nginx-gateway (port 80/443 — จุดเข้าเดียว)
 ```
 PostgreSQL: guard_dispatch_db
 ├── schema: auth         (users, sessions, roles, otp_codes, guard_profiles, customer_profiles)
-├── schema: booking      (requests, assignments, status, service_rates)
+├── schema: booking      (requests, assignments, payments, service_rates)
 ├── schema: tracking     (locations, history)
 ├── schema: notification (logs, templates)
-├── schema: chat         (messages, attachments metadata)
+├── schema: chat         (conversations, messages, read_receipts, attachments)
 └── schema: audit        (logs ทุก action)
 ```
 
@@ -143,7 +143,7 @@ CREATE INDEX idx_otp_codes_phone_purpose ON auth.otp_codes(phone, purpose, is_us
 CREATE INDEX idx_otp_codes_expires_at ON auth.otp_codes(expires_at);
 ```
 
-### Chat Attachments Table
+### Chat Tables
 ```sql
 CREATE TABLE chat.attachments (
   id          UUID PRIMARY KEY,
@@ -156,6 +156,40 @@ CREATE TABLE chat.attachments (
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+> `chat.messages` has `sender_role VARCHAR(20)` column — stores `'guard'` or `'customer'` to enable role-based message alignment (same user can send as different roles).
+
+```sql
+CREATE TABLE chat.read_receipts (
+    conversation_id UUID NOT NULL REFERENCES chat.conversations(id) ON DELETE CASCADE,
+    user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_role       VARCHAR(20) NOT NULL DEFAULT 'guard',
+    last_read_message_id UUID REFERENCES chat.messages(id) ON DELETE SET NULL,
+    read_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (conversation_id, user_id, user_role)
+);
+```
+> **Read receipts per role:** PK includes `user_role`, so the same user reading as guard vs customer are tracked independently.
+> **Unread count:** Calculated via `COUNT(messages WHERE sender_role IS DISTINCT FROM acting_role AND created_at > read_at)`.
+
+### Payments Table
+```sql
+CREATE TABLE booking.payments (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id      UUID NOT NULL REFERENCES booking.guard_requests(id),
+  customer_id     UUID NOT NULL REFERENCES auth.users(id),
+  amount          DECIMAL(10,2) NOT NULL,
+  payment_method  TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  transaction_ref TEXT,
+  paid_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+> **Simulated payments** — ready for real gateway integration. Status: `pending` → `completed` / `failed`.
+> `booking.assignments` has `started_at TIMESTAMPTZ` for countdown tracking.
+> `booking.guard_requests` has `booked_hours INTEGER` for countdown calculation.
+> `assignment_status` enum extended: `pending_acceptance` → `accepted` / `declined` (guard acceptance flow).
 
 ### Service Rates Table
 ```sql
@@ -411,21 +445,29 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   ├── providers/
 │       │   │   ├── auth_provider.dart    ← Centralized auth state (Provider)
 │       │   │   ├── booking_provider.dart ← Booking/pricing/guard jobs state (Provider)
+│       │   │   ├── chat_provider.dart    ← Chat conversations + messages state (Provider)
 │       │   │   └── tracking_provider.dart ← GPS tracking on/off state (Provider)
 │       │   ├── services/
 │       │   │   ├── api_client.dart      ← Dio HTTP client + JWT interceptor
 │       │   │   ├── auth_service.dart    ← Token storage + login/OTP
 │       │   │   ├── booking_service.dart ← Booking/pricing/guard API calls
+│       │   │   ├── chat_service.dart    ← Chat REST + WebSocket messaging
 │       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
 │       │   │   ├── tracking_service.dart  ← WebSocket GPS streaming to backend
 │       │   │   └── language_service.dart
-│       │   ├── screens/                ← 39 screens (guard/hirer/common)
+│       │   ├── screens/                ← 43 screens (guard/hirer/common)
 │       │   │   ├── phone_input_screen.dart           ← OTP: กรอกเบอร์โทร
 │       │   │   ├── otp_verification_screen.dart      ← OTP: กรอกรหัส 6 หลัก
 │       │   │   ├── set_password_screen.dart          ← OTP: ตั้งรหัสผ่าน + ข้อมูล
 │       │   │   ├── pin_login_screen.dart              ← Login ด้วย PIN เดิม (returning approved user)
 │       │   │   ├── customer_registration_screen.dart ← Customer: กรอก address + company
-│       │   │   └── registration_pending_screen.dart  ← รอ Admin อนุมัติ (no tokens)
+│       │   │   ├── registration_pending_screen.dart  ← รอ Admin อนุมัติ (no tokens)
+│       │   │   ├── chat_list_screen.dart             ← Chat conversation list (role-aware)
+│       │   │   ├── chat_screen.dart                  ← Real-time chat (WebSocket + REST)
+│       │   │   ├── guard/active_job_screen.dart      ← Guard active job with countdown
+│       │   │   ├── guard/guard_job_detail_screen.dart ← Guard job detail + accept/decline
+│       │   │   ├── hirer/payment_success_screen.dart  ← Payment confirmation
+│       │   │   └── hirer/waiting_for_guard_screen.dart ← Wait for guard acceptance + status
 │       │   ├── l10n/                   ← Bilingual strings (TH/EN)
 │       │   └── theme/                  ← Colors, styles
 │       └── pubspec.yaml
@@ -690,12 +732,27 @@ RegistrationPendingScreen
   - **Placeholder ratings:** `rating = 4.5 + (completed_jobs * 0.01).min(0.4)`, `review_count = completed_jobs.min(200)` — TODO: replace with real reviews table
   - Ordered by distance ascending
 
+**Booking Service — Guard Acceptance & Payment Endpoints (main.rs):**
+- `PUT /assignments/{id}/accept` → `handlers::accept_decline_assignment` (guard JWT) — guard accepts or declines assigned job. Body: `AcceptDeclineDto { action: "accept" | "decline" }`. Updates `assignment_status` to `accepted` / `declined`.
+- `PUT /assignments/{id}/start` → `handlers::start_job` (guard JWT) — guard starts accepted job. Sets `started_at = NOW()` on assignment.
+- `POST /payments` → `handlers::create_payment` (JWT) — create simulated payment. Body: `CreatePaymentDto { request_id, amount, payment_method }`. Returns `PaymentResponse`.
+- `GET /guard/active-job` → `handlers::get_active_job` (guard JWT) — returns active job for guard (accepted/in_progress assignment with request details, started_at, booked_hours for countdown)
+
 **Booking Service — Guard Endpoints (main.rs):**
 - `GET /guard/dashboard` → `handlers::guard_dashboard` (guard JWT)
 - `GET /guard/jobs` → `handlers::guard_jobs` (guard JWT) — query params: `status`, `limit`, `offset`
 - `GET /guard/earnings` → `handlers::guard_earnings` (guard JWT)
 - `GET /guard/work-history` → `handlers::guard_work_history` (guard JWT) — query params: `status`, `limit`, `offset`
 - `GET /guard/ratings` → `handlers::guard_ratings` (guard JWT)
+
+**Chat Service Endpoints (main.rs, port 3006):**
+- `GET /ws/chat` → `handlers::ws_handler` (JWT via WS upgrade headers) — WebSocket for real-time messaging. Bearer token in `Authorization` header. Incoming: `IncomingChatMessage { conversation_id, content, message_type, sender_role? }`. Outgoing: `OutgoingChatMessage { id, conversation_id, sender_id, sender_role?, content, message_type, created_at }`. Redis PubSub for cross-instance broadcast.
+- `POST /conversations` → `handlers::create_conversation` (JWT) — create conversation. Body: `{ request_id, participant_ids: [uuid] }`. Links to `booking.guard_requests` via `request_id`.
+- `GET /conversations` → `handlers::list_conversations` (JWT) — list user's conversations. Query: `?role=guard|customer`. Returns enriched conversations with `participant_name`, `participant_avatar`, `last_message`, `last_message_at`, `unread_count`. **Name resolution:** JOINs through `booking.guard_requests` + `booking.assignments` + `auth.users` + `auth.customer_profiles`. Uses `acting_role` param to determine which counterpart name to show (guard sees customer name, customer sees guard name).
+- `GET /conversations/{id}/messages` → `handlers::list_messages` (JWT) — message history. Query: `?limit=50&offset=0`. Returns newest-first. Includes `sender_role` per message.
+- `PUT /conversations/{id}/read` → `handlers::mark_read` (JWT) — mark conversation as read. Query: `?role=guard|customer`. UPSERTs `chat.read_receipts` with `user_role`.
+- `POST /attachments` → `handlers::upload_attachment` (JWT, multipart) — upload image attachment to MinIO/R2
+- `GET /attachments/{id}` → `handlers::get_signed_url` (JWT) — get presigned URL for attachment
 
 **Flutter Mobile:**
 - `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for both guard & customer), `reissueProfileToken(phone, {role})` (optional role param: `'guard'`/`'customer'`), `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`, `submitCustomerProfile({profileToken, address, companyName?})`, `loginWithPhone(phone, pinHash)`, `fetchProfile()`
@@ -728,18 +785,57 @@ RegistrationPendingScreen
   - `HirerProfileScreen`: uses `auth.customerFullName ?? auth.fullName` for customer display name, formatted phone as ID, avatar icon fallback
   - `ServiceSelectionScreen`: loads service rates from API via `BookingProvider.fetchServiceRates()` → dynamic cards with icon selection based on service name keywords. Back button uses `pushAndRemoveUntil` → `RoleSelectionScreen(phone)` (ไม่ใช่ `Navigator.pop()` ซึ่งจะทำให้จอดำ)
   - `BookingScreen`: customer fills booking form → `createRequest()` → extracts `requestId` from response → `Navigator.pushReplacement` to `GuardSearchingScreen(requestId, lat, lng)`
-  - `GuardSearchingScreen`: accepts `requestId` (String?), `lat` (double), `lng` (double). Flow: 2-second radar animation → `fetchAvailableGuards(lat, lng)` → display guard card list (name, avatar, distance, rating, completed jobs, experience) → customer taps "ยืนยันการจอง" → `assignGuardToRequest(requestId, guardId)` → success bottom sheet → pop to dashboard. Empty state: "ไม่พบเจ้าหน้าที่" + retry button. i18n via `LanguageProvider`.
+  - `GuardSearchingScreen`: accepts `requestId` (String?), `lat` (double), `lng` (double). Flow: 2-second radar animation → `fetchAvailableGuards(lat, lng)` → display guard card list (name, avatar, distance, rating, completed jobs, experience) → customer taps "ยืนยันการจอง" → `assignGuardToRequest(requestId, guardId)` → `Navigator.pushReplacement` to `WaitingForGuardScreen`. Empty state: "ไม่พบเจ้าหน้าที่" + retry button. i18n via `LanguageProvider`.
+  - `WaitingForGuardScreen`: shows assignment status (pending → accepted/declined). Polls `getAssignments(requestId)` every 5 seconds. Guard accepted → `PaymentScreen(requestId, guardName, amount)`. Guard declined → shows decline message + retry search. Timer auto-decline after 5 minutes.
+  - `PaymentScreen`: simulated payment — amount display, payment method selection (QR/bank transfer/credit card). Confirm → `createPayment(requestId, amount, method)` → `PaymentSuccessScreen`.
+  - `PaymentSuccessScreen`: success animation + booking summary. "กลับหน้าหลัก" → pop to hirer dashboard.
+  - `GuardJobDetailScreen`: guard views job detail — customer info, location, booking time, service type. Actions: accept/decline (calls `acceptDeclineAssignment(assignmentId, action)`), start job (calls `startJob(assignmentId)`), complete job. Chat button → `getOrCreateConversation()` → `ChatScreen`. Call button → `CallScreen`.
+  - `ActiveJobScreen`: guard active job with countdown timer. Shows remaining hours/minutes from `started_at` + `booked_hours`. Location map placeholder. Complete job button. Chat/Call shortcuts.
+  - `GuardJobsTab`: wired to real API — `fetchJobs()` on init, shows pending/active/completed tabs. Tapping job → `GuardJobDetailScreen`. Chat button per job → creates/finds conversation → `ChatScreen(actingRole: 'guard')`.
 - `BookingProvider` (`booking_provider.dart`): `ChangeNotifier` for booking/guard state
-  - Guard: `fetchDashboard()`, `fetchJobs()`, `fetchEarnings()`, `updateAssignmentStatus()`, `fetchWorkHistory()`, `fetchRatings()`
-  - Customer: `fetchMyRequests()`, `createRequest()`, `cancelRequest()`, `fetchAvailableGuards(lat, lng)`, `assignGuardToRequest(requestId, guardId)`
+  - Guard: `fetchDashboard()`, `fetchJobs()`, `fetchEarnings()`, `updateAssignmentStatus()`, `acceptDeclineAssignment(assignmentId, action)`, `startJob(assignmentId)`, `fetchActiveJob()`, `fetchWorkHistory()`, `fetchRatings()`
+  - Customer: `fetchMyRequests()`, `createRequest()`, `cancelRequest()`, `fetchAvailableGuards(lat, lng)`, `assignGuardToRequest(requestId, guardId)`, `createPayment(requestId, amount, method)`
   - Pricing: `fetchServiceRates()` — uses separate `_isLoadingRates` flag (not shared `_isLoading`)
-  - State: `serviceRates` (list), `myRequests` (list), `availableGuards` (list), `dashboard`, `currentJobs`, `completedJobs`, `earnings`, `workHistory`, `ratings`
+  - State: `serviceRates` (list), `myRequests` (list), `availableGuards` (list), `dashboard`, `currentJobs`, `completedJobs`, `earnings`, `workHistory`, `ratings`, `activeJob`
   - `_isLoadingGuards`: separate flag for available guards loading (not shared with `_isLoading` or `_isLoadingRates`)
 - `BookingService` (`booking_service.dart`): Dio-based HTTP client for booking API
-  - Guard: `getGuardDashboard()`, `getGuardJobs()`, `getGuardEarnings()`, `updateAssignmentStatus()`, `getGuardWorkHistory()`, `getGuardRatings()`
-  - Customer: `createRequest()`, `listMyRequests()`, `getRequest()`, `cancelRequest()`, `getAssignments()`, `listAvailableGuards({lat, lng, radiusKm, limit})`, `assignGuardToRequest(requestId, guardId)`
+  - Guard: `getGuardDashboard()`, `getGuardJobs()`, `getGuardEarnings()`, `updateAssignmentStatus()`, `acceptDeclineAssignment(assignmentId, action)`, `startJob(assignmentId)`, `getActiveJob()`, `getGuardWorkHistory()`, `getGuardRatings()`
+  - Customer: `createRequest()`, `listMyRequests()`, `getRequest()`, `cancelRequest()`, `getAssignments()`, `listAvailableGuards({lat, lng, radiusKm, limit})`, `assignGuardToRequest(requestId, guardId)`, `createPayment({requestId, amount, paymentMethod})`
   - Pricing: `listServiceRates()` → `GET /booking/pricing/services` — public, returns `List<Map<String, dynamic>>`
 - `main.dart`: `ChangeNotifierProvider(create: (_) => BookingProvider(BookingService(apiClient)))` registered in `MultiProvider`
+
+**Chat (Mobile → Backend):**
+- `ChatService` (`chat_service.dart`): REST + WebSocket client for chat
+  - REST: `getConversations({String? role})` → `GET /chat/conversations?role=...`, `createConversation(requestId, participantIds)` → `POST /chat/conversations`, `getMessages(conversationId)` → `GET /chat/conversations/$id/messages`, `markRead(conversationId, {String? role})` → `PUT /chat/conversations/$id/read?role=...`
+  - `getOrCreateConversation(requestId, myUserId, otherUserId)` — finds existing conversation by request_id or creates new one
+  - WebSocket: `connectChat(Function(Map) onMessage)` → connects to `/ws/chat` with Bearer token, listens for incoming messages, calls `onMessage` callback
+  - `sendChatMessage(conversationId, content, {String? senderRole})` → sends JSON to WS: `{"conversation_id", "content", "message_type": "text", "sender_role"}`
+  - `disconnectChat()` → closes WebSocket cleanly
+  - WebSocket URL: replaces `http://` → `ws://` from `API_URL` (same pattern as `TrackingService`)
+  - Uses `IOWebSocketChannel.connect(headers: {'Authorization': 'Bearer $token'})` — same auth pattern as GPS WebSocket
+- `ChatProvider` (`chat_provider.dart`): `ChangeNotifier` for chat state
+  - Conversations: `fetchConversations({String? role})` → loads conversation list with unread counts
+  - Messages: `fetchMessages(conversationId)` → loads message history (reversed for chronological display), `connectToConversation(conversationId)` → WebSocket listener filters messages for active conversation, deduplicates by `id`
+  - Send: `sendMessage(conversationId, content, {String? senderRole})` → sends via WebSocket (server echoes back → listener adds to `_messages`)
+  - Read: `markRead(conversationId, {String? role})` → marks conversation as read for acting role
+  - Lifecycle: `disconnect()` → clears `_activeConversationId`, clears `_messages`, disconnects WebSocket
+  - `getOrCreateConversation(requestId, myUserId, otherUserId)` → delegates to service
+  - State: `conversations` (list), `messages` (list), `isLoading`, `isLoadingMessages`, `activeConversationId`
+- `ChatListScreen` (`chat_list_screen.dart`): conversation list, role-aware
+  - Constructor: `ChatListScreen({String? actingRole})` — `'guard'` or `'customer'`
+  - Passes `actingRole` to `fetchConversations(role:)` and through to `ChatScreen`
+  - Shows unread badge (green pill) per conversation — bold name/message/time when unread
+  - Pull-to-refresh, refreshes after returning from `ChatScreen` (updated unread counts)
+  - Guard dashboard passes `actingRole: 'guard'`, Hirer dashboard passes `actingRole: 'customer'`
+- `ChatScreen` (`chat_screen.dart`): real-time conversation
+  - Constructor: `ChatScreen({conversationId, requestId, userName, userRole, actingRole})`
+  - `initState`: fetches messages + connects WebSocket + marks as read
+  - Message alignment: `sender_role == actingRole` → right (me), else → left (them) with avatar
+  - Sent messages show checkmark (`Icons.done` / `Icons.done_all` for last in group)
+  - Send button: passes `senderRole: actingRole` to `sendMessage()`, clears input, scrolls to bottom
+  - Auto-scrolls on new messages via `ScrollController`
+  - `dispose`: disconnects WebSocket
+- `main.dart`: `ChangeNotifierProvider(create: (_) => ChatProvider(ChatService(apiClient)))` registered in `MultiProvider`
 
 **GPS Tracking (Mobile → Backend):**
 - **TrackingService** (`tracking_service.dart`): WebSocket + GPS streaming
@@ -1072,3 +1168,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามใช้ `SafeArea` ใน screens ที่มี green header — ใช้ manual top padding (`EdgeInsets.fromLTRB(12, 60, 24, 30)`) แทน
 - ❌ ห้ามใช้ shared `_isLoadingGuards` flag ร่วมกับ `_isLoading` หรือ `_isLoadingRates` — ต้องแยก flag สำหรับ available guards loading
 - ❌ ห้ามให้ non-owner customer assign guard ไปยัง request ของคนอื่น — backend `assign_guard` ตรวจ `request.customer_id == user.user_id` สำหรับ non-admin
+- ❌ ห้าม `list_conversations` ใช้ `sender_id` เพื่อ determine ชื่อคู่สนทนา — ต้องใช้ `acting_role` query param (`?role=guard|customer`) + JOIN ผ่าน `booking.guard_requests` + `booking.assignments` เพื่อ resolve ชื่อ guard/customer ที่ถูกต้อง (same user อาจเป็นทั้ง guard และ customer)
+- ❌ ห้าม determine message alignment ด้วย `sender_id == userId` — ต้องใช้ `sender_role == actingRole` เพราะ same user สามารถส่งข้อความเป็นทั้ง guard และ customer ในคนละ conversation
+- ❌ ห้ามส่งข้อความผ่าน chat WebSocket โดยไม่มี `sender_role` — ต้องส่ง `sender_role` (`'guard'` / `'customer'`) เสมอเพื่อให้ role-based alignment ทำงานถูกต้อง
+- ❌ ห้าม `ChatListScreen` / `ChatScreen` ไม่รับ `actingRole` param — ต้องส่ง `actingRole` จาก dashboard ที่เรียก (guard dashboard → `'guard'`, hirer dashboard → `'customer'`) เพื่อให้ name resolution, message alignment, และ unread count ทำงานถูกต้อง
