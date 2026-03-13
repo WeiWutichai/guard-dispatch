@@ -5,6 +5,7 @@ import '../../theme/colors.dart';
 import '../../services/language_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/booking_provider.dart';
+import '../../providers/notification_provider.dart';
 import 'booking_screen.dart';
 import '../notification_screen.dart';
 import '../role_selection_screen.dart';
@@ -24,6 +25,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<BookingProvider>().fetchServiceRates();
+      context.read<NotificationProvider>().fetchUnreadCount();
     });
   }
 
@@ -112,6 +114,53 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
     );
   }
 
+  Widget _buildNotificationBell() {
+    final unreadCount = context.watch<NotificationProvider>().unreadCount;
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const NotificationScreen(isGuard: false),
+          ),
+        );
+        if (mounted) {
+          context.read<NotificationProvider>().fetchUnreadCount();
+        }
+      },
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            const Center(
+              child: Icon(Icons.notifications_none_rounded, color: Colors.white, size: 26),
+            ),
+            if (unreadCount > 0)
+              Positioned(
+                right: 2,
+                top: 2,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  child: Text(
+                    unreadCount > 99 ? '99+' : '$unreadCount',
+                    style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader(BuildContext context, bool isThai) {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
@@ -175,18 +224,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const NotificationScreen(isGuard: false),
-                  ),
-                ),
-                icon: const Icon(
-                  Icons.notifications_none_rounded,
-                  color: Colors.white,
-                ),
-              ),
+              _buildNotificationBell(),
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: const BoxDecoration(

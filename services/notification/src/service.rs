@@ -103,6 +103,24 @@ pub async fn list_notifications(
 }
 
 // =============================================================================
+// Get Unread Count
+// =============================================================================
+
+pub async fn get_unread_count(
+    db: &PgPool,
+    user_id: Uuid,
+) -> Result<i64, AppError> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM notification.notification_logs WHERE user_id = $1 AND is_read = false",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(row.0)
+}
+
+// =============================================================================
 // Mark as Read
 // =============================================================================
 
@@ -126,6 +144,24 @@ pub async fn mark_as_read(
     .ok_or_else(|| AppError::NotFound("Notification not found".to_string()))?;
 
     Ok(NotificationLogResponse::from(row))
+}
+
+// =============================================================================
+// Mark All as Read
+// =============================================================================
+
+pub async fn mark_all_as_read(
+    db: &PgPool,
+    user_id: Uuid,
+) -> Result<i64, AppError> {
+    let result = sqlx::query(
+        "UPDATE notification.notification_logs SET is_read = true, read_at = NOW() WHERE user_id = $1 AND is_read = false",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await?;
+
+    Ok(result.rows_affected() as i64)
 }
 
 // =============================================================================

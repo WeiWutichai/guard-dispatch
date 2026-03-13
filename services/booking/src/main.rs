@@ -13,9 +13,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use shared::config::{DatabaseConfig, JwtConfig};
+use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
 use shared::db::create_pool;
 use shared::openapi::{SecurityAddon, ServerPrefixAddon};
+use shared::redis_client::create_redis_client;
 
 use crate::state::AppState;
 
@@ -30,11 +31,14 @@ use crate::state::AppState;
         handlers::assign_guard,
         handlers::update_assignment_status,
         handlers::accept_decline_assignment,
+        handlers::review_completion,
+        handlers::submit_review,
         handlers::get_assignments,
         handlers::available_guards,
         handlers::create_payment,
         handlers::start_job,
         handlers::get_active_job,
+        handlers::get_customer_active_job,
         handlers::guard_dashboard,
         handlers::guard_jobs,
         handlers::guard_earnings,
@@ -54,6 +58,9 @@ use crate::state::AppState;
         models::AssignGuardDto,
         models::UpdateAssignmentStatusDto,
         models::AcceptDeclineDto,
+        models::ReviewCompletionDto,
+        models::CreateReviewDto,
+        models::SubmitReviewResponse,
         models::CreatePaymentDto,
         models::GuardRequestResponse,
         models::AssignmentResponse,
@@ -97,12 +104,26 @@ async fn main() -> anyhow::Result<()> {
 
     let db_config = DatabaseConfig::from_env()?;
     let jwt_config = JwtConfig::from_env()?;
+    let redis_config = RedisConfig::from_env()?;
 
     let db = create_pool(&db_config).await?;
+
+    // Redis for pub/sub (assignment status notifications)
+    let redis_url = redis_config
+        .pubsub_url
+        .as_deref()
+        .unwrap_or(&redis_config.cache_url);
+    let redis_client = create_redis_client(redis_url)?;
+    let redis_conn = redis_client
+        .get_multiplexed_tokio_connection()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {e}"))?;
 
     let state = Arc::new(AppState {
         db,
         jwt_config,
+        redis_client,
+        redis_conn,
     });
 
     let app = Router::new()
@@ -116,6 +137,10 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_assignments),
         )
         .route(
+            "/requests/{id}/active-job",
+            get(handlers::get_customer_active_job),
+        )
+        .route(
             "/assignments/{id}/status",
             put(handlers::update_assignment_status),
         )
@@ -124,6 +149,16 @@ async fn main() -> anyhow::Result<()> {
             put(handlers::accept_decline_assignment),
         )
         .route("/assignments/{id}/start", put(handlers::start_job))
+        .route(
+            "/assignments/{id}/review-completion",
+            put(handlers::review_completion),
+        )
+        .route(
+            "/assignments/{id}/review",
+            post(handlers::submit_review),
+        )
+        // WebSocket — real-time assignment status updates
+        .route("/ws/assignments", get(handlers::ws_assignment_status))
         // Payments
         .route("/payments", post(handlers::create_payment))
         // Available guards (customer discovery)

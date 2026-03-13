@@ -561,11 +561,17 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
               const SizedBox(height: 18),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 12),
+                padding: const EdgeInsets.symmetric(vertical: 14),
                 decoration: BoxDecoration(
-                  color: Colors.transparent,
+                  color: AppColors.primary,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.primary, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.3),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -575,13 +581,13 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                       style: GoogleFonts.inter(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
-                        color: AppColors.primary,
+                        color: Colors.white,
                       ),
                     ),
                     const SizedBox(width: 6),
-                    Icon(
+                    const Icon(
                       Icons.login_rounded,
-                      color: AppColors.primary,
+                      color: Colors.white,
                       size: 18,
                     ),
                   ],

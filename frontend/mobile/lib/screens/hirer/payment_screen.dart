@@ -15,6 +15,9 @@ class PaymentScreen extends StatefulWidget {
   final int bookedHours;
   final int guardCount;
   final String guardName;
+  final String guardId;
+  final double customerLat;
+  final double customerLng;
 
   const PaymentScreen({
     super.key,
@@ -26,6 +29,9 @@ class PaymentScreen extends StatefulWidget {
     required this.bookedHours,
     required this.guardCount,
     required this.guardName,
+    required this.guardId,
+    required this.customerLat,
+    required this.customerLng,
   });
 
   @override
@@ -53,6 +59,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
             guardName: widget.guardName,
             totalAmount: widget.totalAmount,
             bookedHours: widget.bookedHours,
+            requestId: widget.requestId,
+            guardId: widget.guardId,
+            customerLat: widget.customerLat,
+            customerLng: widget.customerLng,
           ),
         ),
       );

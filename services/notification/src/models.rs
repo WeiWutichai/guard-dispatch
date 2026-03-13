@@ -65,6 +65,11 @@ pub struct NotificationLogResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct UnreadCountResponse {
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FcmTokenResponse {
     pub id: Uuid,
     pub token: String,

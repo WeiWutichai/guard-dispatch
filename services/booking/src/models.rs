@@ -35,9 +35,11 @@ pub enum AssignmentStatus {
     PendingAcceptance,
     Assigned,
     Accepted,
+    AwaitingPayment,
     Declined,
     EnRoute,
     Arrived,
+    PendingCompletion,
     Completed,
     Cancelled,
 }
@@ -86,11 +88,37 @@ pub struct AcceptDeclineDto {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub struct ReviewCompletionDto {
+    pub approve: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreatePaymentDto {
     pub request_id: Uuid,
     #[schema(value_type = f64)]
     pub amount: rust_decimal::Decimal,
     pub payment_method: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateReviewDto {
+    #[schema(value_type = f64)]
+    pub overall_rating: rust_decimal::Decimal,
+    #[schema(value_type = Option<f64>)]
+    pub punctuality: Option<rust_decimal::Decimal>,
+    #[schema(value_type = Option<f64>)]
+    pub professionalism: Option<rust_decimal::Decimal>,
+    #[schema(value_type = Option<f64>)]
+    pub communication: Option<rust_decimal::Decimal>,
+    #[schema(value_type = Option<f64>)]
+    pub appearance: Option<rust_decimal::Decimal>,
+    pub review_text: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SubmitReviewResponse {
+    pub id: Uuid,
+    pub message: String,
 }
 
 // =============================================================================
@@ -119,11 +147,27 @@ pub struct AssignmentResponse {
     pub id: Uuid,
     pub request_id: Uuid,
     pub guard_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard_name: Option<String>,
     pub status: AssignmentStatus,
     pub assigned_at: DateTime<Utc>,
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
+    pub completion_requested_at: Option<DateTime<Utc>>,
+    // Review data (if reviewed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_overall_rating: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_punctuality: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_professionalism: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_communication: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_appearance: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_text: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -150,6 +194,7 @@ pub struct ActiveJobResponse {
     pub remaining_seconds: Option<i64>,
     pub assignment_status: AssignmentStatus,
     pub offered_price: Option<f64>,
+    pub completion_requested_at: Option<DateTime<Utc>>,
 }
 
 // =============================================================================
@@ -204,6 +249,8 @@ pub struct GuardJobResponse {
     pub customer_id: Uuid,
     pub customer_name: String,
     pub customer_phone: Option<String>,
+    pub location_lat: Option<f64>,
+    pub location_lng: Option<f64>,
     pub address: String,
     pub description: Option<String>,
     pub special_instructions: Option<String>,
@@ -219,6 +266,19 @@ pub struct GuardJobResponse {
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
+    // Review data (if reviewed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_overall_rating: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_punctuality: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_professionalism: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_communication: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_appearance: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_text: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -227,6 +287,8 @@ pub struct GuardJobRow {
     pub customer_id: Uuid,
     pub customer_name: Option<String>,
     pub customer_phone: Option<String>,
+    pub location_lat: Option<f64>,
+    pub location_lng: Option<f64>,
     pub address: String,
     pub description: Option<String>,
     pub special_instructions: Option<String>,
@@ -242,6 +304,13 @@ pub struct GuardJobRow {
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
+    // Review data
+    pub review_overall_rating: Option<f64>,
+    pub review_punctuality: Option<f64>,
+    pub review_professionalism: Option<f64>,
+    pub review_communication: Option<f64>,
+    pub review_appearance: Option<f64>,
+    pub review_text: Option<String>,
 }
 
 impl From<GuardJobRow> for GuardJobResponse {
@@ -252,6 +321,8 @@ impl From<GuardJobRow> for GuardJobResponse {
             customer_id: row.customer_id,
             customer_name: row.customer_name.unwrap_or_else(|| "-".to_string()),
             customer_phone: row.customer_phone,
+            location_lat: row.location_lat,
+            location_lng: row.location_lng,
             address: row.address,
             description: row.description,
             special_instructions: row.special_instructions,
@@ -267,6 +338,12 @@ impl From<GuardJobRow> for GuardJobResponse {
             arrived_at: row.arrived_at,
             completed_at: row.completed_at,
             started_at: row.started_at,
+            review_overall_rating: row.review_overall_rating,
+            review_punctuality: row.review_punctuality,
+            review_professionalism: row.review_professionalism,
+            review_communication: row.review_communication,
+            review_appearance: row.review_appearance,
+            review_text: row.review_text,
         }
     }
 }
@@ -303,11 +380,20 @@ pub struct AssignmentRow {
     pub id: Uuid,
     pub request_id: Uuid,
     pub guard_id: Uuid,
+    pub guard_name: Option<String>,
     pub status: AssignmentStatus,
     pub assigned_at: DateTime<Utc>,
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
+    pub completion_requested_at: Option<DateTime<Utc>>,
+    // Review data
+    pub review_overall_rating: Option<f64>,
+    pub review_punctuality: Option<f64>,
+    pub review_professionalism: Option<f64>,
+    pub review_communication: Option<f64>,
+    pub review_appearance: Option<f64>,
+    pub review_text: Option<String>,
 }
 
 impl From<AssignmentRow> for AssignmentResponse {
@@ -316,11 +402,19 @@ impl From<AssignmentRow> for AssignmentResponse {
             id: row.id,
             request_id: row.request_id,
             guard_id: row.guard_id,
+            guard_name: row.guard_name,
             status: row.status,
             assigned_at: row.assigned_at,
             arrived_at: row.arrived_at,
             completed_at: row.completed_at,
             started_at: row.started_at,
+            completion_requested_at: row.completion_requested_at,
+            review_overall_rating: row.review_overall_rating,
+            review_punctuality: row.review_punctuality,
+            review_professionalism: row.review_professionalism,
+            review_communication: row.review_communication,
+            review_appearance: row.review_appearance,
+            review_text: row.review_text,
         }
     }
 }
@@ -544,9 +638,7 @@ pub struct AvailableGuardResponse {
     pub distance_km: f64,
     pub last_seen_at: DateTime<Utc>,
     pub completed_jobs: i64,
-    /// Placeholder — reviews table not yet implemented
     pub rating: f64,
-    /// Placeholder — reviews table not yet implemented
     pub review_count: i64,
 }
 
@@ -561,6 +653,8 @@ pub struct AvailableGuardRow {
     pub distance_km: f64,
     pub last_seen_at: DateTime<Utc>,
     pub completed_jobs: Option<i64>,
+    pub rating: Option<f64>,
+    pub review_count: Option<i64>,
 }
 
 impl From<AvailableGuardRow> for AvailableGuardResponse {
@@ -575,9 +669,8 @@ impl From<AvailableGuardRow> for AvailableGuardResponse {
             distance_km: row.distance_km,
             last_seen_at: row.last_seen_at,
             completed_jobs: row.completed_jobs.unwrap_or(0),
-            // Placeholder ratings until reviews table is built
-            rating: 4.5 + (row.completed_jobs.unwrap_or(0) as f64 * 0.01).min(0.4),
-            review_count: row.completed_jobs.unwrap_or(0).min(200),
+            rating: row.rating.unwrap_or(0.0),
+            review_count: row.review_count.unwrap_or(0),
         }
     }
 }

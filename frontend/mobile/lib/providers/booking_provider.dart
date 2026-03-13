@@ -75,6 +75,7 @@ class BookingProvider extends ChangeNotifier {
             final s = j['assignment_status'] as String?;
             return s == 'pending_acceptance' ||
                 s == 'accepted' ||
+                s == 'awaiting_payment' ||
                 s == 'assigned' ||
                 s == 'en_route' ||
                 s == 'arrived';
@@ -115,6 +116,35 @@ class BookingProvider extends ChangeNotifier {
       _error = e.toString();
       notifyListeners();
     }
+  }
+
+  /// Customer reviews guard's completion request (approve or hold)
+  Future<Map<String, dynamic>> reviewCompletion(
+    String assignmentId,
+    bool approve,
+  ) async {
+    return await _service.reviewCompletion(assignmentId, approve);
+  }
+
+  /// Customer submits star rating review for completed assignment
+  Future<Map<String, dynamic>> submitReview(
+    String assignmentId, {
+    required double overallRating,
+    double? punctuality,
+    double? professionalism,
+    double? communication,
+    double? appearance,
+    String? reviewText,
+  }) async {
+    return await _service.submitReview(
+      assignmentId,
+      overallRating: overallRating,
+      punctuality: punctuality,
+      professionalism: professionalism,
+      communication: communication,
+      appearance: appearance,
+      reviewText: reviewText,
+    );
   }
 
   Future<void> fetchWorkHistory({String? status}) async {
@@ -331,6 +361,21 @@ class BookingProvider extends ChangeNotifier {
     }
   }
 
+  /// Fetch active job data and return it (for resuming countdown).
+  Future<Map<String, dynamic>?> fetchActiveJobData() async {
+    _error = null;
+    try {
+      final result = await _service.getActiveJob();
+      _activeJob = result;
+      notifyListeners();
+      return result;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+
   Future<Map<String, dynamic>> startActiveJob(String assignmentId) async {
     _error = null;
     try {
@@ -345,6 +390,11 @@ class BookingProvider extends ChangeNotifier {
     }
   }
 
+  /// Fetch active job info for a customer's request. Returns null on error.
+  Future<Map<String, dynamic>?> getCustomerActiveJob(String requestId) async {
+    return await _service.getCustomerActiveJob(requestId);
+  }
+
   // =========================================================================
   // Get Assignments for a Request (Customer polling)
   // =========================================================================
@@ -357,5 +407,14 @@ class BookingProvider extends ChangeNotifier {
       notifyListeners();
       rethrow;
     }
+  }
+
+  // =========================================================================
+  // Guard Location (Customer tracking)
+  // =========================================================================
+
+  /// Fetch guard's latest location. Returns null on error (for polling).
+  Future<Map<String, dynamic>?> getGuardLocation(String guardId) async {
+    return await _service.getGuardLocation(guardId);
   }
 }

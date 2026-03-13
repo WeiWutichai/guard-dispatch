@@ -11,6 +11,7 @@ import '../../../l10n/app_strings.dart';
 import '../../chat_screen.dart';
 import '../active_job_screen.dart';
 import '../guard_job_detail_screen.dart';
+import '../completed_job_detail_screen.dart';
 
 class GuardJobsTab extends StatefulWidget {
   const GuardJobsTab({super.key});
@@ -230,10 +231,20 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
           final job = jobs[index];
           return Padding(
             padding: EdgeInsets.only(bottom: index < jobs.length - 1 ? 12 : 0),
-            child: _buildCompletedJobItem(
-              job['customer_name'] as String? ?? '-',
-              job['completed_at'] as String? ?? '',
-              _formatCurrency(job['offered_price']),
+            child: GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CompletedJobDetailScreen(job: job),
+                  ),
+                );
+              },
+              child: _buildCompletedJobItem(
+                job['customer_name'] as String? ?? '-',
+                job['completed_at'] as String? ?? '',
+                _formatCurrency(job['offered_price']),
+              ),
             ),
           );
         },
@@ -272,13 +283,20 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     return result;
   }
 
+  /// Derive effective status: if raw is 'arrived' but started_at is set → 'started'
+  String _effectiveStatus(Map<String, dynamic> job) {
+    final raw = job['assignment_status'] as String? ?? 'assigned';
+    final startedAt = job['started_at'] as String?;
+    return (raw == 'arrived' && startedAt != null) ? 'started' : raw;
+  }
+
   Widget _buildJobCard(Map<String, dynamic> job, GuardJobsStrings strings, bool isThai) {
     final customerName = job['customer_name'] as String? ?? '-';
     final address = job['address'] as String? ?? '-';
     final price = _formatCurrency(job['offered_price']);
     final description = job['description'] as String? ?? '';
     final specialInstructions = job['special_instructions'] as String?;
-    final assignmentStatus = job['assignment_status'] as String? ?? 'assigned';
+    final assignmentStatus = _effectiveStatus(job);
     final bookedHours = (job['booked_hours'] as num?)?.toInt();
     final urgency = job['urgency'] as String?;
 
@@ -459,7 +477,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
           ] else if (assignmentStatus == 'accepted' ||
               assignmentStatus == 'assigned' ||
               assignmentStatus == 'en_route' ||
-              assignmentStatus == 'arrived') ...[
+              assignmentStatus == 'arrived' ||
+              assignmentStatus == 'started') ...[
             const SizedBox(height: 20),
             _buildStatusActionButton(job, isThai),
             const SizedBox(height: 12),
@@ -556,22 +575,66 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
 
   Widget _buildStatusActionButton(Map<String, dynamic> job, bool isThai) {
     final assignmentId = job['assignment_id'] as String? ?? '';
-    final status = job['assignment_status'] as String? ?? 'assigned';
+    final status = _effectiveStatus(job);
 
     String buttonLabel;
-    if (status == 'accepted') {
+    IconData buttonIcon;
+    if (status == 'started') {
+      buttonLabel = isThai ? 'ดูเวลาทำงาน' : 'View Timer';
+      buttonIcon = Icons.timer_rounded;
+    } else if (status == 'accepted' || status == 'assigned') {
       buttonLabel = isThai ? 'เริ่มเดินทาง' : 'Start Route';
+      buttonIcon = Icons.directions_car_rounded;
     } else if (status == 'en_route') {
       buttonLabel = isThai ? 'ถึงจุดหมาย' : 'Arrived';
+      buttonIcon = Icons.location_on_rounded;
     } else if (status == 'arrived') {
       buttonLabel = isThai ? 'เริ่มงาน' : 'Start Job';
+      buttonIcon = Icons.play_arrow_rounded;
     } else {
       buttonLabel = isThai ? 'เริ่มเดินทาง' : 'Start Route';
+      buttonIcon = Icons.directions_car_rounded;
     }
 
-    return ElevatedButton(
+    return ElevatedButton.icon(
       onPressed: () async {
-        if (status == 'arrived') {
+        if (status == 'started') {
+          // Resume active job countdown
+          try {
+            final activeJob = await context
+                .read<BookingProvider>()
+                .fetchActiveJobData();
+            if (!mounted) return;
+            if (activeJob != null) {
+              final remaining =
+                  (activeJob['remaining_seconds'] as num?)?.toInt() ?? 0;
+              final bookedHours =
+                  (activeJob['booked_hours'] as num?)?.toInt() ??
+                      (job['booked_hours'] as num?)?.toInt() ?? 6;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ActiveJobScreen(
+                    assignmentId: assignmentId,
+                    customerName: job['customer_name'] as String?,
+                    address: job['address'] as String?,
+                    bookedHours: bookedHours,
+                    remainingSeconds: remaining,
+                  ),
+                ),
+              );
+            }
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error: $e'),
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: AppColors.danger,
+              ),
+            );
+          }
+        } else if (status == 'arrived') {
           // Start job → navigate to ActiveJobScreen
           try {
             final result = await context
@@ -610,16 +673,17 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
               .updateAssignmentStatus(assignmentId, nextStatus);
         }
       },
+      icon: Icon(buttonIcon, size: 20),
+      label: Text(
+        buttonLabel,
+        style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold),
+      ),
       style: ElevatedButton.styleFrom(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         elevation: 0,
         minimumSize: const Size(double.infinity, 48),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-      child: Text(
-        buttonLabel,
-        style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold),
       ),
     );
   }
@@ -729,6 +793,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return isThai ? 'กำลังเดินทาง' : 'En Route';
       case 'arrived':
         return isThai ? 'ถึงจุดหมาย' : 'Arrived';
+      case 'started':
+        return isThai ? 'กำลังดำเนินงาน' : 'In Progress';
       case 'completed':
         return isThai ? 'เสร็จสิ้น' : 'Completed';
       case 'declined':
@@ -750,6 +816,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return AppColors.warning;
       case 'arrived':
         return AppColors.success;
+      case 'started':
+        return AppColors.primary;
       case 'completed':
         return AppColors.textSecondary;
       case 'declined':
@@ -807,6 +875,18 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
   }
 
   Widget _buildCompletedJobItem(String client, String date, String amount) {
+    // Format the date nicely
+    String displayDate = date;
+    if (date.isNotEmpty) {
+      final dt = DateTime.tryParse(date);
+      if (dt != null) {
+        final local = dt.toLocal();
+        final hour = local.hour.toString().padLeft(2, '0');
+        final minute = local.minute.toString().padLeft(2, '0');
+        displayDate = '${local.day}/${local.month}/${local.year} $hour:$minute';
+      }
+    }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -815,25 +895,43 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         border: Border.all(color: AppColors.border),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.check_circle_rounded,
+                color: AppColors.primary, size: 22),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(client, style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
-                if (date.isNotEmpty)
+                Text(client,
+                    style: GoogleFonts.inter(
+                        fontWeight: FontWeight.bold, fontSize: 15)),
+                if (displayDate.isNotEmpty)
                   Text(
-                    date,
-                    style: GoogleFonts.inter(fontSize: 12, color: AppColors.textSecondary),
+                    displayDate,
+                    style: GoogleFonts.inter(
+                        fontSize: 12, color: AppColors.textSecondary),
                   ),
               ],
             ),
           ),
           Text(
             amount,
-            style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AppColors.primary),
+            style: GoogleFonts.inter(
+                fontWeight: FontWeight.bold,
+                color: AppColors.primary,
+                fontSize: 15),
           ),
+          const SizedBox(width: 8),
+          const Icon(Icons.chevron_right_rounded,
+              color: AppColors.textSecondary, size: 20),
         ],
       ),
     );

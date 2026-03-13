@@ -1,22 +1,141 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:web_socket_channel/io.dart';
 import '../../theme/colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/booking_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../../services/auth_service.dart';
 import '../../services/language_service.dart';
 import '../call_screen.dart';
 import '../chat_screen.dart';
 import 'active_job_screen.dart';
+import 'guard_navigation_screen.dart';
 
-class GuardJobDetailScreen extends StatelessWidget {
+class GuardJobDetailScreen extends StatefulWidget {
   final Map<String, dynamic> job;
 
   const GuardJobDetailScreen({super.key, required this.job});
 
   @override
+  State<GuardJobDetailScreen> createState() => _GuardJobDetailScreenState();
+}
+
+class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
+  static const _envBaseUrl = String.fromEnvironment('API_URL');
+  static String get _defaultBaseUrl {
+    if (_envBaseUrl.isNotEmpty) return _envBaseUrl;
+    return Platform.isIOS ? 'http://localhost:80' : 'http://10.0.2.2:80';
+  }
+
+  Timer? _paymentTimer;
+  late Map<String, dynamic> _job;
+
+  // WebSocket for real-time status updates
+  IOWebSocketChannel? _wsChannel;
+  StreamSubscription<dynamic>? _wsSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _job = Map<String, dynamic>.from(widget.job);
+    _startPaymentPollingIfNeeded();
+    _connectAssignmentWs();
+  }
+
+  @override
+  void dispose() {
+    _paymentTimer?.cancel();
+    _wsSub?.cancel();
+    _wsChannel?.sink.close();
+    super.dispose();
+  }
+
+  Future<void> _connectAssignmentWs() async {
+    final requestId = _job['request_id'] as String? ?? _job['id'] as String? ?? '';
+    if (requestId.isEmpty) return;
+
+    final token = await AuthService.getAccessToken();
+    if (token == null) return;
+
+    final wsUrl = _defaultBaseUrl
+        .replaceFirst('http://', 'ws://')
+        .replaceFirst('https://', 'wss://');
+    final uri = Uri.parse('$wsUrl/ws/assignments');
+
+    try {
+      _wsChannel = IOWebSocketChannel.connect(
+        uri,
+        headers: {'Authorization': 'Bearer $token'},
+        pingInterval: const Duration(seconds: 30),
+      );
+      await _wsChannel!.ready;
+      _wsChannel!.sink.add(requestId);
+
+      _wsSub = _wsChannel!.stream.listen(
+        (data) {
+          if (!mounted) return;
+          try {
+            final msg = jsonDecode(data as String) as Map<String, dynamic>;
+            final status = msg['status'] as String?;
+            if (status == 'accepted' && msg['type'] == 'status_changed') {
+              _onPaymentConfirmed();
+            }
+          } catch (_) {}
+        },
+        onError: (_) {},
+        onDone: () {},
+      );
+    } catch (_) {}
+  }
+
+  void _onPaymentConfirmed() {
+    _paymentTimer?.cancel();
+    _paymentTimer = null;
+    final isThai = LanguageProvider.of(context).isThai;
+    setState(() {
+      _job['assignment_status'] = 'accepted';
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(isThai ? 'ลูกค้าชำระเงินแล้ว' : 'Customer has paid'),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColors.primary,
+      ),
+    );
+  }
+
+  void _startPaymentPollingIfNeeded() {
+    final status = _job['assignment_status'] as String? ?? '';
+    if (status == 'awaiting_payment') {
+      _paymentTimer = Timer.periodic(const Duration(seconds: 3), (_) => _pollPaymentStatus());
+    }
+  }
+
+  Future<void> _pollPaymentStatus() async {
+    final requestId = _job['request_id'] as String? ?? _job['id'] as String? ?? '';
+    if (requestId.isEmpty) return;
+    try {
+      final assignments = await context.read<BookingProvider>().getAssignments(requestId);
+      if (!mounted) return;
+      final assignmentId = _job['assignment_id'] as String?;
+      final match = assignments.where((a) => a['id'] == assignmentId);
+      if (match.isNotEmpty) {
+        final newStatus = match.first['status'] as String?;
+        if (newStatus == 'accepted') {
+          _onPaymentConfirmed();
+        }
+      }
+    } catch (_) {}
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final job = _job;
     final isThai = LanguageProvider.of(context).isThai;
 
     final customerName = job['customer_name'] as String? ?? '-';
@@ -24,7 +143,13 @@ class GuardJobDetailScreen extends StatelessWidget {
     final address = job['address'] as String? ?? '-';
     final description = job['description'] as String? ?? '';
     final specialInstructions = job['special_instructions'] as String?;
-    final assignmentStatus = job['assignment_status'] as String? ?? 'assigned';
+    final rawAssignmentStatus = job['assignment_status'] as String? ?? 'assigned';
+    final startedAt = job['started_at'] as String?;
+    // If status is 'arrived' but started_at is set, the job is in progress
+    final assignmentStatus =
+        (rawAssignmentStatus == 'arrived' && startedAt != null)
+            ? 'started'
+            : rawAssignmentStatus;
     final bookedHours = (job['booked_hours'] as num?)?.toInt();
     final price = job['offered_price'];
     final urgency = job['urgency'] as String? ?? 'medium';
@@ -353,10 +478,14 @@ class GuardJobDetailScreen extends StatelessWidget {
                   if (assignmentStatus == 'pending_acceptance') ...[
                     const SizedBox(height: 24),
                     _buildAcceptDeclineButtons(context, isThai),
+                  ] else if (assignmentStatus == 'awaiting_payment') ...[
+                    const SizedBox(height: 24),
+                    _buildAwaitingPaymentButton(isThai),
                   ] else if (assignmentStatus == 'accepted' ||
                       assignmentStatus == 'assigned' ||
                       assignmentStatus == 'en_route' ||
-                      assignmentStatus == 'arrived') ...[
+                      assignmentStatus == 'arrived' ||
+                      assignmentStatus == 'started') ...[
                     const SizedBox(height: 24),
                     _buildStatusActionButton(context, isThai),
                   ],
@@ -436,9 +565,9 @@ class GuardJobDetailScreen extends StatelessWidget {
   }
 
   Future<void> _openChat(BuildContext context, bool isThai) async {
-    final requestId = job['id'] as String? ?? '';
-    final customerId = job['customer_id'] as String? ?? '';
-    final customerName = job['customer_name'] as String? ?? '-';
+    final requestId = _job['id'] as String? ?? '';
+    final customerId = _job['customer_id'] as String? ?? '';
+    final customerName = _job['customer_name'] as String? ?? '-';
     final authProvider = context.read<AuthProvider>();
     final chatProvider = context.read<ChatProvider>();
     var myUserId = authProvider.userId;
@@ -533,12 +662,16 @@ class GuardJobDetailScreen extends StatelessWidget {
         return isThai ? 'รอตอบรับ' : 'Pending Acceptance';
       case 'accepted':
         return isThai ? 'ตอบรับแล้ว' : 'Accepted';
+      case 'awaiting_payment':
+        return isThai ? 'รอชำระเงิน' : 'Awaiting Payment';
       case 'assigned':
         return isThai ? 'ได้รับมอบหมาย' : 'Assigned';
       case 'en_route':
         return isThai ? 'กำลังเดินทาง' : 'En Route';
       case 'arrived':
         return isThai ? 'ถึงจุดหมาย' : 'Arrived';
+      case 'started':
+        return isThai ? 'กำลังดำเนินงาน' : 'In Progress';
       case 'completed':
         return isThai ? 'เสร็จสิ้น' : 'Completed';
       default:
@@ -553,10 +686,14 @@ class GuardJobDetailScreen extends StatelessWidget {
       case 'accepted':
       case 'assigned':
         return AppColors.info;
+      case 'awaiting_payment':
+        return const Color(0xFFF59E0B);
       case 'en_route':
         return AppColors.warning;
       case 'arrived':
         return AppColors.success;
+      case 'started':
+        return AppColors.primary;
       case 'completed':
         return AppColors.textSecondary;
       default:
@@ -619,7 +756,7 @@ class GuardJobDetailScreen extends StatelessWidget {
   // =========================================================================
 
   Widget _buildAcceptDeclineButtons(BuildContext context, bool isThai) {
-    final assignmentId = job['assignment_id'] as String? ?? '';
+    final assignmentId = _job['assignment_id'] as String? ?? '';
 
     return Row(
       children: [
@@ -702,18 +839,82 @@ class GuardJobDetailScreen extends StatelessWidget {
     );
   }
 
+  Widget _buildAwaitingPaymentButton(bool isThai) {
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7ED),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFFED7AA)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.hourglass_top_rounded,
+                  color: Color(0xFFF59E0B), size: 24),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  isThai
+                      ? 'กรุณารอลูกค้าชำระเงิน\nเมื่อชำระเงินแล้วจะสามารถเริ่มเดินทางได้'
+                      : 'Waiting for customer payment.\nYou can start the route after payment is confirmed.',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: const Color(0xFF92400E),
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          height: 54,
+          child: ElevatedButton.icon(
+            onPressed: null,
+            icon: const Icon(Icons.hourglass_top_rounded, size: 22),
+            label: Text(
+              isThai ? 'รอลูกค้าชำระเงิน' : 'Awaiting Payment',
+              style: GoogleFonts.inter(
+                  fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B),
+              disabledBackgroundColor:
+                  const Color(0xFFF59E0B).withValues(alpha: 0.5),
+              disabledForegroundColor: Colors.white,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildStatusActionButton(BuildContext context, bool isThai) {
-    final assignmentId = job['assignment_id'] as String? ?? '';
-    final status = job['assignment_status'] as String? ?? 'assigned';
+    final assignmentId = _job['assignment_id'] as String? ?? '';
+    final rawStatus = _job['assignment_status'] as String? ?? 'assigned';
+    final startedAt = _job['started_at'] as String?;
+    final status = (rawStatus == 'arrived' && startedAt != null) ? 'started' : rawStatus;
 
     String buttonLabel;
     IconData buttonIcon;
-    if (status == 'accepted' || status == 'assigned') {
+    if (status == 'started') {
+      buttonLabel = isThai ? 'ดูเวลาทำงาน' : 'View Timer';
+      buttonIcon = Icons.timer_rounded;
+    } else if (status == 'accepted' || status == 'assigned') {
       buttonLabel = isThai ? 'เริ่มเดินทาง' : 'Start Route';
       buttonIcon = Icons.directions_car_rounded;
     } else if (status == 'en_route') {
-      buttonLabel = isThai ? 'ถึงจุดหมาย' : 'Arrived';
-      buttonIcon = Icons.location_on_rounded;
+      buttonLabel = isThai ? 'ดูแผนที่นำทาง' : 'View Navigation';
+      buttonIcon = Icons.map_rounded;
     } else if (status == 'arrived') {
       buttonLabel = isThai ? 'เริ่มงาน' : 'Start Job';
       buttonIcon = Icons.play_arrow_rounded;
@@ -727,7 +928,41 @@ class GuardJobDetailScreen extends StatelessWidget {
       height: 54,
       child: ElevatedButton.icon(
         onPressed: () async {
-          if (status == 'arrived') {
+          if (status == 'started') {
+            // Resume active job countdown
+            try {
+              final activeJob = await context
+                  .read<BookingProvider>()
+                  .fetchActiveJobData();
+              if (!context.mounted) return;
+              if (activeJob != null) {
+                final remaining =
+                    (activeJob['remaining_seconds'] as num?)?.toInt() ?? 0;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ActiveJobScreen(
+                      assignmentId: assignmentId,
+                      customerName: _job['customer_name'] as String?,
+                      address: _job['address'] as String?,
+                      bookedHours:
+                          (_job['booked_hours'] as num?)?.toInt() ?? 6,
+                      remainingSeconds: remaining,
+                    ),
+                  ),
+                );
+              }
+            } catch (e) {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Error: $e'),
+                  behavior: SnackBarBehavior.floating,
+                  backgroundColor: AppColors.danger,
+                ),
+              );
+            }
+          } else if (status == 'arrived') {
             try {
               final result = await context
                   .read<BookingProvider>()
@@ -738,13 +973,13 @@ class GuardJobDetailScreen extends StatelessWidget {
                 MaterialPageRoute(
                   builder: (_) => ActiveJobScreen(
                     assignmentId: assignmentId,
-                    customerName: job['customer_name'] as String?,
-                    address: job['address'] as String?,
+                    customerName: _job['customer_name'] as String?,
+                    address: _job['address'] as String?,
                     bookedHours:
-                        (job['booked_hours'] as num?)?.toInt() ?? 6,
+                        (_job['booked_hours'] as num?)?.toInt() ?? 6,
                     remainingSeconds:
                         (result['remaining_seconds'] as num?)?.toInt() ??
-                            (((job['booked_hours'] as num?)?.toInt() ?? 6) *
+                            (((_job['booked_hours'] as num?)?.toInt() ?? 6) *
                                 3600),
                   ),
                 ),
@@ -759,15 +994,50 @@ class GuardJobDetailScreen extends StatelessWidget {
                 ),
               );
             }
-          } else {
-            final nextStatus =
-                (status == 'accepted' || status == 'assigned')
-                    ? 'en_route'
-                    : 'arrived';
-            context
+          } else if (status == 'accepted' || status == 'assigned') {
+            // Start Route → update status + navigate to map navigation
+            final customerLat = (_job['location_lat'] as num?)?.toDouble();
+            final customerLng = (_job['location_lng'] as num?)?.toDouble();
+            await context
                 .read<BookingProvider>()
-                .updateAssignmentStatus(assignmentId, nextStatus);
-            if (context.mounted) Navigator.pop(context);
+                .updateAssignmentStatus(assignmentId, 'en_route');
+            if (!context.mounted) return;
+            if (customerLat != null && customerLng != null) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GuardNavigationScreen(
+                    assignmentId: assignmentId,
+                    customerName: _job['customer_name'] as String? ?? '-',
+                    customerPhone: _job['customer_phone'] as String?,
+                    address: _job['address'] as String? ?? '-',
+                    customerLat: customerLat,
+                    customerLng: customerLng,
+                  ),
+                ),
+              );
+            } else {
+              Navigator.pop(context);
+            }
+          } else {
+            // en_route → open navigation map
+            final customerLat = (_job['location_lat'] as num?)?.toDouble();
+            final customerLng = (_job['location_lng'] as num?)?.toDouble();
+            if (customerLat != null && customerLng != null) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GuardNavigationScreen(
+                    assignmentId: assignmentId,
+                    customerName: _job['customer_name'] as String? ?? '-',
+                    customerPhone: _job['customer_phone'] as String?,
+                    address: _job['address'] as String? ?? '-',
+                    customerLat: customerLat,
+                    customerLng: customerLng,
+                  ),
+                ),
+              );
+            }
           }
         },
         icon: Icon(buttonIcon, size: 22),

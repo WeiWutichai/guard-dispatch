@@ -27,6 +27,8 @@ use crate::state::{AppState, FcmConfig};
         handlers::register_token,
         handlers::unregister_token,
         handlers::list_notifications,
+        handlers::unread_count,
+        handlers::mark_all_as_read,
         handlers::mark_as_read,
         handlers::send_notification,
     ),
@@ -35,6 +37,7 @@ use crate::state::{AppState, FcmConfig};
         models::RegisterTokenRequest,
         models::SendNotificationRequest,
         models::NotificationLogResponse,
+        models::UnreadCountResponse,
         models::FcmTokenResponse,
         handlers::DeleteTokenRequest,
         shared::error::ErrorBody,
@@ -88,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/tokens", delete(handlers::unregister_token))
         // Notification CRUD
         .route("/notifications", get(handlers::list_notifications))
+        .route("/notifications/unread-count", get(handlers::unread_count))
+        .route("/notifications/read-all", put(handlers::mark_all_as_read))
         .route(
             "/notifications/{id}/read",
             put(handlers::mark_as_read),

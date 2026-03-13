@@ -1,4 +1,5 @@
 use chrono::Utc;
+use redis::AsyncCommands;
 use rust_decimal::prelude::ToPrimitive;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -15,6 +16,64 @@ use crate::models::{
     UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse,
     WorkHistoryRow,
 };
+
+/// Insert a notification log entry (fire-and-forget via tokio::spawn).
+/// Since booking and notification share the same PostgreSQL instance,
+/// we INSERT directly — no HTTP overhead, no FCM push (future enhancement).
+pub fn spawn_notification(
+    db: PgPool,
+    user_id: Uuid,
+    title: String,
+    body: String,
+    notification_type: &'static str,
+    payload: Option<serde_json::Value>,
+) {
+    tokio::spawn(async move {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO notification.notification_logs (user_id, title, body, notification_type, payload)
+            VALUES ($1, $2, $3, $4::notification_type, $5)
+            "#,
+        )
+        .bind(user_id)
+        .bind(&title)
+        .bind(&body)
+        .bind(notification_type)
+        .bind(&payload)
+        .execute(&db)
+        .await;
+
+        if let Err(e) = result {
+            tracing::warn!("Failed to insert notification: {e}");
+        }
+    });
+}
+
+/// Publish an assignment status change event via Redis pub/sub (fire-and-forget).
+pub fn publish_assignment_event(
+    redis_conn: &redis::aio::MultiplexedConnection,
+    request_id: Uuid,
+    assignment_id: Uuid,
+    new_status: &str,
+) {
+    let mut conn = redis_conn.clone();
+    let channel = format!("assignment_status:{request_id}");
+    let payload = serde_json::json!({
+        "type": "status_changed",
+        "assignment_id": assignment_id.to_string(),
+        "request_id": request_id.to_string(),
+        "status": new_status,
+        "timestamp": Utc::now().to_rfc3339(),
+    })
+    .to_string();
+
+    tokio::spawn(async move {
+        let result: Result<(), redis::RedisError> = conn.publish(channel, payload).await;
+        if let Err(e) = result {
+            tracing::warn!("Failed to publish assignment status event: {e}");
+        }
+    });
+}
 
 // =============================================================================
 // Create Guard Request
@@ -57,6 +116,16 @@ pub async fn create_request(
     .bind(req.booked_hours)
     .fetch_one(db)
     .await?;
+
+    // Notify customer: booking created
+    spawn_notification(
+        db.clone(),
+        customer_id,
+        "การจองสำเร็จ".to_string(),
+        format!("คำขอจองเจ้าหน้าที่ รปภ. ที่ {} ถูกสร้างแล้ว", req.address),
+        "booking_created",
+        Some(serde_json::json!({"request_id": row.id.to_string()})),
+    );
 
     Ok(GuardRequestResponse::from(row))
 }
@@ -293,7 +362,8 @@ pub async fn assign_guard(
         r#"
         INSERT INTO booking.assignments (request_id, guard_id, status)
         VALUES ($1, $2, 'pending_acceptance'::assignment_status)
-        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         "#,
     )
     .bind(request_id)
@@ -304,6 +374,19 @@ pub async fn assign_guard(
     // Do NOT update request status yet — wait for guard to accept
 
     tx.commit().await?;
+
+    // Notify guard: new job assigned
+    spawn_notification(
+        db.clone(),
+        req.guard_id,
+        "งานใหม่ที่ได้รับ".to_string(),
+        format!("คุณได้รับมอบหมายงานใหม่ที่ {}", request.address),
+        "guard_assigned",
+        Some(serde_json::json!({
+            "request_id": request_id.to_string(),
+            "assignment_id": assignment.id.to_string(),
+        })),
+    );
 
     Ok(AssignmentResponse::from(assignment))
 }
@@ -318,12 +401,14 @@ pub async fn update_assignment_status(
     guard_id: Uuid,
     role: &str,
     req: UpdateAssignmentStatusDto,
+    redis_conn: &redis::aio::MultiplexedConnection,
 ) -> Result<AssignmentResponse, AppError> {
     let mut tx = db.begin().await?;
 
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
-        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
         FOR UPDATE
@@ -347,9 +432,10 @@ pub async fn update_assignment_status(
         (AssignmentStatus::Accepted, AssignmentStatus::EnRoute)
             | (AssignmentStatus::Assigned, AssignmentStatus::EnRoute)
             | (AssignmentStatus::EnRoute, AssignmentStatus::Arrived)
-            | (AssignmentStatus::Arrived, AssignmentStatus::Completed)
+            | (AssignmentStatus::Arrived, AssignmentStatus::PendingCompletion)
             | (AssignmentStatus::Assigned, AssignmentStatus::Cancelled)
             | (AssignmentStatus::Accepted, AssignmentStatus::Cancelled)
+            | (AssignmentStatus::AwaitingPayment, AssignmentStatus::Cancelled)
             | (AssignmentStatus::EnRoute, AssignmentStatus::Cancelled)
     );
 
@@ -366,10 +452,11 @@ pub async fn update_assignment_status(
     } else {
         existing.arrived_at
     };
-    let completed_at = if req.status == AssignmentStatus::Completed {
+    let completed_at = existing.completed_at;
+    let completion_requested_at = if req.status == AssignmentStatus::PendingCompletion {
         Some(now)
     } else {
-        existing.completed_at
+        existing.completion_requested_at
     };
 
     let status_str = serde_json::to_value(&req.status)
@@ -381,21 +468,23 @@ pub async fn update_assignment_status(
     let row = sqlx::query_as::<_, AssignmentRow>(
         r#"
         UPDATE booking.assignments
-        SET status = $2::assignment_status, arrived_at = $3, completed_at = $4
+        SET status = $2::assignment_status, arrived_at = $3, completed_at = $4, completion_requested_at = $5
         WHERE id = $1
-        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         "#,
     )
     .bind(assignment_id)
     .bind(&status_str)
     .bind(arrived_at)
     .bind(completed_at)
+    .bind(completion_requested_at)
     .fetch_one(&mut *tx)
     .await?;
 
     // Update the guard_request status accordingly
     let request_status = match req.status {
-        AssignmentStatus::EnRoute | AssignmentStatus::Arrived => "in_progress",
+        AssignmentStatus::EnRoute | AssignmentStatus::Arrived | AssignmentStatus::PendingCompletion => "in_progress",
         AssignmentStatus::Completed => "completed",
         AssignmentStatus::Cancelled => "cancelled",
         _ => "assigned",
@@ -411,6 +500,63 @@ pub async fn update_assignment_status(
 
     tx.commit().await?;
 
+    // Publish real-time event (fire-and-forget)
+    let status_str_for_event = serde_json::to_value(&req.status)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string());
+    publish_assignment_event(redis_conn, existing.request_id, assignment_id, &status_str_for_event);
+
+    // Notify customer for status changes they care about
+    if matches!(req.status, AssignmentStatus::EnRoute | AssignmentStatus::Arrived | AssignmentStatus::PendingCompletion) {
+        let db_clone = db.clone();
+        let req_id = existing.request_id;
+        let a_id = assignment_id;
+        let status = req.status.clone();
+        tokio::spawn(async move {
+            let cid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT customer_id FROM booking.guard_requests WHERE id = $1",
+            )
+            .bind(req_id)
+            .fetch_optional(&db_clone)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(customer_id) = cid {
+                let (title, body, ntype) = match status {
+                    AssignmentStatus::EnRoute => (
+                        "เจ้าหน้าที่กำลังเดินทาง",
+                        "เจ้าหน้าที่ รปภ. กำลังเดินทางมาหาคุณ",
+                        "guard_en_route",
+                    ),
+                    AssignmentStatus::Arrived => (
+                        "เจ้าหน้าที่ถึงแล้ว",
+                        "เจ้าหน้าที่ รปภ. ถึงจุดหมายแล้ว",
+                        "guard_arrived",
+                    ),
+                    AssignmentStatus::PendingCompletion => (
+                        "เจ้าหน้าที่แจ้งงานเสร็จ",
+                        "เจ้าหน้าที่ รปภ. แจ้งว่างานเสร็จสิ้น กรุณาตรวจสอบ",
+                        "booking_completed",
+                    ),
+                    _ => return,
+                };
+                spawn_notification(
+                    db_clone,
+                    customer_id,
+                    title.to_string(),
+                    body.to_string(),
+                    ntype,
+                    Some(serde_json::json!({
+                        "request_id": req_id.to_string(),
+                        "assignment_id": a_id.to_string(),
+                    })),
+                );
+            }
+        });
+    }
+
     Ok(AssignmentResponse::from(row))
 }
 
@@ -424,10 +570,20 @@ pub async fn get_assignments(
 ) -> Result<Vec<AssignmentResponse>, AppError> {
     let rows = sqlx::query_as::<_, AssignmentRow>(
         r#"
-        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
-        FROM booking.assignments
-        WHERE request_id = $1
-        ORDER BY assigned_at DESC
+        SELECT a.id, a.request_id, a.guard_id,
+               u.full_name AS guard_name,
+               a.status, a.assigned_at, a.arrived_at, a.completed_at, a.started_at, a.completion_requested_at,
+               r.overall_rating::float8 AS review_overall_rating,
+               r.punctuality::float8 AS review_punctuality,
+               r.professionalism::float8 AS review_professionalism,
+               r.communication::float8 AS review_communication,
+               r.appearance::float8 AS review_appearance,
+               r.review_text AS review_text
+        FROM booking.assignments a
+        LEFT JOIN auth.users u ON u.id = a.guard_id
+        LEFT JOIN reviews.guard_reviews r ON r.assignment_id = a.id
+        WHERE a.request_id = $1
+        ORDER BY a.assigned_at DESC
         "#,
     )
     .bind(request_id)
@@ -479,15 +635,23 @@ pub async fn get_guard_jobs(
                 r#"
                 SELECT gr.id, gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name,
                        COALESCE(cp.contact_phone, u.phone) AS customer_phone,
+                       gr.location_lat, gr.location_lng,
                        gr.address, gr.description, gr.special_instructions,
                        gr.status, gr.urgency, gr.offered_price, gr.booked_hours,
                        gr.created_at, gr.updated_at,
                        a.id AS assignment_id, a.status AS assignment_status,
-                       a.assigned_at, a.arrived_at, a.completed_at, a.started_at
+                       a.assigned_at, a.arrived_at, a.completed_at, a.started_at,
+                       rv.overall_rating::float8 AS review_overall_rating,
+                       rv.punctuality::float8 AS review_punctuality,
+                       rv.professionalism::float8 AS review_professionalism,
+                       rv.communication::float8 AS review_communication,
+                       rv.appearance::float8 AS review_appearance,
+                       rv.review_text AS review_text
                 FROM booking.guard_requests gr
                 INNER JOIN booking.assignments a ON a.request_id = gr.id
                 INNER JOIN auth.users u ON u.id = gr.customer_id
                 LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
+                LEFT JOIN reviews.guard_reviews rv ON rv.assignment_id = a.id
                 WHERE a.guard_id = $1 AND a.status = $2::assignment_status
                 ORDER BY gr.created_at DESC
                 LIMIT $3 OFFSET $4
@@ -505,15 +669,23 @@ pub async fn get_guard_jobs(
                 r#"
                 SELECT gr.id, gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name,
                        COALESCE(cp.contact_phone, u.phone) AS customer_phone,
+                       gr.location_lat, gr.location_lng,
                        gr.address, gr.description, gr.special_instructions,
                        gr.status, gr.urgency, gr.offered_price, gr.booked_hours,
                        gr.created_at, gr.updated_at,
                        a.id AS assignment_id, a.status AS assignment_status,
-                       a.assigned_at, a.arrived_at, a.completed_at, a.started_at
+                       a.assigned_at, a.arrived_at, a.completed_at, a.started_at,
+                       rv.overall_rating::float8 AS review_overall_rating,
+                       rv.punctuality::float8 AS review_punctuality,
+                       rv.professionalism::float8 AS review_professionalism,
+                       rv.communication::float8 AS review_communication,
+                       rv.appearance::float8 AS review_appearance,
+                       rv.review_text AS review_text
                 FROM booking.guard_requests gr
                 INNER JOIN booking.assignments a ON a.request_id = gr.id
                 INNER JOIN auth.users u ON u.id = gr.customer_id
                 LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
+                LEFT JOIN reviews.guard_reviews rv ON rv.assignment_id = a.id
                 WHERE a.guard_id = $1
                 ORDER BY gr.created_at DESC
                 LIMIT $2 OFFSET $3
@@ -624,16 +796,20 @@ pub async fn get_guard_dashboard_summary(
             r#"
             SELECT gr.id, gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name,
                    COALESCE(cp.contact_phone, u.phone) AS customer_phone,
+                   gr.location_lat, gr.location_lng,
                    gr.address, gr.description, gr.special_instructions,
                    gr.status, gr.urgency, gr.offered_price, gr.booked_hours,
                    gr.created_at, gr.updated_at,
                    a.id AS assignment_id, a.status AS assignment_status,
-                   a.assigned_at, a.arrived_at, a.completed_at, a.started_at
+                   a.assigned_at, a.arrived_at, a.completed_at, a.started_at,
+                   NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality,
+                   NULL::float8 AS review_professionalism, NULL::float8 AS review_communication,
+                   NULL::float8 AS review_appearance, NULL::TEXT AS review_text
             FROM booking.guard_requests gr
             INNER JOIN booking.assignments a ON a.request_id = gr.id
             INNER JOIN auth.users u ON u.id = gr.customer_id
             LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
-            WHERE a.guard_id = $1 AND a.status IN ('accepted', 'assigned', 'en_route', 'arrived')
+            WHERE a.guard_id = $1 AND a.status IN ('accepted', 'assigned', 'awaiting_payment', 'en_route', 'arrived', 'pending_completion')
             ORDER BY a.assigned_at DESC
             LIMIT 1
             "#,
@@ -1104,12 +1280,14 @@ pub async fn accept_or_decline_assignment(
     assignment_id: Uuid,
     guard_id: Uuid,
     req: AcceptDeclineDto,
+    redis_conn: &redis::aio::MultiplexedConnection,
 ) -> Result<AssignmentResponse, AppError> {
     let mut tx = db.begin().await?;
 
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
-        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
         FOR UPDATE
@@ -1132,14 +1310,15 @@ pub async fn accept_or_decline_assignment(
         ));
     }
 
-    let new_status = if req.accept { "accepted" } else { "declined" };
+    let new_status = if req.accept { "awaiting_payment" } else { "declined" };
 
     let row = sqlx::query_as::<_, AssignmentRow>(
         r#"
         UPDATE booking.assignments
         SET status = $2::assignment_status
         WHERE id = $1
-        RETURNING id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         "#,
     )
     .bind(assignment_id)
@@ -1159,6 +1338,55 @@ pub async fn accept_or_decline_assignment(
 
     tx.commit().await?;
 
+    // Publish real-time event (fire-and-forget)
+    let new_status_label = if req.accept { "awaiting_payment" } else { "declined" };
+    publish_assignment_event(redis_conn, existing.request_id, assignment_id, new_status_label);
+
+    // Notify customer about guard's decision
+    {
+        let db_clone = db.clone();
+        let req_id = existing.request_id;
+        let accepted = req.accept;
+        let a_id = assignment_id;
+        tokio::spawn(async move {
+            let cid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT customer_id FROM booking.guard_requests WHERE id = $1",
+            )
+            .bind(req_id)
+            .fetch_optional(&db_clone)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(customer_id) = cid {
+                if accepted {
+                    spawn_notification(
+                        db_clone,
+                        customer_id,
+                        "เจ้าหน้าที่ตอบรับแล้ว".to_string(),
+                        "เจ้าหน้าที่ รปภ. ตอบรับงานแล้ว กรุณาชำระเงิน".to_string(),
+                        "guard_assigned",
+                        Some(serde_json::json!({
+                            "request_id": req_id.to_string(),
+                            "assignment_id": a_id.to_string(),
+                        })),
+                    );
+                } else {
+                    spawn_notification(
+                        db_clone,
+                        customer_id,
+                        "เจ้าหน้าที่ปฏิเสธงาน".to_string(),
+                        "เจ้าหน้าที่ รปภ. ปฏิเสธงาน กรุณาเลือกเจ้าหน้าที่ใหม่".to_string(),
+                        "booking_cancelled",
+                        Some(serde_json::json!({
+                            "request_id": req_id.to_string(),
+                        })),
+                    );
+                }
+            }
+        });
+    }
+
     Ok(AssignmentResponse::from(row))
 }
 
@@ -1170,6 +1398,7 @@ pub async fn create_payment(
     db: &PgPool,
     customer_id: Uuid,
     req: CreatePaymentDto,
+    redis_conn: &redis::aio::MultiplexedConnection,
 ) -> Result<PaymentResponse, AppError> {
     let valid_methods = ["promptpay", "credit_card", "debit_card", "mobile_banking"];
     if !valid_methods.contains(&req.payment_method.as_str()) {
@@ -1223,15 +1452,55 @@ pub async fn create_payment(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Update request to in_progress (payment triggers guard to start)
-    sqlx::query(
-        "UPDATE booking.guard_requests SET status = 'in_progress'::request_status, updated_at = NOW() WHERE id = $1",
+    // Update assignment status from awaiting_payment → accepted (guard can now start route)
+    let updated_assignment_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE booking.assignments
+        SET status = 'accepted'::assignment_status
+        WHERE request_id = $1 AND status = 'awaiting_payment'::assignment_status
+        RETURNING id
+        "#,
     )
     .bind(req.request_id)
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
 
     tx.commit().await?;
+
+    // Publish real-time event (fire-and-forget) — guard sees payment confirmed instantly
+    if let Some(aid) = updated_assignment_id {
+        publish_assignment_event(redis_conn, req.request_id, aid, "accepted");
+    }
+
+    // Notify guard: payment received
+    {
+        let db_clone = db.clone();
+        let req_id = req.request_id;
+        let amount = req.amount;
+        tokio::spawn(async move {
+            let gid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT guard_id FROM booking.assignments WHERE request_id = $1 AND status = 'accepted'::assignment_status LIMIT 1",
+            )
+            .bind(req_id)
+            .fetch_optional(&db_clone)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(guard_id) = gid {
+                spawn_notification(
+                    db_clone,
+                    guard_id,
+                    "ชำระเงินสำเร็จ".to_string(),
+                    format!("ลูกค้าชำระเงิน ฿{} แล้ว คุณสามารถเริ่มเดินทางได้", amount),
+                    "booking_created",
+                    Some(serde_json::json!({
+                        "request_id": req_id.to_string(),
+                    })),
+                );
+            }
+        });
+    }
 
     Ok(PaymentResponse::from(payment))
 }
@@ -1249,7 +1518,8 @@ pub async fn start_job(
 
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
-        SELECT id, request_id, guard_id, status, assigned_at, arrived_at, completed_at, started_at
+        SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
         FOR UPDATE
@@ -1323,6 +1593,7 @@ pub async fn start_job(
         remaining_seconds: Some(remaining_seconds),
         assignment_status: AssignmentStatus::Arrived,
         offered_price: info.offered_price.and_then(|d| d.to_f64()),
+        completion_requested_at: None,
     })
 }
 
@@ -1342,6 +1613,7 @@ pub async fn get_active_job(
         address: String,
         booked_hours: Option<i32>,
         started_at: Option<chrono::DateTime<Utc>>,
+        completion_requested_at: Option<chrono::DateTime<Utc>>,
         assignment_status: AssignmentStatus,
         offered_price: Option<rust_decimal::Decimal>,
     }
@@ -1350,12 +1622,12 @@ pub async fn get_active_job(
         r#"
         SELECT a.id AS assignment_id, gr.id AS request_id,
                COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours,
-               a.started_at, a.status AS assignment_status, gr.offered_price
+               a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price
         FROM booking.assignments a
         INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
         INNER JOIN auth.users u ON u.id = gr.customer_id
         LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
-        WHERE a.guard_id = $1 AND a.status IN ('accepted', 'assigned', 'en_route', 'arrived')
+        WHERE a.guard_id = $1 AND a.status IN ('accepted', 'assigned', 'awaiting_payment', 'en_route', 'arrived', 'pending_completion')
         ORDER BY a.assigned_at DESC
         LIMIT 1
         "#,
@@ -1384,9 +1656,320 @@ pub async fn get_active_job(
                 remaining_seconds,
                 assignment_status: r.assignment_status,
                 offered_price: r.offered_price.and_then(|d| d.to_f64()),
+                completion_requested_at: r.completion_requested_at,
             }))
         }
     }
+}
+
+// =============================================================================
+// Get Active Job for Customer (customer views guard's countdown)
+// =============================================================================
+
+pub async fn get_customer_active_job(
+    db: &PgPool,
+    request_id: Uuid,
+    user_id: Uuid,
+    user_role: &str,
+) -> Result<Option<ActiveJobResponse>, AppError> {
+    // Verify ownership (customer owns request, or admin)
+    if user_role != "admin" {
+        let owns = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM booking.guard_requests WHERE id = $1 AND customer_id = $2)",
+        )
+        .bind(request_id)
+        .bind(user_id)
+        .fetch_one(db)
+        .await?;
+
+        if !owns {
+            return Err(AppError::Forbidden(
+                "You can only view active jobs for your own requests".to_string(),
+            ));
+        }
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct ActiveJobRow {
+        assignment_id: Uuid,
+        request_id: Uuid,
+        guard_name: Option<String>,
+        address: String,
+        booked_hours: Option<i32>,
+        started_at: Option<chrono::DateTime<Utc>>,
+        completion_requested_at: Option<chrono::DateTime<Utc>>,
+        assignment_status: AssignmentStatus,
+        offered_price: Option<rust_decimal::Decimal>,
+    }
+
+    let row = sqlx::query_as::<_, ActiveJobRow>(
+        r#"
+        SELECT a.id AS assignment_id, gr.id AS request_id,
+               u.full_name AS guard_name, gr.address, gr.booked_hours,
+               a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price
+        FROM booking.assignments a
+        INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
+        INNER JOIN auth.users u ON u.id = a.guard_id
+        WHERE a.request_id = $1 AND a.status IN ('accepted', 'assigned', 'awaiting_payment', 'en_route', 'arrived', 'pending_completion')
+        ORDER BY a.assigned_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(request_id)
+    .fetch_optional(db)
+    .await?;
+
+    match row {
+        None => Ok(None),
+        Some(r) => {
+            let booked_hours = r.booked_hours.unwrap_or(6);
+            let remaining_seconds = r.started_at.map(|start| {
+                let elapsed = Utc::now().signed_duration_since(start).num_seconds();
+                let total = (booked_hours as i64) * 3600;
+                (total - elapsed).max(0)
+            });
+
+            Ok(Some(ActiveJobResponse {
+                assignment_id: r.assignment_id,
+                request_id: r.request_id,
+                customer_name: r.guard_name.unwrap_or_else(|| "-".to_string()),
+                address: r.address,
+                booked_hours,
+                started_at: r.started_at,
+                remaining_seconds,
+                assignment_status: r.assignment_status,
+                offered_price: r.offered_price.and_then(|d| d.to_f64()),
+                completion_requested_at: r.completion_requested_at,
+            }))
+        }
+    }
+}
+
+// =============================================================================
+// Review Completion (customer approves or holds guard's completion request)
+// =============================================================================
+
+pub async fn review_completion(
+    db: &PgPool,
+    assignment_id: Uuid,
+    user_id: Uuid,
+    role: &str,
+    req: crate::models::ReviewCompletionDto,
+    redis_conn: &redis::aio::MultiplexedConnection,
+) -> Result<AssignmentResponse, AppError> {
+    let mut tx = db.begin().await?;
+
+    let existing = sqlx::query_as::<_, AssignmentRow>(
+        r#"
+        SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
+        FROM booking.assignments
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    if existing.status != AssignmentStatus::PendingCompletion {
+        return Err(AppError::BadRequest(
+            "Assignment is not pending completion review".to_string(),
+        ));
+    }
+
+    // Customer must own the request, or be admin
+    if role != "admin" {
+        let owns = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM booking.guard_requests WHERE id = $1 AND customer_id = $2)",
+        )
+        .bind(existing.request_id)
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if !owns {
+            return Err(AppError::Forbidden(
+                "You can only review completions for your own requests".to_string(),
+            ));
+        }
+    }
+
+    let now = Utc::now();
+
+    if req.approve {
+        // Approve: status → completed
+        let row = sqlx::query_as::<_, AssignmentRow>(
+            r#"
+            UPDATE booking.assignments
+            SET status = 'completed'::assignment_status, completed_at = $2
+            WHERE id = $1
+            RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        // Update request status to completed
+        sqlx::query(
+            "UPDATE booking.guard_requests SET status = 'completed'::request_status, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(existing.request_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        publish_assignment_event(redis_conn, existing.request_id, assignment_id, "completed");
+
+        // Notify guard: job completed/approved
+        spawn_notification(
+            db.clone(),
+            existing.guard_id,
+            "งานเสร็จสมบูรณ์".to_string(),
+            "ลูกค้าอนุมัติการทำงานเสร็จสิ้นแล้ว".to_string(),
+            "booking_completed",
+            Some(serde_json::json!({
+                "request_id": existing.request_id.to_string(),
+                "assignment_id": assignment_id.to_string(),
+            })),
+        );
+
+        Ok(AssignmentResponse::from(row))
+    } else {
+        // Hold: status → arrived (guard resumes working), clear completion_requested_at
+        let row = sqlx::query_as::<_, AssignmentRow>(
+            r#"
+            UPDATE booking.assignments
+            SET status = 'arrived'::assignment_status, completion_requested_at = NULL
+            WHERE id = $1
+            RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
+            "#,
+        )
+        .bind(assignment_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        publish_assignment_event(redis_conn, existing.request_id, assignment_id, "arrived");
+        Ok(AssignmentResponse::from(row))
+    }
+}
+
+// =============================================================================
+// Submit Review (customer rates guard after job completion)
+// =============================================================================
+
+pub async fn submit_review(
+    db: &PgPool,
+    assignment_id: Uuid,
+    customer_id: Uuid,
+    role: &str,
+    req: crate::models::CreateReviewDto,
+) -> Result<crate::models::SubmitReviewResponse, AppError> {
+    use rust_decimal::Decimal;
+
+    // Validate rating ranges (1.0 - 5.0)
+    let one = Decimal::new(1, 0);
+    let five = Decimal::new(5, 0);
+
+    if req.overall_rating < one || req.overall_rating > five {
+        return Err(AppError::BadRequest("overall_rating must be between 1.0 and 5.0".to_string()));
+    }
+    for (name, val) in [
+        ("punctuality", &req.punctuality),
+        ("professionalism", &req.professionalism),
+        ("communication", &req.communication),
+        ("appearance", &req.appearance),
+    ] {
+        if let Some(v) = val {
+            if *v < one || *v > five {
+                return Err(AppError::BadRequest(format!("{name} must be between 1.0 and 5.0")));
+            }
+        }
+    }
+
+    // Fetch assignment — must be completed
+    let assignment = sqlx::query_as::<_, AssignmentRow>(
+        r#"
+        SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
+        FROM booking.assignments
+        WHERE id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    if assignment.status != AssignmentStatus::Completed {
+        return Err(AppError::BadRequest("Can only review completed assignments".to_string()));
+    }
+
+    // Authorization: customer must own the request, or be admin
+    if role != "admin" {
+        let owns = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM booking.guard_requests WHERE id = $1 AND customer_id = $2)",
+        )
+        .bind(assignment.request_id)
+        .bind(customer_id)
+        .fetch_one(db)
+        .await?;
+
+        if !owns {
+            return Err(AppError::Forbidden("You can only review your own requests".to_string()));
+        }
+    }
+
+    // Insert review (UNIQUE constraint on assignment_id prevents duplicates)
+    let review_id = match sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO reviews.guard_reviews (guard_id, customer_id, assignment_id, request_id, overall_rating, punctuality, professionalism, communication, appearance, review_text)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id
+        "#,
+    )
+    .bind(assignment.guard_id)
+    .bind(customer_id)
+    .bind(assignment_id)
+    .bind(assignment.request_id)
+    .bind(req.overall_rating)
+    .bind(req.punctuality)
+    .bind(req.professionalism)
+    .bind(req.communication)
+    .bind(req.appearance)
+    .bind(&req.review_text)
+    .fetch_one(db)
+    .await {
+        Ok(id) => id,
+        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+            return Err(AppError::Conflict("Review already submitted for this assignment".to_string()));
+        }
+        Err(e) => return Err(AppError::from(e)),
+    };
+
+    // Notify guard: new review received
+    spawn_notification(
+        db.clone(),
+        assignment.guard_id,
+        "คะแนนรีวิวใหม่".to_string(),
+        format!("ลูกค้าให้คะแนนคุณ {} ดาว", req.overall_rating),
+        "system",
+        Some(serde_json::json!({
+            "assignment_id": assignment_id.to_string(),
+            "rating": req.overall_rating.to_string(),
+        })),
+    );
+
+    Ok(crate::models::SubmitReviewResponse {
+        id: review_id,
+        message: "Review submitted".to_string(),
+    })
 }
 
 // =============================================================================
@@ -1418,7 +2001,9 @@ pub async fn list_available_guards(
                 ))
             )) AS distance_km,
             gl.recorded_at AS last_seen_at,
-            COALESCE(jc.cnt, 0) AS completed_jobs
+            COALESCE(jc.cnt, 0) AS completed_jobs,
+            rv.avg_rating AS rating,
+            COALESCE(rv.review_count, 0) AS review_count
         FROM auth.users u
         INNER JOIN tracking.guard_locations gl ON gl.guard_id = u.id
         LEFT JOIN auth.guard_profiles gp ON gp.user_id = u.id
@@ -1428,6 +2013,13 @@ pub async fn list_available_guards(
             WHERE a.status = 'completed'
             GROUP BY a.guard_id
         ) jc ON jc.guard_id = u.id
+        LEFT JOIN (
+            SELECT r.guard_id,
+                   AVG(r.overall_rating)::float8 AS avg_rating,
+                   COUNT(*)::int8 AS review_count
+            FROM reviews.guard_reviews r
+            GROUP BY r.guard_id
+        ) rv ON rv.guard_id = u.id
         WHERE u.role = 'guard'
           AND u.is_active = true
           AND u.approval_status = 'approved'

@@ -50,7 +50,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (provider.conversations.isEmpty) {
+    // Only show conversations that have at least one message
+    final activeConversations = provider.conversations.where((conv) {
+      final lastMessage = conv['last_message'] as String?;
+      return lastMessage != null && lastMessage.isNotEmpty;
+    }).toList();
+
+    if (activeConversations.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -74,9 +80,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
       onRefresh: () => context.read<ChatProvider>().fetchConversations(role: widget.actingRole),
       child: ListView.builder(
         padding: EdgeInsets.zero,
-        itemCount: provider.conversations.length,
+        itemCount: activeConversations.length,
         itemBuilder: (context, index) {
-          final conv = provider.conversations[index];
+          final conv = activeConversations[index];
           final unread = conv['unread_count'] as int? ?? 0;
           return _buildChatItem(
             context,

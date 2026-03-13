@@ -59,7 +59,8 @@ services:
       - rust-tracking
       - rust-notification
       - rust-chat
-      - mediasoup-server
+      # mediasoup-server removed — nginx uses variable proxy_pass for /call/
+      # so it starts even when mediasoup is unavailable
     networks:
       - backend
       - frontend
@@ -107,6 +108,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_CACHE_URL=${REDIS_CACHE_URL}
+      - REDIS_PUBSUB_URL=${REDIS_PUBSUB_URL}
       - JWT_SECRET=${JWT_SECRET}
       - SWAGGER_PATH_PREFIX=/booking
       - RUST_LOG=${RUST_LOG:-info}

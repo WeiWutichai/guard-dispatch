@@ -52,6 +52,42 @@ class BookingService {
     return response.data['data'] as Map<String, dynamic>;
   }
 
+  /// PUT /booking/assignments/{id}/review-completion
+  Future<Map<String, dynamic>> reviewCompletion(
+    String assignmentId,
+    bool approve,
+  ) async {
+    final response = await _apiClient.dio.put(
+      '/booking/assignments/$assignmentId/review-completion',
+      data: {'approve': approve},
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// POST /booking/assignments/{id}/review — submit star rating review
+  Future<Map<String, dynamic>> submitReview(
+    String assignmentId, {
+    required double overallRating,
+    double? punctuality,
+    double? professionalism,
+    double? communication,
+    double? appearance,
+    String? reviewText,
+  }) async {
+    final response = await _apiClient.dio.post(
+      '/booking/assignments/$assignmentId/review',
+      data: <String, dynamic>{
+        'overall_rating': overallRating,
+        'punctuality': ?punctuality,
+        'professionalism': ?professionalism,
+        'communication': ?communication,
+        'appearance': ?appearance,
+        if (reviewText != null && reviewText.isNotEmpty) 'review_text': reviewText,
+      },
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
   /// GET /booking/guard/work-history?status=...&limit=...&offset=...
   Future<Map<String, dynamic>> getGuardWorkHistory({
     String? status,
@@ -259,5 +295,33 @@ class BookingService {
   Future<Map<String, dynamic>?> getActiveJob() async {
     final response = await _apiClient.dio.get('/booking/guard/active-job');
     return response.data['data'] as Map<String, dynamic>?;
+  }
+
+  /// GET /booking/requests/{id}/active-job — customer gets guard's active job.
+  Future<Map<String, dynamic>?> getCustomerActiveJob(String requestId) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/booking/requests/$requestId/active-job',
+      );
+      return response.data['data'] as Map<String, dynamic>?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // =========================================================================
+  // Guard Location (customer tracking)
+  // =========================================================================
+
+  /// GET /tracking/locations/{guardId} — get guard's latest location.
+  Future<Map<String, dynamic>?> getGuardLocation(String guardId) async {
+    try {
+      final response = await _apiClient.dio.get(
+        '/tracking/locations/$guardId',
+      );
+      return response.data['data'] as Map<String, dynamic>?;
+    } catch (_) {
+      return null;
+    }
   }
 }

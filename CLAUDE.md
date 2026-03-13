@@ -103,7 +103,8 @@ PostgreSQL: guard_dispatch_db
 ├── schema: auth         (users, sessions, roles, otp_codes, guard_profiles, customer_profiles)
 ├── schema: booking      (requests, assignments, payments, service_rates)
 ├── schema: tracking     (locations, history)
-├── schema: notification (logs, templates)
+├── schema: notification (logs, fcm_tokens)
+├── schema: reviews      (guard_reviews)
 ├── schema: chat         (conversations, messages, read_receipts, attachments)
 └── schema: audit        (logs ทุก action)
 ```
@@ -211,6 +212,55 @@ CREATE INDEX idx_service_rates_active ON booking.service_rates(is_active);
 > **Soft delete:** `is_active = false` instead of actual deletion. All public queries filter `WHERE is_active = true`.
 > **Price validation:** `min_price <= max_price`, all prices >= 0, name <= 200 chars — enforced in Rust service layer.
 > **Decimal type:** Uses `rust_decimal::Decimal` in Rust — utoipa requires `#[schema(value_type = f64)]` annotation.
+
+### Reviews Table
+```sql
+CREATE TABLE reviews.guard_reviews (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  guard_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  customer_id      UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  assignment_id    UUID NOT NULL REFERENCES booking.assignments(id) ON DELETE CASCADE,
+  request_id       UUID NOT NULL REFERENCES booking.guard_requests(id),
+  overall_rating   DECIMAL(2,1) NOT NULL CHECK (overall_rating >= 1 AND overall_rating <= 5),
+  punctuality      DECIMAL(2,1) CHECK (punctuality >= 1 AND punctuality <= 5),
+  professionalism  DECIMAL(2,1) CHECK (professionalism >= 1 AND professionalism <= 5),
+  communication    DECIMAL(2,1) CHECK (communication >= 1 AND communication <= 5),
+  appearance       DECIMAL(2,1) CHECK (appearance >= 1 AND appearance <= 5),
+  review_text      TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (assignment_id)
+);
+CREATE INDEX idx_guard_reviews_guard_id ON reviews.guard_reviews(guard_id, created_at DESC);
+CREATE INDEX idx_guard_reviews_customer_id ON reviews.guard_reviews(customer_id);
+```
+> **One review per assignment** — UNIQUE constraint on `assignment_id` prevents duplicate reviews.
+> **Category ratings optional** — only `overall_rating` is required; category breakdowns (punctuality, professionalism, communication, appearance) are optional.
+> **Real ratings in guard discovery** — `list_available_guards()` JOINs `reviews.guard_reviews` with `AVG(overall_rating)` and `COUNT(*)` instead of placeholder values.
+
+### Notification Tables
+```sql
+CREATE TABLE notification.notification_logs (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           UUID NOT NULL REFERENCES auth.users(id),
+  title             TEXT NOT NULL,
+  body              TEXT NOT NULL,
+  notification_type notification_type NOT NULL DEFAULT 'system',
+  payload           JSONB,
+  is_read           BOOLEAN NOT NULL DEFAULT false,
+  read_at           TIMESTAMPTZ,
+  sent_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE notification.fcm_tokens (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES auth.users(id),
+  token      TEXT NOT NULL UNIQUE,
+  device_info TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+> **notification_type enum:** `booking_created`, `guard_assigned`, `guard_en_route`, `guard_arrived`, `booking_completed`, `booking_cancelled`, `chat_message`, `system`
+> **Cross-service notification generation:** Booking service INSERTs directly into `notification.notification_logs` using `sqlx::query` (runtime, not compile-time macro) via `spawn_notification()` helper — acceptable tradeoff since notification schema types are defined in notification crate only.
 
 ---
 
@@ -446,12 +496,14 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   │   ├── auth_provider.dart    ← Centralized auth state (Provider)
 │       │   │   ├── booking_provider.dart ← Booking/pricing/guard jobs state (Provider)
 │       │   │   ├── chat_provider.dart    ← Chat conversations + messages state (Provider)
+│       │   │   ├── notification_provider.dart ← Notification list + unread count state (Provider)
 │       │   │   └── tracking_provider.dart ← GPS tracking on/off state (Provider)
 │       │   ├── services/
 │       │   │   ├── api_client.dart      ← Dio HTTP client + JWT interceptor
 │       │   │   ├── auth_service.dart    ← Token storage + login/OTP
 │       │   │   ├── booking_service.dart ← Booking/pricing/guard API calls
 │       │   │   ├── chat_service.dart    ← Chat REST + WebSocket messaging
+│       │   │   ├── notification_service.dart ← Notification REST API client
 │       │   │   ├── pin_storage_service.dart ← PIN hash + FlutterSecureStorage
 │       │   │   ├── tracking_service.dart  ← WebSocket GPS streaming to backend
 │       │   │   └── language_service.dart
@@ -462,6 +514,7 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 │       │   │   ├── pin_login_screen.dart              ← Login ด้วย PIN เดิม (returning approved user)
 │       │   │   ├── customer_registration_screen.dart ← Customer: กรอก address + company
 │       │   │   ├── registration_pending_screen.dart  ← รอ Admin อนุมัติ (no tokens)
+│       │   │   ├── notification_screen.dart           ← Notifications list (real API data)
 │       │   │   ├── chat_list_screen.dart             ← Chat conversation list (role-aware)
 │       │   │   ├── chat_screen.dart                  ← Real-time chat (WebSocket + REST)
 │       │   │   ├── guard/active_job_screen.dart      ← Guard active job with countdown
@@ -745,6 +798,34 @@ RegistrationPendingScreen
 - `GET /guard/work-history` → `handlers::guard_work_history` (guard JWT) — query params: `status`, `limit`, `offset`
 - `GET /guard/ratings` → `handlers::guard_ratings` (guard JWT)
 
+**Booking Service — Review & Completion Endpoints (main.rs):**
+- `PUT /assignments/{id}/review-completion` → `handlers::review_completion` (JWT) — customer approves/rejects guard's pending_completion. Body: `{ action: "approve" | "reject" }`. Approve → status=`completed`, triggers "งานเสร็จสมบูรณ์" notification to guard. Reject → status=`accepted` (back to active).
+- `POST /assignments/{id}/review` → `handlers::submit_review` (JWT) — customer submits star rating after job completion. Body: `{ overall_rating, punctuality?, professionalism?, communication?, appearance?, review_text? }`. INSERTs into `reviews.guard_reviews`. Triggers "คะแนนรีวิวใหม่" notification to guard.
+
+**Booking Service — Cross-Service Notification Generation:**
+- `spawn_notification(db, user_id, title, body, notification_type, payload)` — fire-and-forget helper using `tokio::spawn`. INSERTs directly into `notification.notification_logs` table (shared PostgreSQL). Uses `sqlx::query` (runtime) since notification schema types aren't in booking crate.
+- **9 notification trigger points:**
+  - `create_request()` → customer: "การจองสำเร็จ" (`booking_created`)
+  - `assign_guard()` → guard: "งานใหม่ที่ได้รับ" (`guard_assigned`)
+  - `accept_or_decline()` accept → customer: "เจ้าหน้าที่ตอบรับแล้ว" (`guard_assigned`)
+  - `accept_or_decline()` decline → customer: "เจ้าหน้าที่ปฏิเสธงาน" (`booking_cancelled`)
+  - `create_payment()` → guard: "ชำระเงินสำเร็จ" (`booking_created`)
+  - `update_assignment_status()` en_route → customer: "เจ้าหน้าที่กำลังเดินทาง" (`guard_en_route`)
+  - `update_assignment_status()` arrived → customer: "เจ้าหน้าที่ถึงแล้ว" (`guard_arrived`)
+  - `review_completion()` approve → guard: "งานเสร็จสมบูรณ์" (`booking_completed`)
+  - `submit_review()` → guard: "คะแนนรีวิวใหม่" (`system`)
+- Customer ID lookups for guard-triggered events use lightweight `query_scalar` inside the spawned task
+
+**Notification Service Endpoints (main.rs, port 3004):**
+- `POST /tokens` → `handlers::register_token` (JWT) — register FCM device token
+- `DELETE /tokens` → `handlers::unregister_token` (JWT) — unregister FCM token
+- `GET /notifications` → `handlers::list_notifications` (JWT) — list user's notifications. Query: `?unread_only=false&limit=20&offset=0`. Returns `Vec<NotificationLogResponse>`.
+- `GET /notifications/unread-count` → `handlers::unread_count` (JWT) — returns `UnreadCountResponse { count: i64 }` for badge display
+- `PUT /notifications/read-all` → `handlers::mark_all_as_read` (JWT) — marks all user's unread notifications as read. Returns `UnreadCountResponse { count: i64 }` (rows affected).
+- `PUT /notifications/{id}/read` → `handlers::mark_as_read` (JWT) — mark single notification as read
+- `POST /notifications/send` → `handlers::send_notification` (admin JWT) — send notification (admin tool)
+> **Route order:** `unread-count` and `read-all` routes registered BEFORE `{id}/read` to prevent Axum matching `unread-count` as `{id}`.
+
 **Chat Service Endpoints (main.rs, port 3006):**
 - `GET /ws/chat` → `handlers::ws_handler` (JWT via WS upgrade headers) — WebSocket for real-time messaging. Bearer token in `Authorization` header. Incoming: `IncomingChatMessage { conversation_id, content, message_type, sender_role? }`. Outgoing: `OutgoingChatMessage { id, conversation_id, sender_id, sender_role?, content, message_type, created_at }`. Redis PubSub for cross-instance broadcast.
 - `POST /conversations` → `handlers::create_conversation` (JWT) — create conversation. Body: `{ request_id, participant_ids: [uuid] }`. Links to `booking.guard_requests` via `request_id`.
@@ -795,12 +876,14 @@ RegistrationPendingScreen
 - `BookingProvider` (`booking_provider.dart`): `ChangeNotifier` for booking/guard state
   - Guard: `fetchDashboard()`, `fetchJobs()`, `fetchEarnings()`, `updateAssignmentStatus()`, `acceptDeclineAssignment(assignmentId, action)`, `startJob(assignmentId)`, `fetchActiveJob()`, `fetchWorkHistory()`, `fetchRatings()`
   - Customer: `fetchMyRequests()`, `createRequest()`, `cancelRequest()`, `fetchAvailableGuards(lat, lng)`, `assignGuardToRequest(requestId, guardId)`, `createPayment(requestId, amount, method)`
+  - Review: `reviewCompletion(assignmentId, action)`, `submitReview(assignmentId, {overallRating, punctuality?, professionalism?, communication?, appearance?, reviewText?})`
   - Pricing: `fetchServiceRates()` — uses separate `_isLoadingRates` flag (not shared `_isLoading`)
   - State: `serviceRates` (list), `myRequests` (list), `availableGuards` (list), `dashboard`, `currentJobs`, `completedJobs`, `earnings`, `workHistory`, `ratings`, `activeJob`
   - `_isLoadingGuards`: separate flag for available guards loading (not shared with `_isLoading` or `_isLoadingRates`)
 - `BookingService` (`booking_service.dart`): Dio-based HTTP client for booking API
   - Guard: `getGuardDashboard()`, `getGuardJobs()`, `getGuardEarnings()`, `updateAssignmentStatus()`, `acceptDeclineAssignment(assignmentId, action)`, `startJob(assignmentId)`, `getActiveJob()`, `getGuardWorkHistory()`, `getGuardRatings()`
   - Customer: `createRequest()`, `listMyRequests()`, `getRequest()`, `cancelRequest()`, `getAssignments()`, `listAvailableGuards({lat, lng, radiusKm, limit})`, `assignGuardToRequest(requestId, guardId)`, `createPayment({requestId, amount, paymentMethod})`
+  - Review: `reviewCompletion(assignmentId, action)` → `PUT /booking/assignments/$id/review-completion`, `submitReview(assignmentId, body)` → `POST /booking/assignments/$id/review`
   - Pricing: `listServiceRates()` → `GET /booking/pricing/services` — public, returns `List<Map<String, dynamic>>`
 - `main.dart`: `ChangeNotifierProvider(create: (_) => BookingProvider(BookingService(apiClient)))` registered in `MultiProvider`
 
@@ -836,6 +919,33 @@ RegistrationPendingScreen
   - Auto-scrolls on new messages via `ScrollController`
   - `dispose`: disconnects WebSocket
 - `main.dart`: `ChangeNotifierProvider(create: (_) => ChatProvider(ChatService(apiClient)))` registered in `MultiProvider`
+
+**Notifications (Mobile → Backend):**
+- `NotificationService` (`notification_service.dart`): REST client for notification API
+  - `listNotifications({unreadOnly, limit, offset})` → `GET /notification/notifications?unread_only=...&limit=...&offset=...` — returns `List<Map<String, dynamic>>`
+  - `getUnreadCount()` → `GET /notification/notifications/unread-count` — returns `int` (count from response)
+  - `markAsRead(notificationId)` → `PUT /notification/notifications/$id/read`
+  - `markAllAsRead()` → `PUT /notification/notifications/read-all`
+- `NotificationProvider` (`notification_provider.dart`): `ChangeNotifier` for notification state
+  - State: `notifications` (list), `unreadCount` (int), `isLoading`, `error`
+  - `fetchNotifications({unreadOnly})` → loads full notification list, updates `unreadCount` from data
+  - `fetchUnreadCount()` → lightweight count-only fetch for badge display
+  - `markAsRead(id)` → optimistic local update (set `is_read: true`, decrement count), then API call
+  - `markAllAsRead()` → sets all local notifications to read, zeros count, then API call
+- `NotificationScreen` (`notification_screen.dart`): StatefulWidget with real API data
+  - `initState` → `fetchNotifications()`
+  - `RefreshIndicator` for pull-to-refresh
+  - `_getNotificationStyle(type)` maps `notification_type` → icon/color: `booking_created`→green check, `guard_assigned`→blue work, `guard_en_route`→blue car, `guard_arrived`→green pin, `booking_completed`→green verified, `booking_cancelled`→red cancel, `chat_message`→blue chat, `system`→gray info
+  - `_formatRelativeTime(sentAt, isThai)` — relative time: "เมื่อสักครู่", "5 นาทีที่แล้ว", "1 ชั่วโมงที่แล้ว", "3 วันที่แล้ว", "2 สัปดาห์ที่แล้ว"
+  - Tap unread → `markAsRead(id)`, AppBar action "อ่านทั้งหมด" → `markAllAsRead()` (shown only when `unreadCount > 0`)
+  - Empty state: bell-off icon + "ไม่มีการแจ้งเตือน" / "No notifications"
+  - Constructor: `NotificationScreen({bool isGuard = false})` — for future role-specific behavior
+- **Bell icon unread badge** — 3 screens show notification bell with red unread count badge:
+  - `GuardHomeTab`: `_buildNotificationBell()` → `Stack` + `Positioned` red circle with count, `fetchUnreadCount()` in `initState`, refreshes on return from `NotificationScreen(isGuard: true)`
+  - `ServiceSelectionScreen` (hirer): same pattern, navigates to `NotificationScreen(isGuard: false)`
+  - `DashboardScreen`: `Consumer<NotificationProvider>` wraps bell icon for badge
+- `main.dart`: `ChangeNotifierProxyProvider<AuthProvider, NotificationProvider>` registered in `MultiProvider` — recreates with `NotificationService(auth.apiClient)` when auth changes
+- i18n: `NotificationStrings` in `app_strings.dart` — `appBarTitle`, `readAll`, `emptyTitle`, `emptySubtitle`, `justNow`, `minutesAgo`, `hoursAgo`, `daysAgo`, `weeksAgo`, `loadError`
 
 **GPS Tracking (Mobile → Backend):**
 - **TrackingService** (`tracking_service.dart`): WebSocket + GPS streaming
@@ -1126,6 +1236,12 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามใช้ `auth.role != 'customer'` เป็น gate ของ `HirerDashboardScreen` — ต้องใช้ `auth.customerApprovalStatus != 'approved'` เพราะ guard ที่เพิ่ม customer profile ยังมี `role='guard'` ใน `auth.users`
 - ❌ ห้ามใช้ `authApi.listUsers({ role: 'customer' })` สำหรับหน้า customers — ต้องใช้ `authApi.listCustomerApplicants({ approval_status: 'approved' })` เพราะ guard ที่เพิ่ม customer profile ไม่มี `role='customer'` ใน `auth.users`
 - ❌ ห้ามใช้ `authApi.updateApprovalStatus()` สำหรับ customer applicants — ต้องใช้ `authApi.updateCustomerApproval()` ซึ่ง update `customer_profiles.approval_status` (ไม่ใช่ `users.approval_status`)
+- ❌ ห้ามใช้ `sqlx::query!` (compile-time macro) ใน `spawn_notification()` ของ booking service — ต้องใช้ `sqlx::query` (runtime) เพราะ notification schema types ไม่ได้อยู่ใน booking crate
+- ❌ ห้าม block response path ด้วย notification INSERT — ต้องใช้ `tokio::spawn` (fire-and-forget) เสมอสำหรับ `spawn_notification()`
+- ❌ ห้ามลงทะเบียน notification routes `{id}/read` ก่อน `unread-count` / `read-all` — Axum จะ match `unread-count` เป็น `{id}` ถ้าลำดับผิด
+- ❌ ห้าม `review_completion()` สำเร็จโดยไม่ส่ง notification ให้ guard — approve ต้อง trigger "งานเสร็จสมบูรณ์" notification
+- ❌ ห้าม `submit_review()` สำเร็จโดยไม่ส่ง notification ให้ guard — ต้อง trigger "คะแนนรีวิวใหม่" notification
+- ❌ ห้ามใช้ placeholder ratings ใน `list_available_guards()` — ต้อง JOIN `reviews.guard_reviews` ด้วย `AVG(overall_rating)` + `COUNT(*)` สำหรับ real ratings
 
 ### Web Admin (Next.js)
 - ❌ ห้าม hardcode ข้อความภาษาในหน้า — ต้องใช้ `t.xxx` จาก `useLanguage()` เสมอ
@@ -1172,3 +1288,6 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม determine message alignment ด้วย `sender_id == userId` — ต้องใช้ `sender_role == actingRole` เพราะ same user สามารถส่งข้อความเป็นทั้ง guard และ customer ในคนละ conversation
 - ❌ ห้ามส่งข้อความผ่าน chat WebSocket โดยไม่มี `sender_role` — ต้องส่ง `sender_role` (`'guard'` / `'customer'`) เสมอเพื่อให้ role-based alignment ทำงานถูกต้อง
 - ❌ ห้าม `ChatListScreen` / `ChatScreen` ไม่รับ `actingRole` param — ต้องส่ง `actingRole` จาก dashboard ที่เรียก (guard dashboard → `'guard'`, hirer dashboard → `'customer'`) เพื่อให้ name resolution, message alignment, และ unread count ทำงานถูกต้อง
+- ❌ ห้ามใช้ mock/hardcoded data ใน `NotificationScreen` — ต้องใช้ `NotificationProvider` ที่ fetch จาก API จริง
+- ❌ ห้ามแสดง bell icon บน dashboard โดยไม่มี unread badge — ต้อง `fetchUnreadCount()` ใน `initState` + แสดง red badge ด้วย `Stack` + `Positioned` เมื่อ `unreadCount > 0`
+- ❌ ห้ามใช้ `ChangeNotifierProvider` สำหรับ `NotificationProvider` — ต้องใช้ `ChangeNotifierProxyProvider<AuthProvider, NotificationProvider>` เพื่อ recreate เมื่อ auth เปลี่ยน (token ใหม่)

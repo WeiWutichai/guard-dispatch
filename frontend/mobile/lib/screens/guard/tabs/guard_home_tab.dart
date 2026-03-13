@@ -4,10 +4,13 @@ import 'package:provider/provider.dart';
 import '../../../theme/colors.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/booking_provider.dart';
+import '../../../providers/notification_provider.dart';
 import '../../../providers/tracking_provider.dart';
 import '../../../services/language_service.dart';
 import '../../../l10n/app_strings.dart';
+import '../../notification_screen.dart';
 import '../../role_selection_screen.dart';
+import '../active_job_screen.dart';
 
 class GuardHomeTab extends StatefulWidget {
   final void Function(int)? onSwitchTab;
@@ -24,6 +27,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<BookingProvider>().fetchDashboard();
+      context.read<NotificationProvider>().fetchUnreadCount();
     });
   }
 
@@ -53,7 +57,9 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _buildStatusToggle(strings),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 16),
+                      _buildActiveJobBanner(isThai),
+                      const SizedBox(height: 16),
                       _buildStatsGrid(strings),
                       const SizedBox(height: 24),
                       _buildAlertCard(strings),
@@ -62,6 +68,53 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotificationBell() {
+    final unreadCount = context.watch<NotificationProvider>().unreadCount;
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const NotificationScreen(isGuard: true),
+          ),
+        );
+        if (mounted) {
+          context.read<NotificationProvider>().fetchUnreadCount();
+        }
+      },
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            const Center(
+              child: Icon(Icons.notifications_none_rounded, color: Colors.white, size: 26),
+            ),
+            if (unreadCount > 0)
+              Positioned(
+                right: 2,
+                top: 2,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  child: Text(
+                    unreadCount > 99 ? '99+' : '$unreadCount',
+                    style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -121,11 +174,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
               ],
             ),
           ),
-          IconButton(
-            onPressed: () {},
-            icon: const Icon(Icons.notifications_none_rounded,
-                color: Colors.white),
-          ),
+          _buildNotificationBell(),
         ],
       ),
     );
@@ -224,6 +273,110 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildActiveJobBanner(bool isThai) {
+    final dashboard = context.watch<BookingProvider>().dashboard;
+    final activeJob = dashboard?['active_job'] as Map<String, dynamic>?;
+
+    // Only show if there's an active job with started_at (guard started working)
+    if (activeJob == null || activeJob['started_at'] == null) {
+      return const SizedBox.shrink();
+    }
+
+    final customerName = activeJob['customer_name'] as String? ?? '-';
+    final assignmentId = activeJob['assignment_id'] as String? ?? '';
+
+    return GestureDetector(
+      onTap: () async {
+        final result = await context
+            .read<BookingProvider>()
+            .fetchActiveJobData();
+        if (!mounted || result == null) return;
+
+        final remaining =
+            (result['remaining_seconds'] as num?)?.toInt() ?? 0;
+        final bookedHours =
+            (result['booked_hours'] as num?)?.toInt() ?? 6;
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ActiveJobScreen(
+              assignmentId: assignmentId,
+              customerName: result['customer_name'] as String?,
+              address: result['address'] as String?,
+              bookedHours: bookedHours,
+              remainingSeconds: remaining,
+            ),
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              AppColors.primary,
+              AppColors.primary.withValues(alpha: 0.85),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.timer_rounded,
+                  color: Colors.white, size: 24),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isThai ? 'กำลังดำเนินงาน' : 'Job In Progress',
+                    style: GoogleFonts.inter(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    customerName,
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: Colors.white.withValues(alpha: 0.9),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                isThai ? 'ดูเวลา' : 'View',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

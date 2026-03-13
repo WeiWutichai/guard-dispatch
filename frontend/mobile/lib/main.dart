@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/booking_provider.dart';
 import 'providers/chat_provider.dart';
+import 'providers/notification_provider.dart';
 import 'providers/tracking_provider.dart';
 import 'services/booking_service.dart';
 import 'services/chat_service.dart';
+import 'services/notification_service.dart';
 import 'services/tracking_service.dart';
 import 'screens/phone_input_screen.dart';
 import 'screens/pin_lock_screen.dart';
@@ -52,6 +54,11 @@ class MyApp extends StatelessWidget {
           create: (_) => ChatProvider(ChatService(AuthProvider().apiClient)),
           update: (_, auth, prev) =>
               prev ?? ChatProvider(ChatService(auth.apiClient)),
+        ),
+        ChangeNotifierProxyProvider<AuthProvider, NotificationProvider>(
+          create: (_) => NotificationProvider(NotificationService(AuthProvider().apiClient)),
+          update: (_, auth, prev) =>
+              prev ?? NotificationProvider(NotificationService(auth.apiClient)),
         ),
         ChangeNotifierProvider(
           create: (_) => TrackingProvider(TrackingService()),

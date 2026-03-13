@@ -70,6 +70,20 @@ class TrackingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Start navigation tracking with an assignment_id.
+  /// Sets the assignment_id on GPS updates and goes online if needed.
+  Future<void> startNavigationTracking(String assignmentId) async {
+    _service.setAssignmentId(assignmentId);
+    if (!_isOnline) {
+      await goOnline();
+    }
+  }
+
+  /// Clear assignment tracking (back to general GPS).
+  void clearAssignment() {
+    _service.setAssignmentId(null);
+  }
+
   Future<void> toggle() async {
     if (_isOnline) {
       await goOffline();

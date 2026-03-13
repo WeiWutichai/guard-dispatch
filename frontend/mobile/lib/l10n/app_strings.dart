@@ -1334,69 +1334,29 @@ class ContactSupportStrings {
 // ──────────────────────────────────────────────
 class NotificationStrings {
   final String appBarTitle;
-
-  // Guard Notifications
-  final String guardNewJobTitle;
-  final String guardNewJobMsg;
-  final String guardNewJobTime;
-  final String guardPaymentTitle;
-  final String guardPaymentMsg;
-  final String guardPaymentTime;
-  final String guardReviewTitle;
-  final String guardReviewMsg;
-  final String guardReviewTime;
-
-  // Hirer Notifications
-  final String hirerBookingTitle;
-  final String hirerBookingMsg;
-  final String hirerBookingTime;
-  final String hirerMessageTitle;
-  final String hirerMessageMsg;
-  final String hirerMessageTime;
-  final String hirerPaymentTitle;
-  final String hirerPaymentMsg;
-  final String hirerPaymentTime;
+  final String readAll;
+  final String emptyTitle;
+  final String emptySubtitle;
+  final String justNow;
+  final String minutesAgo;
+  final String hoursAgo;
+  final String daysAgo;
+  final String weeksAgo;
+  final String loadError;
 
   NotificationStrings({required bool isThai})
     : appBarTitle = isThai ? 'การแจ้งเตือน' : 'Notifications',
-
-      // Guard
-      guardNewJobTitle = isThai ? 'งานใหม่ที่ได้รับ' : 'New Job Assigned',
-      guardNewJobMsg = isThai
-          ? 'คุณได้รับมอบหมายงานใหม่ที่ หมู่บ้านสุขุมวิท 24'
-          : 'You have been assigned a new job at Sukhumvit 24.',
-      guardNewJobTime = isThai ? '2 นาทีที่แล้ว' : '2m ago',
-
-      guardPaymentTitle = isThai ? 'รับชำระเงินแล้ว' : 'Payment Received',
-      guardPaymentMsg = isThai
-          ? 'ยอดเงิน ฿800 จากงานล่าสุดเข้าสู่กระเป๋าเงินของคุณแล้ว'
-          : '฿800 from your last job has been added to your wallet.',
-      guardPaymentTime = isThai ? '1 ชั่วโมงที่แล้ว' : '1h ago',
-
-      guardReviewTitle = isThai ? 'คะแนนรีวิวใหม่' : 'New Review',
-      guardReviewMsg = isThai
-          ? 'ลูกค้าให้คะแนนคุณ 5 ดาว! ดูสิ่งที่เขาพูดถึง'
-          : 'A customer rated you 5 stars! See what they said.',
-      guardReviewTime = isThai ? '5 ชั่วโมงที่แล้ว' : '5h ago',
-
-      // Hirer
-      hirerBookingTitle = isThai ? 'การจองสำเร็จ' : 'Booking Successful',
-      hirerBookingMsg = isThai
-          ? 'คุณได้ทำการจองเจ้าหน้าที่รักษาความปลอดภัยเรียบร้อยแล้ว'
-          : 'You have successfully booked a security guard.',
-      hirerBookingTime = isThai ? '5 นาทีที่แล้ว' : '5m ago',
-
-      hirerMessageTitle = isThai ? 'ข้อความใหม่' : 'New Message',
-      hirerMessageMsg = isThai
-          ? 'เจ้าหน้าที่สมชาย ส่งข้อความหาคุณ'
-          : 'Guard Somchai sent you a message.',
-      hirerMessageTime = isThai ? '1 ชั่วโมงที่แล้ว' : '1h ago',
-
-      hirerPaymentTitle = isThai ? 'ชำระเงินสำเร็จ' : 'Payment Completed',
-      hirerPaymentMsg = isThai
-          ? 'ระบบได้รับยอดชำระเงิน ฿1,200 เรียบร้อยแล้ว'
-          : 'Payment of ฿1,200 has been received.',
-      hirerPaymentTime = isThai ? '2 ชั่วโมงที่แล้ว' : '2h ago';
+      readAll = isThai ? 'อ่านทั้งหมด' : 'Read all',
+      emptyTitle = isThai ? 'ไม่มีการแจ้งเตือน' : 'No notifications',
+      emptySubtitle = isThai
+          ? 'เมื่อมีการแจ้งเตือนใหม่จะแสดงที่นี่'
+          : 'New notifications will appear here',
+      justNow = isThai ? 'เมื่อสักครู่' : 'Just now',
+      minutesAgo = isThai ? 'นาทีที่แล้ว' : 'm ago',
+      hoursAgo = isThai ? 'ชั่วโมงที่แล้ว' : 'h ago',
+      daysAgo = isThai ? 'วันที่แล้ว' : 'd ago',
+      weeksAgo = isThai ? 'สัปดาห์ที่แล้ว' : 'w ago',
+      loadError = isThai ? 'ไม่สามารถโหลดการแจ้งเตือนได้' : 'Failed to load notifications';
 }
 
 // ──────────────────────────────────────────────
@@ -1641,4 +1601,127 @@ class PinLoginStrings {
       pinIncorrect = isThai
           ? 'PIN ไม่ถูกต้อง ลองใหม่อีกครั้ง'
           : 'Incorrect PIN. Try again';
+}
+
+// ──────────────────────────────────────────────
+// GuardNavigationStrings — guard_navigation_screen
+// ──────────────────────────────────────────────
+class GuardNavigationStrings {
+  final String title;
+  final String subtitle;
+  final String arrived;
+
+  GuardNavigationStrings({required bool isThai})
+    : title = isThai ? 'กำลังเดินทาง' : 'En Route',
+      subtitle = isThai ? 'นำทางไปยังจุดหมาย' : 'Navigating to destination',
+      arrived = isThai ? 'ถึงแล้ว' : 'Arrived';
+}
+
+// ──────────────────────────────────────────────
+// CustomerTrackingStrings — customer_tracking_screen
+// ──────────────────────────────────────────────
+class CustomerTrackingStrings {
+  final String title;
+  final String guardEnRoute;
+  final String guardArrived;
+  final String hasArrived;
+  final String waitingForLocation;
+  final String ok;
+  final String trackGuard;
+
+  CustomerTrackingStrings({required bool isThai})
+    : title = isThai ? 'ติดตามเจ้าหน้าที่' : 'Track Guard',
+      guardEnRoute = isThai ? 'กำลังเดินทางมาหาคุณ' : 'On the way to you',
+      guardArrived = isThai ? 'เจ้าหน้าที่ถึงแล้ว' : 'Guard Arrived',
+      hasArrived = isThai ? 'ถึงจุดหมายของคุณแล้ว' : 'has arrived at your location',
+      waitingForLocation = isThai ? 'กำลังรอตำแหน่งเจ้าหน้าที่...' : 'Waiting for guard location...',
+      ok = isThai ? 'ตกลง' : 'OK',
+      trackGuard = isThai ? 'ติดตามเจ้าหน้าที่' : 'Track Guard';
+}
+
+// ──────────────────────────────────────────────
+// CustomerActiveJobStrings — customer_active_job_screen
+// ──────────────────────────────────────────────
+class CustomerActiveJobStrings {
+  final String title;
+  final String subtitle;
+  final String remaining;
+  final String guard;
+  final String location;
+  final String bookedHours;
+  final String hours;
+  final String minutes;
+  final String guardWorking;
+  final String jobCompleted;
+  final String jobCompletedMsg;
+  final String backToHome;
+  final String timeUp;
+  final String timeUpMsg;
+  final String reviewTitle;
+  final String reviewSubtitle;
+  final String startTime;
+  final String endTime;
+  final String workedDuration;
+  final String bookedDuration;
+  final String approveCompletion;
+  final String hold;
+  final String pendingReview;
+
+  CustomerActiveJobStrings({required bool isThai})
+    : title = isThai ? 'เจ้าหน้าที่กำลังปฏิบัติงาน' : 'Guard On Duty',
+      subtitle = isThai ? 'นับถอยหลังเวลาทำงาน' : 'Job countdown timer',
+      remaining = isThai ? 'เวลาที่เหลือ' : 'Remaining',
+      guard = isThai ? 'เจ้าหน้าที่' : 'Guard',
+      location = isThai ? 'สถานที่' : 'Location',
+      bookedHours = isThai ? 'ระยะเวลาจอง' : 'Booked Duration',
+      hours = isThai ? 'ชั่วโมง' : 'hours',
+      minutes = isThai ? 'นาที' : 'min',
+      guardWorking = isThai ? 'กำลังปฏิบัติหน้าที่' : 'Currently on duty',
+      jobCompleted = isThai ? 'งานเสร็จสิ้น!' : 'Job Completed!',
+      jobCompletedMsg = isThai ? 'เจ้าหน้าที่ปฏิบัติงานเสร็จสิ้นแล้ว' : 'The guard has completed the job',
+      backToHome = isThai ? 'กลับหน้าหลัก' : 'Back to Home',
+      timeUp = isThai ? 'หมดเวลาแล้ว' : 'Time\'s Up',
+      timeUpMsg = isThai ? 'ระยะเวลาที่จองหมดแล้ว รอเจ้าหน้าที่จบงาน' : 'Booked duration ended. Waiting for guard to complete.',
+      reviewTitle = isThai ? 'ตรวจสอบปิดงาน' : 'Review Completion',
+      reviewSubtitle = isThai ? 'กรุณาตรวจสอบข้อมูลก่อนอนุมัติ' : 'Please review details before approving',
+      startTime = isThai ? 'เวลาเริ่มงาน' : 'Start Time',
+      endTime = isThai ? 'เวลาสิ้นสุด' : 'End Time',
+      workedDuration = isThai ? 'ระยะเวลาทำงาน' : 'Worked Duration',
+      bookedDuration = isThai ? 'ระยะเวลาจอง' : 'Booked Duration',
+      approveCompletion = isThai ? 'อนุมัติปิดงาน' : 'Approve Completion',
+      hold = 'Hold',
+      pendingReview = isThai ? 'เจ้าหน้าที่ขอปิดงาน รอตรวจสอบ' : 'Guard requested completion';
+}
+
+class ReviewRatingStrings {
+  final String title;
+  final String subtitle;
+  final String overallRating;
+  final String punctuality;
+  final String professionalism;
+  final String communication;
+  final String appearance;
+  final String reviewPlaceholder;
+  final String submitReview;
+  final String skip;
+  final String thankYou;
+  final String reviewSubmitted;
+  final String reviewSubmittedMsg;
+  final String guard;
+
+  ReviewRatingStrings({required bool isThai})
+    : title = isThai ? 'ให้คะแนนเจ้าหน้าที่' : 'Rate Guard',
+      subtitle = isThai ? 'กรุณาให้คะแนนการบริการ' : 'Please rate the service',
+      overallRating = isThai ? 'คะแนนรวม' : 'Overall Rating',
+      punctuality = isThai ? 'ตรงต่อเวลา' : 'Punctuality',
+      professionalism = isThai ? 'ความเป็นมืออาชีพ' : 'Professionalism',
+      communication = isThai ? 'การสื่อสาร' : 'Communication',
+      appearance = isThai ? 'บุคลิกภาพ' : 'Appearance',
+      reviewPlaceholder = isThai ? 'แสดงความคิดเห็น (ไม่บังคับ)' : 'Write a review (optional)',
+      submitReview = isThai ? 'ส่งรีวิว' : 'Submit Review',
+      skip = isThai ? 'ข้าม' : 'Skip',
+      thankYou = isThai ? 'ขอบคุณ!' : 'Thank You!',
+      reviewSubmitted = isThai ? 'ส่งรีวิวเรียบร้อย' : 'Review Submitted',
+      reviewSubmittedMsg = isThai ? 'ขอบคุณสำหรับการให้คะแนน' : 'Thank you for your feedback',
+      guard = isThai ? 'เจ้าหน้าที่' : 'Guard';
 }

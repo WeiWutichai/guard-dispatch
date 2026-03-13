@@ -10,6 +10,7 @@ import 'payment_screen.dart';
 class WaitingForGuardScreen extends StatefulWidget {
   final String requestId;
   final String assignmentId;
+  final String guardId;
   final String guardName;
   final double guardRating;
   final double guardDistance;
@@ -20,11 +21,14 @@ class WaitingForGuardScreen extends StatefulWidget {
   final double tip;
   final int bookedHours;
   final int guardCount;
+  final double customerLat;
+  final double customerLng;
 
   const WaitingForGuardScreen({
     super.key,
     required this.requestId,
     required this.assignmentId,
+    required this.guardId,
     required this.guardName,
     required this.guardRating,
     required this.guardDistance,
@@ -35,6 +39,8 @@ class WaitingForGuardScreen extends StatefulWidget {
     required this.tip,
     required this.bookedHours,
     required this.guardCount,
+    required this.customerLat,
+    required this.customerLng,
   });
 
   @override
@@ -86,6 +92,9 @@ class _WaitingForGuardScreenState extends State<WaitingForGuardScreen>
               bookedHours: widget.bookedHours,
               guardCount: widget.guardCount,
               guardName: widget.guardName,
+              guardId: widget.guardId,
+              customerLat: widget.customerLat,
+              customerLng: widget.customerLng,
             ),
           ),
         );

@@ -1,6 +1,9 @@
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
+use futures_util::StreamExt;
 use std::sync::Arc;
 
 use shared::auth::AuthUser;
@@ -10,9 +13,10 @@ use shared::models::ApiResponse;
 use crate::models::{
     AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse,
     AvailableGuardResponse, AvailableGuardsQuery, CreatePaymentDto, CreateRequestDto,
-    CreateServiceRateDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
-    GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListRequestsQuery,
-    PaymentResponse, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto,
+    CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
+    GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
+    ListRequestsQuery, PaymentResponse, ReviewCompletionDto, ServiceRate,
+    SubmitReviewResponse, UpdateAssignmentStatusDto, UpdateServiceRateDto,
     WorkHistoryResponse,
 };
 use crate::state::AppState;
@@ -166,7 +170,31 @@ pub async fn update_assignment_status(
     Json(req): Json<UpdateAssignmentStatusDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
     let assignment =
-        crate::service::update_assignment_status(&state.db, id, user.user_id, &user.role, req).await?;
+        crate::service::update_assignment_status(&state.db, id, user.user_id, &user.role, req, &state.redis_conn).await?;
+    Ok(Json(ApiResponse::success(assignment)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/assignments/{id}/review-completion",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment UUID")),
+    request_body = ReviewCompletionDto,
+    responses(
+        (status = 200, description = "Completion reviewed", body = AssignmentResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
+pub async fn review_completion(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<ReviewCompletionDto>,
+) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
+    let assignment =
+        crate::service::review_completion(&state.db, id, user.user_id, &user.role, req, &state.redis_conn).await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -201,6 +229,35 @@ pub async fn get_assignments(
 
     let assignments = crate::service::get_assignments(&state.db, id).await?;
     Ok(Json(ApiResponse::success(assignments)))
+}
+
+// =============================================================================
+// Submit Review (customer rates guard after completion)
+// =============================================================================
+
+#[utoipa::path(
+    post,
+    path = "/assignments/{id}/review",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment UUID")),
+    request_body = CreateReviewDto,
+    responses(
+        (status = 200, description = "Review submitted", body = SubmitReviewResponse),
+        (status = 400, description = "Bad request", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 409, description = "Review already exists", body = ErrorBody),
+    ),
+)]
+pub async fn submit_review(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<CreateReviewDto>,
+) -> Result<Json<ApiResponse<SubmitReviewResponse>>, AppError> {
+    let result = crate::service::submit_review(&state.db, id, user.user_id, &user.role, req).await?;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 // =============================================================================
@@ -373,7 +430,7 @@ pub async fn accept_decline_assignment(
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
     let assignment =
-        crate::service::accept_or_decline_assignment(&state.db, id, user.user_id, req).await?;
+        crate::service::accept_or_decline_assignment(&state.db, id, user.user_id, req, &state.redis_conn).await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -397,7 +454,7 @@ pub async fn create_payment(
     user: AuthUser,
     Json(req): Json<CreatePaymentDto>,
 ) -> Result<Json<ApiResponse<PaymentResponse>>, AppError> {
-    let payment = crate::service::create_payment(&state.db, user.user_id, req).await?;
+    let payment = crate::service::create_payment(&state.db, user.user_id, req, &state.redis_conn).await?;
     Ok(Json(ApiResponse::success(payment)))
 }
 
@@ -452,6 +509,32 @@ pub async fn get_active_job(
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
     let job = crate::service::get_active_job(&state.db, user.user_id).await?;
+    Ok(Json(ApiResponse::success(job)))
+}
+
+// =============================================================================
+// Get Active Job for Customer (customer views guard's countdown)
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/requests/{id}/active-job",
+    tag = "Requests",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Request UUID")),
+    responses(
+        (status = 200, description = "Active job info for this request", body = Option<ActiveJobResponse>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Request not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_customer_active_job(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(request_id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<Option<ActiveJobResponse>>>, AppError> {
+    let job = crate::service::get_customer_active_job(&state.db, request_id, user.user_id, &user.role).await?;
     Ok(Json(ApiResponse::success(job)))
 }
 
@@ -596,4 +679,124 @@ pub async fn delete_service_rate(
     }
     crate::service::delete_service_rate(&state.db, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// =============================================================================
+// WebSocket — Real-time assignment status updates
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/ws/assignments",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    responses(
+        (status = 101, description = "WebSocket upgrade for real-time assignment status updates. Send request_id as first text message."),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn ws_assignment_status(
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+    user: AuthUser,
+) -> Result<impl IntoResponse, AppError> {
+    Ok(ws.on_upgrade(move |socket| handle_assignment_ws(socket, state, user)))
+}
+
+async fn handle_assignment_ws(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
+    tracing::info!(
+        "Assignment WS connected: user_id={}, role={}",
+        user.user_id,
+        user.role
+    );
+
+    // Step 1: Client sends request_id as the first message (per CLAUDE.md — no sensitive IDs in URL)
+    let request_id: String = loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(text))) => {
+                let trimmed = text.trim().to_string();
+                if !trimmed.is_empty() {
+                    break trimmed;
+                }
+            }
+            Some(Ok(Message::Close(_))) | None => {
+                tracing::info!("Assignment WS closed before sending request_id");
+                return;
+            }
+            _ => continue,
+        }
+    };
+
+    tracing::info!(
+        "Assignment WS subscribing: request_id={}, user_id={}",
+        request_id,
+        user.user_id
+    );
+
+    // Step 2: Subscribe to Redis channel for this request's assignment updates
+    let channel = format!("assignment_status:{request_id}");
+
+    let mut pubsub = match state.redis_client.get_async_pubsub().await {
+        Ok(ps) => ps,
+        Err(e) => {
+            tracing::error!("Failed to create Redis PubSub connection: {e}");
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"error": "Internal server error"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    if let Err(e) = pubsub.subscribe(&channel).await {
+        tracing::error!("Failed to subscribe to {channel}: {e}");
+        return;
+    }
+
+    // Send ack to confirm subscription
+    let _ = socket
+        .send(Message::Text(
+            serde_json::json!({"type": "subscribed", "request_id": request_id})
+                .to_string()
+                .into(),
+        ))
+        .await;
+
+    // Step 3: Forward Redis messages to WebSocket client
+    let mut msg_stream = pubsub.on_message();
+
+    loop {
+        tokio::select! {
+            // Redis pub/sub message received — forward to client
+            Some(msg) = msg_stream.next() => {
+                let payload: String = match msg.get_payload() {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                if socket.send(Message::Text(payload.into())).await.is_err() {
+                    break; // Client disconnected
+                }
+            }
+            // Client message — handle close/ping
+            Some(client_msg) = socket.recv() => {
+                match client_msg {
+                    Ok(Message::Close(_)) | Err(_) => break,
+                    Ok(Message::Ping(data)) => {
+                        let _ = socket.send(Message::Pong(data)).await;
+                    }
+                    _ => {} // Ignore other messages
+                }
+            }
+            else => break,
+        }
+    }
+
+    tracing::info!(
+        "Assignment WS disconnected: request_id={}, user_id={}",
+        request_id,
+        user.user_id
+    );
 }

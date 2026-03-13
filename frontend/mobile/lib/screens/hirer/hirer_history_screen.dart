@@ -5,6 +5,10 @@ import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
+import 'customer_tracking_screen.dart';
+import 'customer_active_job_screen.dart';
+import 'payment_screen.dart';
+import 'customer_completed_job_screen.dart';
 
 class HirerHistoryScreen extends StatefulWidget {
   const HirerHistoryScreen({super.key});
@@ -172,9 +176,24 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
                     itemCount: requests.length,
                     itemBuilder: (context, index) {
                       final req = requests[index];
+                      final reqStatus = req['status'] as String? ?? '';
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 16),
-                        child: _buildRequestCard(req, isThai, s),
+                        child: GestureDetector(
+                          onTap: reqStatus == 'completed'
+                              ? () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          CustomerCompletedJobScreen(
+                                              request: req),
+                                    ),
+                                  );
+                                }
+                              : null,
+                          child: _buildRequestCard(req, isThai, s),
+                        ),
                       );
                     },
                   ),
@@ -422,6 +441,30 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
             ),
           ],
 
+          // Track guard button for active bookings
+          if (status == 'assigned' || status == 'in_progress') ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _trackGuard(req, isThai),
+                icon: const Icon(Icons.map_rounded, size: 18),
+                label: Text(
+                  isThai ? 'ติดตามเจ้าหน้าที่' : 'Track Guard',
+                  style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ),
+          ],
+
           // Cancel button for pending requests
           if (status == 'pending') ...[
             const SizedBox(height: 12),
@@ -479,6 +522,130 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
       'low' => AppColors.success,
       _ => const Color(0xFFF59E0B),
     };
+  }
+
+  Future<void> _trackGuard(Map<String, dynamic> req, bool isThai) async {
+    final requestId = req['id'] as String;
+    final customerLat = (req['location_lat'] as num?)?.toDouble();
+    final customerLng = (req['location_lng'] as num?)?.toDouble();
+
+    if (customerLat == null || customerLng == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isThai ? 'ไม่พบตำแหน่ง' : 'Location not available'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      final assignments =
+          await context.read<BookingProvider>().getAssignments(requestId);
+      if (!mounted) return;
+
+      // Find the active assignment (awaiting_payment, accepted, en_route, arrived, pending_completion)
+      final active = assignments.where((a) {
+        final s = a['status'] as String?;
+        return s == 'awaiting_payment' || s == 'accepted' || s == 'en_route' || s == 'arrived' || s == 'pending_completion';
+      });
+
+      if (active.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isThai ? 'ยังไม่มีเจ้าหน้าที่ที่สามารถติดตามได้' : 'No guard to track yet',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      final assignment = active.first;
+      final guardId = assignment['guard_id']?.toString() ?? '';
+      final guardName = assignment['guard_name'] as String? ?? '-';
+      final assignmentStatus = assignment['status'] as String?;
+      final startedAt = assignment['started_at'] as String?;
+
+      // If awaiting payment, show payment screen
+      if (assignmentStatus == 'awaiting_payment') {
+        final price = req['offered_price'];
+        final totalAmount = (price is num ? price.toDouble() : double.tryParse(price?.toString() ?? '') ?? 0);
+        final bookedHours = (req['booked_hours'] as num?)?.toInt() ?? 6;
+        final assignmentId = assignment['id']?.toString() ?? '';
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PaymentScreen(
+              requestId: requestId,
+              totalAmount: totalAmount,
+              subtotal: totalAmount,
+              baseFee: 0,
+              tip: 0,
+              bookedHours: bookedHours,
+              guardCount: 1,
+              guardName: guardName,
+              guardId: guardId,
+              customerLat: customerLat,
+              customerLng: customerLng,
+            ),
+          ),
+        );
+        return;
+      }
+
+      // If guard has started working (arrived/pending_completion + started_at set), show countdown
+      if ((assignmentStatus == 'arrived' || assignmentStatus == 'pending_completion') && startedAt != null) {
+        final bookedHours = (req['booked_hours'] as num?)?.toInt() ?? 6;
+        final address = req['address'] as String?;
+
+        // Calculate remaining from startedAt locally (same reference as guard)
+        final startTime = DateTime.parse(startedAt);
+        final elapsed = DateTime.now().toUtc().difference(startTime).inSeconds;
+        final total = bookedHours * 3600;
+        final remainingSeconds = (total - elapsed).clamp(0, total);
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CustomerActiveJobScreen(
+              requestId: requestId,
+              guardName: guardName,
+              address: address,
+              bookedHours: bookedHours,
+              remainingSeconds: remainingSeconds,
+              startedAt: startedAt,
+            ),
+          ),
+        );
+      } else {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CustomerTrackingScreen(
+              requestId: requestId,
+              guardId: guardId,
+              guardName: guardName,
+              customerLat: customerLat,
+              customerLng: customerLng,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    }
   }
 
   Future<void> _cancelRequest(String requestId) async {

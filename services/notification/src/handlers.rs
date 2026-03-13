@@ -8,7 +8,7 @@ use shared::models::ApiResponse;
 
 use crate::models::{
     ListNotificationsQuery, NotificationLogResponse, RegisterTokenRequest,
-    SendNotificationRequest,
+    SendNotificationRequest, UnreadCountResponse,
 };
 use crate::state::AppState;
 
@@ -77,6 +77,42 @@ pub async fn list_notifications(
     let notifications =
         crate::service::list_notifications(&state.db, user.user_id, query).await?;
     Ok(Json(ApiResponse::success(notifications)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/notifications/unread-count",
+    tag = "Notifications",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Unread notification count", body = UnreadCountResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn unread_count(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<UnreadCountResponse>>, AppError> {
+    let count = crate::service::get_unread_count(&state.db, user.user_id).await?;
+    Ok(Json(ApiResponse::success(UnreadCountResponse { count })))
+}
+
+#[utoipa::path(
+    put,
+    path = "/notifications/read-all",
+    tag = "Notifications",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "All notifications marked as read", body = UnreadCountResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn mark_all_as_read(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<UnreadCountResponse>>, AppError> {
+    let count = crate::service::mark_all_as_read(&state.db, user.user_id).await?;
+    Ok(Json(ApiResponse::success(UnreadCountResponse { count })))
 }
 
 #[utoipa::path(

@@ -2,22 +2,33 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../theme/colors.dart';
 import '../../services/language_service.dart';
+import '../../l10n/app_strings.dart';
+import 'customer_tracking_screen.dart';
 
 class PaymentSuccessScreen extends StatelessWidget {
   final String guardName;
   final double totalAmount;
   final int bookedHours;
+  final String requestId;
+  final String guardId;
+  final double customerLat;
+  final double customerLng;
 
   const PaymentSuccessScreen({
     super.key,
     required this.guardName,
     required this.totalAmount,
     required this.bookedHours,
+    required this.requestId,
+    required this.guardId,
+    required this.customerLat,
+    required this.customerLng,
   });
 
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
+    final trackingStrings = CustomerTrackingStrings(isThai: isThai);
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -115,18 +126,56 @@ class PaymentSuccessScreen extends StatelessWidget {
 
               const Spacer(flex: 3),
 
-              // Back to home button
+              // Track Guard button (primary)
               SizedBox(
                 width: double.infinity,
                 height: 54,
-                child: ElevatedButton(
+                child: ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.of(context).popUntil((route) => route.isFirst);
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CustomerTrackingScreen(
+                          requestId: requestId,
+                          guardId: guardId,
+                          guardName: guardName,
+                          customerLat: customerLat,
+                          customerLng: customerLng,
+                        ),
+                      ),
+                    );
                   },
+                  icon: const Icon(Icons.map_rounded, size: 22),
+                  label: Text(
+                    trackingStrings.trackGuard,
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
                     elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Back to home button (secondary)
+              SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: OutlinedButton(
+                  onPressed: () {
+                    Navigator.of(context).popUntil((route) => route.isFirst);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textSecondary,
+                    side: const BorderSide(color: AppColors.border),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),

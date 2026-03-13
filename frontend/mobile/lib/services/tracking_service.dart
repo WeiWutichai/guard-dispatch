@@ -33,6 +33,7 @@ class TrackingService {
   bool _isStopping = false;
   int _retryCount = 0;
   Timer? _reconnectTimer;
+  String? _assignmentId;
 
   // Callbacks
   OnConnected? onConnected;
@@ -42,6 +43,9 @@ class TrackingService {
   OnTrackingError? onError;
 
   bool get isConnected => _isConnected;
+
+  /// Set assignment_id for navigation-linked GPS updates.
+  void setAssignmentId(String? id) => _assignmentId = id;
 
   /// Start GPS tracking: connect WebSocket + stream positions.
   Future<void> start() async {
@@ -80,6 +84,7 @@ class TrackingService {
     _channel = null;
 
     _isConnected = false;
+    _assignmentId = null;
     onDisconnected?.call();
   }
 
@@ -223,7 +228,7 @@ class TrackingService {
       'accuracy': position.accuracy,
       'heading': position.heading,
       'speed': position.speed,
-      'assignment_id': null,
+      'assignment_id': _assignmentId,
     };
 
     try {

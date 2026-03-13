@@ -99,6 +99,7 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
           builder: (_) => WaitingForGuardScreen(
             requestId: widget.requestId!,
             assignmentId: assignmentId,
+            guardId: guard['id']?.toString() ?? '',
             guardName: guard['full_name'] as String? ?? '-',
             guardRating: (guard['rating'] as num?)?.toDouble() ?? 4.5,
             guardDistance: (guard['distance_km'] as num?)?.toDouble() ?? 0,
@@ -109,6 +110,8 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
             tip: widget.tip,
             bookedHours: widget.bookedHours,
             guardCount: widget.guardCount,
+            customerLat: widget.lat,
+            customerLng: widget.lng,
           ),
         ),
       );

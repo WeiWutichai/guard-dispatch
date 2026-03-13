@@ -6,10 +6,11 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
-    // NOTE: Redis cache not yet implemented for booking service.
-    // When adding caching (e.g., for list_requests), store a
-    // `redis::aio::MultiplexedConnection` here per CLAUDE.md pattern.
     pub jwt_config: JwtConfig,
+    /// Redis client for creating per-WS PubSub subscription connections.
+    pub redis_client: redis::Client,
+    /// Multiplexed connection for PUBLISH commands (cheap to clone).
+    pub redis_conn: redis::aio::MultiplexedConnection,
 }
 
 impl HasJwtSecret for AppState {
