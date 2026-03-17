@@ -829,7 +829,7 @@ RegistrationPendingScreen
 **Chat Service Endpoints (main.rs, port 3006):**
 - `GET /ws/chat` → `handlers::ws_handler` (JWT via WS upgrade headers) — WebSocket for real-time messaging. Bearer token in `Authorization` header. Incoming: `IncomingChatMessage { conversation_id, content, message_type, sender_role? }`. Outgoing: `OutgoingChatMessage { id, conversation_id, sender_id, sender_role?, content, message_type, created_at }`. Redis PubSub for cross-instance broadcast.
 - `POST /conversations` → `handlers::create_conversation` (JWT) — create conversation. Body: `{ request_id, participant_ids: [uuid] }`. Links to `booking.guard_requests` via `request_id`.
-- `GET /conversations` → `handlers::list_conversations` (JWT) — list user's conversations. Query: `?role=guard|customer`. Returns enriched conversations with `participant_name`, `participant_avatar`, `last_message`, `last_message_at`, `unread_count`. **Name resolution:** JOINs through `booking.guard_requests` + `booking.assignments` + `auth.users` + `auth.customer_profiles`. Uses `acting_role` param to determine which counterpart name to show (guard sees customer name, customer sees guard name).
+- `GET /conversations` → `handlers::list_conversations` (JWT) — list user's conversations. Query: `?role=guard|customer`. Returns enriched conversations with `participant_name`, `participant_avatar`, `last_message`, `last_message_at`, `unread_count`, `request_status`. **Name resolution:** JOINs through `booking.guard_requests` + `booking.assignments` + `auth.users` + `auth.customer_profiles`. Uses `acting_role` param to determine which counterpart name to show (guard sees customer name, customer sees guard name). `request_status` (from `guard_requests.status`) enables client-side read-only mode for completed/cancelled jobs.
 - `GET /conversations/{id}/messages` → `handlers::list_messages` (JWT) — message history. Query: `?limit=50&offset=0`. Returns newest-first. Includes `sender_role` per message.
 - `PUT /conversations/{id}/read` → `handlers::mark_read` (JWT) — mark conversation as read. Query: `?role=guard|customer`. UPSERTs `chat.read_receipts` with `user_role`.
 - `POST /attachments` → `handlers::upload_attachment` (JWT, multipart) — upload image attachment to MinIO/R2
@@ -866,6 +866,9 @@ RegistrationPendingScreen
   - `HirerProfileScreen`: uses `auth.customerFullName ?? auth.fullName` for customer display name, formatted phone as ID, avatar icon fallback
   - `ServiceSelectionScreen`: loads service rates from API via `BookingProvider.fetchServiceRates()` → dynamic cards with icon selection based on service name keywords. Back button uses `pushAndRemoveUntil` → `RoleSelectionScreen(phone)` (ไม่ใช่ `Navigator.pop()` ซึ่งจะทำให้จอดำ)
   - `BookingScreen`: customer fills booking form → `createRequest()` → extracts `requestId` from response → `Navigator.pushReplacement` to `GuardSearchingScreen(requestId, lat, lng)`
+    - **Location selection:** `_getCurrentLocation()` (GPS) or `_openMapPicker()` (map picker sheet) — both store `_lat`/`_lng` separately and display place name in `_addressController.text`
+    - **Reverse geocoding:** Nominatim `/reverse` API (Thai language) converts coordinates to place name (road/suburb/district). `_setLocationWithGeocode()` shows coordinates immediately, then async reverse geocodes. Address field shows human-readable name (e.g., "ถนนพระราม 1") while `_lat`/`_lng` store actual coordinates for API.
+    - **`_MapPickerSheet`:** modal bottom sheet with flutter_map — search (forward geocode), tap-to-pin with auto reverse geocode, zoom +/- buttons (bottom-right). Returns `({LatLng latLng, String? displayName})` record type. Search results → `_selectedDisplayName` set from display_name; manual tap → reverse geocodes to get name.
   - `GuardSearchingScreen`: accepts `requestId` (String?), `lat` (double), `lng` (double). Flow: 2-second radar animation → `fetchAvailableGuards(lat, lng)` → display guard card list (name, avatar, distance, rating, completed jobs, experience) → customer taps "ยืนยันการจอง" → `assignGuardToRequest(requestId, guardId)` → `Navigator.pushReplacement` to `WaitingForGuardScreen`. Empty state: "ไม่พบเจ้าหน้าที่" + retry button. i18n via `LanguageProvider`.
   - `WaitingForGuardScreen`: shows assignment status (pending → accepted/declined). Polls `getAssignments(requestId)` every 5 seconds. Guard accepted → `PaymentScreen(requestId, guardName, amount)`. Guard declined → shows decline message + retry search. Timer auto-decline after 5 minutes.
   - `PaymentScreen`: simulated payment — amount display, payment method selection (QR/bank transfer/credit card). Confirm → `createPayment(requestId, amount, method)` → `PaymentSuccessScreen`.
@@ -910,14 +913,16 @@ RegistrationPendingScreen
   - Shows unread badge (green pill) per conversation — bold name/message/time when unread
   - Pull-to-refresh, refreshes after returning from `ChatScreen` (updated unread counts)
   - Guard dashboard passes `actingRole: 'guard'`, Hirer dashboard passes `actingRole: 'customer'`
+  - **Read-only mode:** extracts `request_status` from conversation data — if `'completed'` or `'cancelled'`, passes `readOnly: true` to `ChatScreen` (disables messaging + calling)
 - `ChatScreen` (`chat_screen.dart`): real-time conversation
-  - Constructor: `ChatScreen({conversationId, requestId, userName, userRole, actingRole})`
+  - Constructor: `ChatScreen({conversationId, requestId, userName, userRole, actingRole, readOnly = false})`
   - `initState`: fetches messages + connects WebSocket + marks as read
   - Message alignment: `sender_role == actingRole` → right (me), else → left (them) with avatar
   - Sent messages show checkmark (`Icons.done` / `Icons.done_all` for last in group)
   - Send button: passes `senderRole: actingRole` to `sendMessage()`, clears input, scrolls to bottom
   - Auto-scrolls on new messages via `ScrollController`
   - `dispose`: disconnects WebSocket
+  - **Read-only mode (`readOnly: true`):** hides call button from AppBar, replaces message input with lock icon banner ("งานสิ้นสุดแล้ว ไม่สามารถส่งข้อความได้" / "Job ended. Messaging is disabled.") — used when `request_status` is `completed` or `cancelled`
 - `main.dart`: `ChangeNotifierProvider(create: (_) => ChatProvider(ChatService(apiClient)))` registered in `MultiProvider`
 
 **Notifications (Mobile → Backend):**
@@ -1291,3 +1296,6 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามใช้ mock/hardcoded data ใน `NotificationScreen` — ต้องใช้ `NotificationProvider` ที่ fetch จาก API จริง
 - ❌ ห้ามแสดง bell icon บน dashboard โดยไม่มี unread badge — ต้อง `fetchUnreadCount()` ใน `initState` + แสดง red badge ด้วย `Stack` + `Positioned` เมื่อ `unreadCount > 0`
 - ❌ ห้ามใช้ `ChangeNotifierProvider` สำหรับ `NotificationProvider` — ต้องใช้ `ChangeNotifierProxyProvider<AuthProvider, NotificationProvider>` เพื่อ recreate เมื่อ auth เปลี่ยน (token ใหม่)
+- ❌ ห้ามให้ send message หรือ call ใน `ChatScreen` เมื่อ `request_status` เป็น `completed` หรือ `cancelled` — ต้อง pass `readOnly: true` จาก `ChatListScreen` → `ChatScreen` เพื่อ disable input + hide call button
+- ❌ ห้ามแสดงพิกัดดิบ (e.g., "13.756300, 100.501800") ใน booking address field — ต้อง reverse geocode ผ่าน Nominatim แล้วแสดงชื่อสถานที่ (road/suburb/district) แทน; `_lat`/`_lng` เก็บค่าพิกัดจริงแยก
+- ❌ ห้าม `_MapPickerSheet` return แค่ `LatLng` — ต้อง return record type `({LatLng latLng, String? displayName})` เพื่อส่งชื่อสถานที่กลับไปยัง booking screen

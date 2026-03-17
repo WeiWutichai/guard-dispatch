@@ -105,7 +105,8 @@ pub async fn list_conversations(
                       AND rr.user_role = $3),
                    '1970-01-01'::timestamptz
                )
-            ) AS unread_count
+            ) AS unread_count,
+            gr.status::text AS request_status
         FROM chat.conversations c
         INNER JOIN chat.conversation_participants cp ON cp.conversation_id = c.id
         INNER JOIN booking.guard_requests gr ON gr.id = c.request_id

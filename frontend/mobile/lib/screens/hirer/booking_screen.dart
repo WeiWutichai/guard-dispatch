@@ -125,6 +125,56 @@ class _BookingScreenState extends State<BookingScreen> {
 
   double get _total => _subtotal + _baseFee + _tip;
 
+  static final Dio _nominatimDio = Dio(BaseOptions(
+    baseUrl: 'https://nominatim.openstreetmap.org',
+    connectTimeout: const Duration(seconds: 5),
+    receiveTimeout: const Duration(seconds: 5),
+    headers: {'User-Agent': 'SecureGuardMobile/1.0'},
+  ));
+
+  Future<String?> _reverseGeocode(double lat, double lng) async {
+    try {
+      final response = await _nominatimDio.get('/reverse', queryParameters: {
+        'lat': lat,
+        'lon': lng,
+        'format': 'json',
+        'zoom': '16',
+        'accept-language': 'th,en',
+      });
+      final data = response.data is String
+          ? jsonDecode(response.data as String)
+          : response.data;
+      if (data is Map<String, dynamic>) {
+        final addr = data['address'] as Map<String, dynamic>? ?? {};
+        return addr['road'] ??
+            addr['suburb'] ??
+            addr['city_district'] ??
+            addr['subdistrict'] ??
+            addr['town'] ??
+            addr['city'] ??
+            (data['display_name'] as String?)?.split(',').first;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _setLocationWithGeocode(double lat, double lng, {String? displayName}) async {
+    setState(() {
+      _lat = lat;
+      _lng = lng;
+      _addressController.text = displayName ??
+          '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}';
+    });
+    if (displayName == null) {
+      final name = await _reverseGeocode(lat, lng);
+      if (name != null && mounted) {
+        setState(() {
+          _addressController.text = name;
+        });
+      }
+    }
+  }
+
   Future<void> _getCurrentLocation() async {
     try {
       var permission = await Geolocator.checkPermission();
@@ -139,12 +189,7 @@ class _BookingScreenState extends State<BookingScreen> {
         locationSettings:
             const LocationSettings(accuracy: LocationAccuracy.high),
       );
-      setState(() {
-        _lat = position.latitude;
-        _lng = position.longitude;
-        _addressController.text =
-            '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}';
-      });
+      await _setLocationWithGeocode(position.latitude, position.longitude);
       if (mounted) {
         final isThai = LanguageProvider.of(context).isThai;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -173,7 +218,7 @@ class _BookingScreenState extends State<BookingScreen> {
     final initialLat = _lat ?? 13.7563;
     final initialLng = _lng ?? 100.5018;
 
-    final result = await showModalBottomSheet<LatLng>(
+    final result = await showModalBottomSheet<({LatLng latLng, String? displayName})>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -184,20 +229,21 @@ class _BookingScreenState extends State<BookingScreen> {
     );
 
     if (result != null && mounted) {
-      setState(() {
-        _lat = result.latitude;
-        _lng = result.longitude;
-        _addressController.text =
-            '${result.latitude.toStringAsFixed(6)}, ${result.longitude.toStringAsFixed(6)}';
-      });
-      final isThai = LanguageProvider.of(context).isThai;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(isThai ? 'ปักหมุดสำเร็จ' : 'Location pinned'),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
+      await _setLocationWithGeocode(
+        result.latLng.latitude,
+        result.latLng.longitude,
+        displayName: result.displayName,
       );
+      if (mounted) {
+        final isThai = LanguageProvider.of(context).isThai;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isThai ? 'ปักหมุดสำเร็จ' : 'Location pinned'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
     }
   }
 
@@ -1378,6 +1424,7 @@ class _MapPickerSheet extends StatefulWidget {
 
 class _MapPickerSheetState extends State<_MapPickerSheet> {
   late LatLng _pinLocation;
+  String? _selectedDisplayName;
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
@@ -1405,6 +1452,39 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
     _searchController.dispose();
     _searchFocus.dispose();
     super.dispose();
+  }
+
+  bool _isReverseGeocoding = false;
+
+  Future<void> _reverseGeocodePin(double lat, double lng) async {
+    setState(() => _isReverseGeocoding = true);
+    try {
+      final response = await _nominatimDio.get('/reverse', queryParameters: {
+        'lat': lat,
+        'lon': lng,
+        'format': 'json',
+        'zoom': '16',
+        'accept-language': 'th,en',
+      });
+      if (!mounted) return;
+      final data = response.data is String
+          ? jsonDecode(response.data as String)
+          : response.data;
+      if (data is Map<String, dynamic>) {
+        final addr = data['address'] as Map<String, dynamic>? ?? {};
+        final name = addr['road'] ??
+            addr['suburb'] ??
+            addr['city_district'] ??
+            addr['subdistrict'] ??
+            addr['town'] ??
+            addr['city'] ??
+            (data['display_name'] as String?)?.split(',').first;
+        if (name != null && mounted) {
+          setState(() => _selectedDisplayName = name as String);
+        }
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _isReverseGeocoding = false);
   }
 
   void _onSearchChanged(String query) {
@@ -1449,11 +1529,13 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
     final lng = double.tryParse(result['lon']?.toString() ?? '');
     if (lat == null || lng == null) return;
 
+    final displayName = result['display_name'] as String? ?? '';
     final point = LatLng(lat, lng);
     setState(() {
       _pinLocation = point;
+      _selectedDisplayName = displayName.split(',').first.trim();
       _showResults = false;
-      _searchController.text = result['display_name'] ?? '';
+      _searchController.text = displayName;
     });
     _searchFocus.unfocus();
     _mapController.move(point, 16);
@@ -1573,20 +1655,52 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
                 color: AppColors.primary.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.pin_drop_rounded,
-                      size: 16, color: AppColors.primary),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${_pinLocation.latitude.toStringAsFixed(6)}, ${_pinLocation.longitude.toStringAsFixed(6)}',
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.primary,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.pin_drop_rounded,
+                          size: 16, color: AppColors.primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${_pinLocation.latitude.toStringAsFixed(6)}, ${_pinLocation.longitude.toStringAsFixed(6)}',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ],
                   ),
+                  if (_isReverseGeocoding)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.5,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    )
+                  else if (_selectedDisplayName != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        _selectedDisplayName!,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textPrimary,
+                        ),
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1604,9 +1718,11 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
                     onTap: (_, point) {
                       setState(() {
                         _pinLocation = point;
+                        _selectedDisplayName = null;
                         _showResults = false;
                       });
                       _searchFocus.unfocus();
+                      _reverseGeocodePin(point.latitude, point.longitude);
                     },
                   ),
                   children: [
@@ -1630,6 +1746,32 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
                       ],
                     ),
                   ],
+                ),
+                // Zoom controls
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _ZoomButton(
+                        icon: Icons.add,
+                        onTap: () => _mapController.move(
+                          _mapController.camera.center,
+                          _mapController.camera.zoom + 1,
+                        ),
+                        isTop: true,
+                      ),
+                      _ZoomButton(
+                        icon: Icons.remove,
+                        onTap: () => _mapController.move(
+                          _mapController.camera.center,
+                          _mapController.camera.zoom - 1,
+                        ),
+                        isTop: false,
+                      ),
+                    ],
+                  ),
                 ),
                 // Search results dropdown
                 if (_showResults)
@@ -1680,7 +1822,7 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
             child: SafeArea(
               top: false,
               child: ElevatedButton(
-                onPressed: () => Navigator.pop(context, _pinLocation),
+                onPressed: () => Navigator.pop(context, (latLng: _pinLocation, displayName: _selectedDisplayName)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
@@ -1698,6 +1840,47 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ZoomButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool isTop;
+
+  const _ZoomButton({
+    required this.icon,
+    required this.onTap,
+    required this.isTop,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(isTop ? 8 : 0),
+            bottom: Radius.circular(isTop ? 0 : 8),
+          ),
+          border: Border.all(color: AppColors.border, width: 0.5),
+          boxShadow: isTop
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ]
+              : null,
+        ),
+        child: Icon(icon, size: 20, color: AppColors.textPrimary),
       ),
     );
   }

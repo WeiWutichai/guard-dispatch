@@ -82,6 +82,7 @@ pub struct EnrichedConversationResponse {
     pub participant_name: Option<String>,
     pub participant_avatar: Option<String>,
     pub unread_count: Option<i64>,
+    pub request_status: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -137,6 +138,7 @@ pub struct EnrichedConversationRow {
     pub participant_name: Option<String>,
     pub participant_avatar: Option<String>,
     pub unread_count: Option<i64>,
+    pub request_status: Option<String>,
 }
 
 impl From<EnrichedConversationRow> for EnrichedConversationResponse {
@@ -150,6 +152,7 @@ impl From<EnrichedConversationRow> for EnrichedConversationResponse {
             participant_name: row.participant_name,
             participant_avatar: row.participant_avatar,
             unread_count: row.unread_count,
+            request_status: row.request_status,
         }
     }
 }

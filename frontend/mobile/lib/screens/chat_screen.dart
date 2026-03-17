@@ -13,6 +13,7 @@ class ChatScreen extends StatefulWidget {
   final String userName;
   final String userRole;
   final String? actingRole;
+  final bool readOnly;
 
   const ChatScreen({
     super.key,
@@ -21,6 +22,7 @@ class ChatScreen extends StatefulWidget {
     required this.userName,
     required this.userRole,
     this.actingRole,
+    this.readOnly = false,
   });
 
   @override
@@ -143,24 +145,28 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
-          IconButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CallScreen(userName: widget.userName),
-                ),
-              );
-            },
-            icon: const Icon(Icons.call_outlined),
-            color: AppColors.textSecondary,
-          ),
+          if (!widget.readOnly)
+            IconButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CallScreen(userName: widget.userName),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.call_outlined),
+              color: AppColors.textSecondary,
+            ),
         ],
       ),
       body: Column(
         children: [
           Expanded(child: _buildMessageList(chatProvider)),
-          _buildMessageInput(s),
+          if (widget.readOnly)
+            _buildReadOnlyBanner(isThai)
+          else
+            _buildMessageInput(s),
         ],
       ),
     );
@@ -325,6 +331,41 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           if (isMe) const SizedBox(width: 8),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReadOnlyBanner(bool isThai) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        12,
+        16,
+        MediaQuery.of(context).padding.bottom + 12,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F5F5),
+        border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.lock_outline_rounded,
+            size: 16,
+            color: AppColors.textSecondary,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isThai
+                ? 'งานสิ้นสุดแล้ว ไม่สามารถส่งข้อความได้'
+                : 'Job ended. Messaging is disabled.',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              color: AppColors.textSecondary,
+            ),
+          ),
         ],
       ),
     );

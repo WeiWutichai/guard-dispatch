@@ -84,6 +84,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
         itemBuilder: (context, index) {
           final conv = activeConversations[index];
           final unread = conv['unread_count'] as int? ?? 0;
+          final requestStatus = conv['request_status'] as String? ?? '';
+          final isCompleted = requestStatus == 'completed' || requestStatus == 'cancelled';
           return _buildChatItem(
             context,
             conversationId: conv['id'] as String? ?? '',
@@ -93,6 +95,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             avatarUrl: conv['participant_avatar'] as String?,
             unreadCount: unread,
             isThai: isThai,
+            readOnly: isCompleted,
           );
         },
       ),
@@ -184,6 +187,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
     required String? avatarUrl,
     required int unreadCount,
     required bool isThai,
+    bool readOnly = false,
   }) {
     final hasUnread = unreadCount > 0;
     return InkWell(
@@ -199,6 +203,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
               userName: name,
               userRole: isThai ? 'ลูกค้า' : 'Client',
               actingRole: role,
+              readOnly: readOnly,
             ),
           ),
         );
