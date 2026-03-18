@@ -45,6 +45,14 @@ pub struct ListNotificationsQuery {
     pub unread_only: Option<bool>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// Filter by target role (guard/customer) from payload.
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct RoleQuery {
+    /// Filter by target role (guard/customer) from payload.
+    pub role: Option<String>,
 }
 
 // =============================================================================

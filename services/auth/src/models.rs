@@ -338,6 +338,37 @@ pub struct GuardProfileResponse {
     pub passbook_photo_url: Option<String>,
 }
 
+/// Public guard profile — documents only, no bank/sensitive info.
+/// Visible to any authenticated user (customer viewing guard before booking).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PublicGuardProfileResponse {
+    pub user_id: Uuid,
+    pub gender: Option<String>,
+    pub years_of_experience: Option<i32>,
+    pub previous_workplace: Option<String>,
+    pub id_card_url: Option<String>,
+    pub security_license_url: Option<String>,
+    pub training_cert_url: Option<String>,
+    pub criminal_check_url: Option<String>,
+    pub driver_license_url: Option<String>,
+}
+
+impl From<GuardProfileResponse> for PublicGuardProfileResponse {
+    fn from(full: GuardProfileResponse) -> Self {
+        Self {
+            user_id: full.user_id,
+            gender: full.gender,
+            years_of_experience: full.years_of_experience,
+            previous_workplace: full.previous_workplace,
+            id_card_url: full.id_card_url,
+            security_license_url: full.security_license_url,
+            training_cert_url: full.training_cert_url,
+            criminal_check_url: full.criminal_check_url,
+            driver_license_url: full.driver_license_url,
+        }
+    }
+}
+
 // =============================================================================
 // Customer Profile DTOs
 // =============================================================================

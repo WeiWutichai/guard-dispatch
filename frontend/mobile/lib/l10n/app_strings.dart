@@ -719,6 +719,9 @@ class GuardHomeStrings {
   final String locationPermissionDenied;
   final String gpsAccuracy;
 
+  // Busy state
+  final String busy;
+
   GuardHomeStrings({required bool isThai})
     : greeting = isThai ? 'สวัสดีตอนเย็น' : 'Good Evening',
       ready = isThai ? 'พร้อมให้บริการ' : 'Available',
@@ -747,6 +750,7 @@ class GuardHomeStrings {
           ? 'กรุณาอนุญาตการเข้าถึงตำแหน่ง'
           : 'Please allow location access',
       gpsAccuracy = isThai ? 'ความแม่นยำ GPS' : 'GPS Accuracy',
+      busy = isThai ? 'ไม่ว่าง — กำลังปฏิบัติงาน' : 'Busy — On Duty',
       _isThai = isThai;
 
   final bool _isThai;
@@ -1724,4 +1728,34 @@ class ReviewRatingStrings {
       reviewSubmitted = isThai ? 'ส่งรีวิวเรียบร้อย' : 'Review Submitted',
       reviewSubmittedMsg = isThai ? 'ขอบคุณสำหรับการให้คะแนน' : 'Thank you for your feedback',
       guard = isThai ? 'เจ้าหน้าที่' : 'Guard';
+}
+
+class ProgressReportStrings {
+  final String title;
+  final String hourLabel;
+  final String messagePlaceholder;
+  final String takePhoto;
+  final String chooseGallery;
+  final String submit;
+  final String skip;
+  final String submitSuccess;
+  final String submitError;
+  final String progressReports;
+  final String noReports;
+  final String submitting;
+
+  ProgressReportStrings({
+    required bool isThai,
+  })  : title = isThai ? 'รายงานความคืบหน้า' : 'Progress Report',
+        hourLabel = isThai ? 'ชั่วโมงที่' : 'Hour',
+        messagePlaceholder = isThai ? 'พิมพ์ข้อความรายงาน (ไม่บังคับ)' : 'Type report message (optional)',
+        takePhoto = isThai ? 'ถ่ายรูป' : 'Take Photo',
+        chooseGallery = isThai ? 'เลือกจากแกลเลอรี' : 'Choose from Gallery',
+        submit = isThai ? 'ส่งรายงาน' : 'Submit Report',
+        skip = isThai ? 'ข้ามไปก่อน' : 'Skip for Now',
+        submitSuccess = isThai ? 'ส่งรายงานสำเร็จ' : 'Report submitted',
+        submitError = isThai ? 'ส่งรายงานไม่สำเร็จ' : 'Failed to submit report',
+        progressReports = isThai ? 'รายงานความคืบหน้า' : 'Progress Reports',
+        noReports = isThai ? 'ยังไม่มีรายงาน' : 'No reports yet',
+        submitting = isThai ? 'กำลังส่ง...' : 'Submitting...';
 }

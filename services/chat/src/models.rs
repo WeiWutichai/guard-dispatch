@@ -13,6 +13,7 @@ use uuid::Uuid;
 pub enum MessageType {
     Text,
     Image,
+    Video,
     System,
 }
 
@@ -37,6 +38,10 @@ pub struct OutgoingChatMessage {
     pub message_type: MessageType,
     pub sender_role: Option<String>,
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_mime_type: Option<String>,
 }
 
 // =============================================================================
@@ -94,6 +99,10 @@ pub struct MessageResponse {
     pub message_type: MessageType,
     pub sender_role: Option<String>,
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_mime_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -178,6 +187,8 @@ impl From<MessageRow> for MessageResponse {
             message_type: row.message_type,
             sender_role: row.sender_role,
             created_at: row.created_at,
+            file_url: None,
+            file_mime_type: None,
         }
     }
 }
@@ -192,6 +203,38 @@ impl From<MessageRow> for OutgoingChatMessage {
             message_type: row.message_type,
             sender_role: row.sender_role,
             created_at: row.created_at,
+            file_url: None,
+            file_mime_type: None,
+        }
+    }
+}
+
+/// Row type for list_messages with LEFT JOIN on attachments
+#[derive(Debug, sqlx::FromRow)]
+pub struct MessageWithAttachmentRow {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub sender_id: Uuid,
+    pub content: Option<String>,
+    pub message_type: MessageType,
+    pub sender_role: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub file_url: Option<String>,
+    pub file_mime_type: Option<String>,
+}
+
+impl From<MessageWithAttachmentRow> for MessageResponse {
+    fn from(row: MessageWithAttachmentRow) -> Self {
+        Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            sender_id: row.sender_id,
+            content: row.content,
+            message_type: row.message_type,
+            sender_role: row.sender_role,
+            created_at: row.created_at,
+            file_url: row.file_url,
+            file_mime_type: row.file_mime_type,
         }
     }
 }

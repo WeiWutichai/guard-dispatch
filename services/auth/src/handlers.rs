@@ -13,7 +13,7 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AuthResponse, CustomerProfileResponse, GuardProfileFormData, GuardProfileResponse,
+    AuthResponse, CustomerProfileResponse, GuardProfileFormData, GuardProfileResponse, PublicGuardProfileResponse,
     ListUsersQuery, LoginRequest, PaginatedUsers, PhoneLoginRequest, RefreshRequest,
     RegisterRequest, RegisterWithOtpRequest, RegisterWithOtpResponse,
     ReissueProfileTokenRequest, ReissueProfileTokenResponse, RequestOtpRequest,
@@ -603,6 +603,43 @@ pub async fn get_guard_profile(
     .await?;
 
     Ok(Json(shared::models::ApiResponse::success(profile)))
+}
+
+// =============================================================================
+// Public Guard Profile (any authenticated user — no bank info)
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/guards/{user_id}/profile",
+    tag = "Profile",
+    security(("bearer" = [])),
+    params(
+        ("user_id" = Uuid, Path, description = "Guard user ID"),
+    ),
+    responses(
+        (status = 200, description = "Public guard profile with document URLs", body = PublicGuardProfileResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Guard profile not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_public_guard_profile(
+    State(state): State<Arc<AppState>>,
+    _user: AuthUser,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<shared::models::ApiResponse<PublicGuardProfileResponse>>, AppError> {
+    let full_profile = crate::service::get_guard_profile(
+        &state.db,
+        &state.s3_client,
+        &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
+        user_id,
+    )
+    .await?;
+
+    let public_profile: PublicGuardProfileResponse = full_profile.into();
+    Ok(Json(shared::models::ApiResponse::success(public_profile)))
 }
 
 // =============================================================================

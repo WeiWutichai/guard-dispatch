@@ -25,7 +25,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<BookingProvider>().fetchServiceRates();
-      context.read<NotificationProvider>().fetchUnreadCount();
+      context.read<NotificationProvider>().fetchUnreadCount(role: 'customer');
     });
   }
 
@@ -125,7 +125,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
           ),
         );
         if (mounted) {
-          context.read<NotificationProvider>().fetchUnreadCount();
+          context.read<NotificationProvider>().fetchUnreadCount(role: 'customer');
         }
       },
       child: SizedBox(

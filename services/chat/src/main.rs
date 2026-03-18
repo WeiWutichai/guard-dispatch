@@ -103,6 +103,9 @@ async fn main() -> anyhow::Result<()> {
 
     let s3_client = aws_sdk_s3::Client::from_conf(s3_sdk_config);
 
+    let s3_public_url =
+        std::env::var("S3_PUBLIC_URL").unwrap_or_else(|_| s3_config.endpoint.clone());
+
     let state = Arc::new(AppState {
         db,
         redis_cache,
@@ -111,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
         s3_client,
         s3_bucket: s3_config.bucket.clone(),
         s3_endpoint: s3_config.endpoint.clone(),
+        s3_public_url,
     });
 
     let app = Router::new()

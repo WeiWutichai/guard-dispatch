@@ -39,6 +39,10 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
   LatLng? _guardPosition;
   bool _waitingForLocation = true;
   bool _initialFitDone = false;
+  String? _enRouteAt;
+  double? _enRouteLat;
+  double? _enRouteLng;
+  String? _enRoutePlace;
 
   @override
   void initState() {
@@ -117,6 +121,17 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
         if (guardId == widget.guardId) {
           final status = a['status'] as String?;
           final startedAt = a['started_at'] as String?;
+
+          // Capture en_route check-in data for display
+          final enRouteAt = a['en_route_at'] as String?;
+          if (enRouteAt != null && _enRouteAt == null) {
+            setState(() {
+              _enRouteAt = enRouteAt;
+              _enRouteLat = (a['en_route_lat'] as num?)?.toDouble();
+              _enRouteLng = (a['en_route_lng'] as num?)?.toDouble();
+              _enRoutePlace = a['en_route_place'] as String?;
+            });
+          }
 
           if (status == 'arrived' && startedAt != null) {
             // Guard arrived AND started working → countdown screen
@@ -269,6 +284,16 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
       }
     } catch (_) {
       // Silently retry
+    }
+  }
+
+  String _formatCheckinTime(String? isoString) {
+    if (isoString == null) return '--:--';
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '--:--';
     }
   }
 
@@ -504,39 +529,101 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                 ),
               ],
             ),
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(Icons.shield_rounded,
-                      color: AppColors.primary, size: 24),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.guardName,
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.shield_rounded,
+                          color: AppColors.primary, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.guardName,
+                            style: GoogleFonts.inter(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          Text(
+                            strings.guardEnRoute,
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // En route time + location badge
+                    if (_enRouteAt != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.directions_car_rounded,
+                                    size: 14, color: AppColors.primary),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _formatCheckinTime(_enRouteAt),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (_enRoutePlace != null || (_enRouteLat != null && _enRouteLng != null))
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.pin_drop_outlined,
+                                        size: 10,
+                                        color: AppColors.textSecondary
+                                            .withValues(alpha: 0.7)),
+                                    const SizedBox(width: 2),
+                                    Flexible(
+                                      child: Text(
+                                        _enRoutePlace ?? '${_enRouteLat!.toStringAsFixed(5)}, ${_enRouteLng!.toStringAsFixed(5)}',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 10,
+                                          color: AppColors.textSecondary
+                                              .withValues(alpha: 0.7),
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                      Text(
-                        strings.guardEnRoute,
-                        style: GoogleFonts.inter(
-                          fontSize: 13,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
               ],
             ),

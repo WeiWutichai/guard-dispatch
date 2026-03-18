@@ -5,6 +5,12 @@ import '../theme/colors.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import '../providers/notification_provider.dart';
+import '../providers/booking_provider.dart';
+import 'hirer/hirer_history_screen.dart';
+import 'guard/guard_job_detail_screen.dart';
+import 'guard/work_history_screen.dart';
+import 'guard/ratings_reviews_screen.dart';
+import 'chat_list_screen.dart';
 
 class NotificationScreen extends StatefulWidget {
   final bool isGuard;
@@ -15,11 +21,13 @@ class NotificationScreen extends StatefulWidget {
 }
 
 class _NotificationScreenState extends State<NotificationScreen> {
+  String get _role => widget.isGuard ? 'guard' : 'customer';
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<NotificationProvider>().fetchNotifications();
+      context.read<NotificationProvider>().fetchNotifications(role: _role);
     });
   }
 
@@ -54,7 +62,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         actions: [
           if (provider.unreadCount > 0)
             TextButton(
-              onPressed: () => provider.markAllAsRead(),
+              onPressed: () => provider.markAllAsRead(role: _role),
               child: Text(
                 s.readAll,
                 style: GoogleFonts.inter(
@@ -114,7 +122,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     }
 
     return RefreshIndicator(
-      onRefresh: () => provider.fetchNotifications(),
+      onRefresh: () => provider.fetchNotifications(role: _role),
       color: AppColors.primary,
       child: ListView.builder(
         itemCount: provider.notifications.length,
@@ -146,6 +154,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         if (!isRead && id.isNotEmpty) {
           provider.markAsRead(id);
         }
+        _onNotificationTap(notification);
       },
       child: Container(
         padding: const EdgeInsets.all(16),
@@ -222,6 +231,96 @@ class _NotificationScreenState extends State<NotificationScreen> {
         ),
       ),
     );
+  }
+
+  void _onNotificationTap(Map<String, dynamic> notification) {
+    final type = notification['notification_type'] as String? ?? 'system';
+    final payload = notification['payload'];
+    final payloadMap = payload is Map<String, dynamic> ? payload : <String, dynamic>{};
+
+    if (widget.isGuard) {
+      _handleGuardNavigation(type, payloadMap);
+    } else {
+      _handleCustomerNavigation(type);
+    }
+  }
+
+  void _handleCustomerNavigation(String type) {
+    switch (type) {
+      case 'chat_message':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const ChatListScreen(actingRole: 'customer'),
+          ),
+        );
+      case 'booking_created':
+      case 'guard_assigned':
+      case 'guard_en_route':
+      case 'guard_arrived':
+      case 'booking_completed':
+      case 'booking_cancelled':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const HirerHistoryScreen(),
+          ),
+        );
+      default:
+        break;
+    }
+  }
+
+  Future<void> _handleGuardNavigation(
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
+    switch (type) {
+      case 'chat_message':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const ChatListScreen(actingRole: 'guard'),
+          ),
+        );
+      case 'guard_assigned':
+      case 'booking_created':
+        // Try to find the matching job and navigate to detail
+        final requestId = payload['request_id'] as String?;
+        if (requestId == null) return;
+        try {
+          final booking = context.read<BookingProvider>();
+          final allJobs = await booking.fetchJobsAndReturn();
+          if (!mounted) return;
+          final match = allJobs.where((j) {
+            return j['request_id']?.toString() == requestId;
+          });
+          if (match.isNotEmpty) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => GuardJobDetailScreen(job: match.first),
+              ),
+            );
+          }
+        } catch (_) {}
+      case 'booking_completed':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const WorkHistoryScreen(),
+          ),
+        );
+      case 'system':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const RatingsReviewsScreen(),
+          ),
+        );
+      default:
+        break;
+    }
   }
 
   ({IconData icon, Color color}) _getNotificationStyle(String type) {

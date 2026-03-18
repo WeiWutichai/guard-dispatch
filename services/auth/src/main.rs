@@ -47,6 +47,7 @@ use crate::state::AppState;
         handlers::update_customer_approval,
         handlers::reissue_profile_token,
         handlers::update_role,
+        handlers::get_public_guard_profile,
     ),
     components(schemas(
         models::RegisterRequest,
@@ -72,6 +73,7 @@ use crate::state::AppState;
         shared::models::UserRole,
         shared::models::ApprovalStatus,
         models::GuardProfileResponse,
+        models::PublicGuardProfileResponse,
         models::SubmitCustomerProfileRequest,
         models::CustomerProfileResponse,
         shared::error::ErrorBody,
@@ -199,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/profile/reissue", post(handlers::reissue_profile_token))
         .route("/profile/role", post(handlers::update_role))
         .route("/profile/customer", post(handlers::submit_customer_profile))
+        .route("/guards/{user_id}/profile", get(handlers::get_public_guard_profile))
         .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile))
         .route("/admin/customer-profile/{user_id}", get(handlers::get_customer_profile))
         .route("/admin/customer-applicants", get(handlers::list_customer_applicants))

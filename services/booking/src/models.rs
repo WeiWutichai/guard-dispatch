@@ -73,6 +73,8 @@ pub struct AssignGuardDto {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateAssignmentStatusDto {
     pub status: AssignmentStatus,
+    pub lat: Option<f64>,
+    pub lng: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -85,6 +87,12 @@ pub struct ListRequestsQuery {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AcceptDeclineDto {
     pub accept: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct StartJobDto {
+    pub lat: Option<f64>,
+    pub lng: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -138,6 +146,8 @@ pub struct GuardRequestResponse {
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
     pub booked_hours: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignment_status: Option<AssignmentStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -155,6 +165,33 @@ pub struct AssignmentResponse {
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
     pub completion_requested_at: Option<DateTime<Utc>>,
+    // Check-in location data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_place: Option<String>,
     // Review data (if reviewed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_overall_rating: Option<f64>,
@@ -195,6 +232,35 @@ pub struct ActiveJobResponse {
     pub assignment_status: AssignmentStatus,
     pub offered_price: Option<f64>,
     pub completion_requested_at: Option<DateTime<Utc>>,
+    // Check-in location data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_place: Option<String>,
 }
 
 // =============================================================================
@@ -214,6 +280,7 @@ pub struct GuardRequestRow {
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
     pub booked_hours: Option<i32>,
+    pub assignment_status: Option<AssignmentStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -233,6 +300,7 @@ impl From<GuardRequestRow> for GuardRequestResponse {
             status: row.status,
             urgency: row.urgency,
             booked_hours: row.booked_hours,
+            assignment_status: row.assignment_status,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
@@ -266,6 +334,33 @@ pub struct GuardJobResponse {
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
+    // Check-in location data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub en_route_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrived_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_lng: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_place: Option<String>,
     // Review data (if reviewed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_overall_rating: Option<f64>,
@@ -304,6 +399,20 @@ pub struct GuardJobRow {
     pub arrived_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
+    // Check-in location data
+    pub en_route_at: Option<DateTime<Utc>>,
+    pub en_route_lat: Option<f64>,
+    pub en_route_lng: Option<f64>,
+    pub arrived_lat: Option<f64>,
+    pub arrived_lng: Option<f64>,
+    pub en_route_place: Option<String>,
+    pub arrived_place: Option<String>,
+    pub started_lat: Option<f64>,
+    pub started_lng: Option<f64>,
+    pub started_place: Option<String>,
+    pub completion_lat: Option<f64>,
+    pub completion_lng: Option<f64>,
+    pub completion_place: Option<String>,
     // Review data
     pub review_overall_rating: Option<f64>,
     pub review_punctuality: Option<f64>,
@@ -338,6 +447,19 @@ impl From<GuardJobRow> for GuardJobResponse {
             arrived_at: row.arrived_at,
             completed_at: row.completed_at,
             started_at: row.started_at,
+            en_route_at: row.en_route_at,
+            en_route_lat: row.en_route_lat,
+            en_route_lng: row.en_route_lng,
+            arrived_lat: row.arrived_lat,
+            arrived_lng: row.arrived_lng,
+            en_route_place: row.en_route_place,
+            arrived_place: row.arrived_place,
+            started_lat: row.started_lat,
+            started_lng: row.started_lng,
+            started_place: row.started_place,
+            completion_lat: row.completion_lat,
+            completion_lng: row.completion_lng,
+            completion_place: row.completion_place,
             review_overall_rating: row.review_overall_rating,
             review_punctuality: row.review_punctuality,
             review_professionalism: row.review_professionalism,
@@ -387,6 +509,20 @@ pub struct AssignmentRow {
     pub completed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
     pub completion_requested_at: Option<DateTime<Utc>>,
+    // Check-in location data
+    pub en_route_at: Option<DateTime<Utc>>,
+    pub en_route_lat: Option<f64>,
+    pub en_route_lng: Option<f64>,
+    pub arrived_lat: Option<f64>,
+    pub arrived_lng: Option<f64>,
+    pub en_route_place: Option<String>,
+    pub arrived_place: Option<String>,
+    pub started_lat: Option<f64>,
+    pub started_lng: Option<f64>,
+    pub started_place: Option<String>,
+    pub completion_lat: Option<f64>,
+    pub completion_lng: Option<f64>,
+    pub completion_place: Option<String>,
     // Review data
     pub review_overall_rating: Option<f64>,
     pub review_punctuality: Option<f64>,
@@ -409,6 +545,19 @@ impl From<AssignmentRow> for AssignmentResponse {
             completed_at: row.completed_at,
             started_at: row.started_at,
             completion_requested_at: row.completion_requested_at,
+            en_route_at: row.en_route_at,
+            en_route_lat: row.en_route_lat,
+            en_route_lng: row.en_route_lng,
+            arrived_lat: row.arrived_lat,
+            arrived_lng: row.arrived_lng,
+            en_route_place: row.en_route_place,
+            arrived_place: row.arrived_place,
+            started_lat: row.started_lat,
+            started_lng: row.started_lng,
+            started_place: row.started_place,
+            completion_lat: row.completion_lat,
+            completion_lng: row.completion_lng,
+            completion_place: row.completion_place,
             review_overall_rating: row.review_overall_rating,
             review_punctuality: row.review_punctuality,
             review_professionalism: row.review_professionalism,
@@ -673,4 +822,35 @@ impl From<AvailableGuardRow> for AvailableGuardResponse {
             review_count: row.review_count.unwrap_or(0),
         }
     }
+}
+
+// =============================================================================
+// Progress Reports
+// =============================================================================
+
+/// DB row for progress_reports table
+#[derive(Debug, sqlx::FromRow)]
+pub struct ProgressReportRow {
+    pub id: Uuid,
+    pub assignment_id: Uuid,
+    pub guard_id: Uuid,
+    pub hour_number: i32,
+    pub message: Option<String>,
+    pub photo_file_key: Option<String>,
+    pub photo_mime_type: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// API response for progress reports
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProgressReportResponse {
+    pub id: Uuid,
+    pub assignment_id: Uuid,
+    pub guard_id: Uuid,
+    pub hour_number: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photo_url: Option<String>,
+    pub created_at: DateTime<Utc>,
 }

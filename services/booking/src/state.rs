@@ -11,6 +11,13 @@ pub struct AppState {
     pub redis_client: redis::Client,
     /// Multiplexed connection for PUBLISH commands (cheap to clone).
     pub redis_conn: redis::aio::MultiplexedConnection,
+    /// Shared HTTP client for outbound requests (e.g. reverse geocoding).
+    pub http_client: reqwest::Client,
+    /// S3/MinIO client for file uploads (progress report photos).
+    pub s3_client: aws_sdk_s3::Client,
+    pub s3_bucket: String,
+    pub s3_endpoint: String,
+    pub s3_public_url: String,
 }
 
 impl HasJwtSecret for AppState {

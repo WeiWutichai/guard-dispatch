@@ -5,19 +5,22 @@ class NotificationService {
 
   NotificationService(this._apiClient);
 
-  /// GET /notification/notifications?unread_only=...&limit=...&offset=...
+  /// GET /notification/notifications?unread_only=...&limit=...&offset=...&role=...
   Future<List<Map<String, dynamic>>> listNotifications({
     bool unreadOnly = false,
     int limit = 20,
     int offset = 0,
+    String? role,
   }) async {
+    final params = <String, dynamic>{
+      'unread_only': unreadOnly,
+      'limit': limit,
+      'offset': offset,
+    };
+    if (role != null) params['role'] = role;
     final response = await _apiClient.dio.get(
       '/notification/notifications',
-      queryParameters: {
-        'unread_only': unreadOnly,
-        'limit': limit,
-        'offset': offset,
-      },
+      queryParameters: params,
     );
     final data = response.data['data'];
     if (data is List) {
@@ -26,10 +29,13 @@ class NotificationService {
     return [];
   }
 
-  /// GET /notification/notifications/unread-count
-  Future<int> getUnreadCount() async {
+  /// GET /notification/notifications/unread-count?role=...
+  Future<int> getUnreadCount({String? role}) async {
+    final params = <String, dynamic>{};
+    if (role != null) params['role'] = role;
     final response = await _apiClient.dio.get(
       '/notification/notifications/unread-count',
+      queryParameters: params,
     );
     final data = response.data['data'];
     if (data is Map) {
@@ -45,8 +51,13 @@ class NotificationService {
     );
   }
 
-  /// PUT /notification/notifications/read-all
-  Future<void> markAllAsRead() async {
-    await _apiClient.dio.put('/notification/notifications/read-all');
+  /// PUT /notification/notifications/read-all?role=...
+  Future<void> markAllAsRead({String? role}) async {
+    final params = <String, dynamic>{};
+    if (role != null) params['role'] = role;
+    await _apiClient.dio.put(
+      '/notification/notifications/read-all',
+      queryParameters: params,
+    );
   }
 }

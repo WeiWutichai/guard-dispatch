@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:web_socket_channel/io.dart';
 
 import 'api_client.dart';
@@ -153,6 +154,38 @@ class ChatService {
     try {
       _channel!.sink.add(payload);
     } catch (_) {}
+  }
+
+  // ===========================================================================
+  // REST: Attachments (image/video upload)
+  // ===========================================================================
+
+  /// POST /chat/attachments — upload image or video file
+  Future<Map<String, dynamic>> uploadAttachment(
+    String conversationId,
+    File file,
+    String mimeType,
+  ) async {
+    final fileName = file.path.split('/').last;
+    final formData = FormData.fromMap({
+      'conversation_id': conversationId,
+      'file': await MultipartFile.fromFile(
+        file.path,
+        filename: fileName,
+        contentType: DioMediaType.parse(mimeType),
+      ),
+    });
+    final response = await _apiClient.dio.post(
+      '/chat/attachments',
+      data: formData,
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// GET /chat/attachments/{id} — get fresh signed URL
+  Future<Map<String, dynamic>> getAttachmentUrl(String attachmentId) async {
+    final response = await _apiClient.dio.get('/chat/attachments/$attachmentId');
+    return response.data['data'] as Map<String, dynamic>;
   }
 
   /// PUT /chat/conversations/{id}/read?role=...

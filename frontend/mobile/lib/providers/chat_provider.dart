@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import '../services/chat_service.dart';
 
@@ -83,6 +85,31 @@ class ChatProvider extends ChangeNotifier {
   void sendMessage(String conversationId, String content, {String? senderRole}) {
     if (content.trim().isEmpty) return;
     _service.sendChatMessage(conversationId, content, senderRole: senderRole);
+  }
+
+  // ===========================================================================
+  // Attachment upload
+  // ===========================================================================
+
+  bool _isUploading = false;
+  bool get isUploading => _isUploading;
+
+  /// Upload image or video attachment. The server creates the message and
+  /// broadcasts via WebSocket, so the message auto-appears in the list.
+  Future<void> uploadAttachment(
+    String conversationId,
+    File file,
+    String mimeType,
+  ) async {
+    _isUploading = true;
+    notifyListeners();
+    try {
+      await _service.uploadAttachment(conversationId, file, mimeType);
+    } catch (e) {
+      debugPrint('[ChatProvider] uploadAttachment error: $e');
+    }
+    _isUploading = false;
+    notifyListeners();
   }
 
   /// Mark conversation as read for the given role.

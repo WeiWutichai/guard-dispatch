@@ -63,38 +63,26 @@ pub async fn list_notifications(
     let limit = query.limit.unwrap_or(20).min(100);
     let offset = query.offset.unwrap_or(0);
     let unread_only = query.unread_only.unwrap_or(false);
+    let role = query.role.as_deref();
 
-    let rows = if unread_only {
-        sqlx::query_as::<_, NotificationLogRow>(
-            r#"
-            SELECT id, user_id, title, body, notification_type, payload, is_read, sent_at, read_at
-            FROM notification.notification_logs
-            WHERE user_id = $1 AND is_read = false
-            ORDER BY sent_at DESC
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(user_id)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(db)
-        .await?
-    } else {
-        sqlx::query_as::<_, NotificationLogRow>(
-            r#"
-            SELECT id, user_id, title, body, notification_type, payload, is_read, sent_at, read_at
-            FROM notification.notification_logs
-            WHERE user_id = $1
-            ORDER BY sent_at DESC
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(user_id)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(db)
-        .await?
-    };
+    let rows = sqlx::query_as::<_, NotificationLogRow>(
+        r#"
+        SELECT id, user_id, title, body, notification_type, payload, is_read, sent_at, read_at
+        FROM notification.notification_logs
+        WHERE user_id = $1
+          AND ($4::text IS NULL OR payload->>'target_role' = $4 OR payload->>'target_role' IS NULL)
+          AND (NOT $5 OR is_read = false)
+        ORDER BY sent_at DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(user_id)
+    .bind(limit)
+    .bind(offset)
+    .bind(role)
+    .bind(unread_only)
+    .fetch_all(db)
+    .await?;
 
     Ok(rows
         .into_iter()
@@ -109,11 +97,17 @@ pub async fn list_notifications(
 pub async fn get_unread_count(
     db: &PgPool,
     user_id: Uuid,
+    role: Option<&str>,
 ) -> Result<i64, AppError> {
     let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM notification.notification_logs WHERE user_id = $1 AND is_read = false",
+        r#"
+        SELECT COUNT(*) FROM notification.notification_logs
+        WHERE user_id = $1 AND is_read = false
+          AND ($2::text IS NULL OR payload->>'target_role' = $2 OR payload->>'target_role' IS NULL)
+        "#,
     )
     .bind(user_id)
+    .bind(role)
     .fetch_one(db)
     .await?;
 
@@ -153,11 +147,18 @@ pub async fn mark_as_read(
 pub async fn mark_all_as_read(
     db: &PgPool,
     user_id: Uuid,
+    role: Option<&str>,
 ) -> Result<i64, AppError> {
     let result = sqlx::query(
-        "UPDATE notification.notification_logs SET is_read = true, read_at = NOW() WHERE user_id = $1 AND is_read = false",
+        r#"
+        UPDATE notification.notification_logs
+        SET is_read = true, read_at = NOW()
+        WHERE user_id = $1 AND is_read = false
+          AND ($2::text IS NULL OR payload->>'target_role' = $2 OR payload->>'target_role' IS NULL)
+        "#,
     )
     .bind(user_id)
+    .bind(role)
     .execute(db)
     .await?;
 

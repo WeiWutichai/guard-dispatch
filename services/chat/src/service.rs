@@ -8,7 +8,7 @@ use crate::models::{
     AttachmentResponse, AttachmentRow, ConversationResponse, ConversationRow,
     CreateConversationRequest, EnrichedConversationResponse, EnrichedConversationRow,
     IncomingChatMessage, ListMessagesQuery, MessageResponse, MessageRow,
-    MessageType, OutgoingChatMessage,
+    MessageType, MessageWithAttachmentRow, OutgoingChatMessage,
 };
 
 // =============================================================================
@@ -126,7 +126,7 @@ pub async fn list_conversations(
 }
 
 // =============================================================================
-// Send Message
+// Send Message (text — used by WebSocket handler)
 // =============================================================================
 
 pub async fn send_message(
@@ -155,7 +155,22 @@ pub async fn send_message(
         ));
     }
 
-    let message_type = msg.message_type.unwrap_or(MessageType::Text);
+    let row = insert_message(db, sender_id, &msg).await?;
+    let outgoing = OutgoingChatMessage::from(row);
+    publish_chat_message(redis_pubsub, &outgoing).await;
+    Ok(outgoing)
+}
+
+// =============================================================================
+// Insert Message (DB only, no publish — used by upload handler)
+// =============================================================================
+
+pub async fn insert_message(
+    db: &PgPool,
+    sender_id: Uuid,
+    msg: &IncomingChatMessage,
+) -> Result<MessageRow, AppError> {
+    let message_type = msg.message_type.clone().unwrap_or(MessageType::Text);
     let mtype_str = serde_json::to_value(&message_type)
         .map_err(|e| AppError::Internal(format!("Failed to serialize message type: {e}")))?
         .as_str()
@@ -177,18 +192,22 @@ pub async fn send_message(
     .fetch_one(db)
     .await?;
 
-    let outgoing = OutgoingChatMessage::from(row);
+    Ok(row)
+}
 
-    // Publish to Redis PubSub for real-time delivery
-    let channel = format!("chat:{}", msg.conversation_id);
-    let payload = serde_json::to_string(&outgoing)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize message: {e}")))?;
+// =============================================================================
+// Publish Chat Message to Redis PubSub
+// =============================================================================
 
-    // Clone is cheap — shares the underlying multiplexed connection
-    let mut conn = redis_pubsub.clone();
-    let _ = conn.publish::<_, _, ()>(&channel, &payload).await;
-
-    Ok(outgoing)
+pub async fn publish_chat_message(
+    redis_pubsub: &redis::aio::MultiplexedConnection,
+    outgoing: &OutgoingChatMessage,
+) {
+    let channel = format!("chat:{}", outgoing.conversation_id);
+    if let Ok(payload) = serde_json::to_string(outgoing) {
+        let mut conn = redis_pubsub.clone();
+        let _ = conn.publish::<_, _, ()>(&channel, &payload).await;
+    }
 }
 
 // =============================================================================
@@ -227,12 +246,14 @@ pub async fn list_messages(
     let limit = query.limit.unwrap_or(50).min(200);
     let offset = query.offset.unwrap_or(0);
 
-    let rows = sqlx::query_as::<_, MessageRow>(
+    let rows = sqlx::query_as::<_, MessageWithAttachmentRow>(
         r#"
-        SELECT id, conversation_id, sender_id, content, message_type, sender_role, created_at
-        FROM chat.messages
-        WHERE conversation_id = $1
-        ORDER BY created_at DESC
+        SELECT m.id, m.conversation_id, m.sender_id, m.content, m.message_type, m.sender_role, m.created_at,
+               a.file_url, a.mime_type AS file_mime_type
+        FROM chat.messages m
+        LEFT JOIN chat.attachments a ON a.message_id = m.id
+        WHERE m.conversation_id = $1
+        ORDER BY m.created_at DESC
         LIMIT $2 OFFSET $3
         "#,
     )

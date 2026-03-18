@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../call_screen.dart';
@@ -230,7 +231,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         itemBuilder: (context, index) {
           final job = jobs[index];
           return Padding(
-            padding: EdgeInsets.only(bottom: index < jobs.length - 1 ? 12 : 0),
+            padding: EdgeInsets.only(bottom: index < jobs.length - 1 ? 16 : 0),
             child: GestureDetector(
               onTap: () {
                 Navigator.push(
@@ -240,11 +241,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
                   ),
                 );
               },
-              child: _buildCompletedJobItem(
-                job['customer_name'] as String? ?? '-',
-                job['completed_at'] as String? ?? '',
-                _formatCurrency(job['offered_price']),
-              ),
+              child: _buildJobCard(job, strings, isThai),
             ),
           );
         },
@@ -291,7 +288,6 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
   }
 
   Widget _buildJobCard(Map<String, dynamic> job, GuardJobsStrings strings, bool isThai) {
-    final customerName = job['customer_name'] as String? ?? '-';
     final address = job['address'] as String? ?? '-';
     final price = _formatCurrency(job['offered_price']);
     final description = job['description'] as String? ?? '';
@@ -303,13 +299,24 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     final statusLabel = _getStatusLabel(assignmentStatus, isThai);
     final statusColor = _getStatusColor(assignmentStatus);
     final detailLines = _parseDescription(description, isThai);
+    final createdAt = job['assigned_at'] as String? ?? job['created_at'] as String? ?? '';
+    final completedAt = job['completed_at'] as String? ?? '';
+    final dateStr = completedAt.isNotEmpty ? completedAt : createdAt;
+    final dateDisplay = _formatDate(dateStr, isThai);
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -319,15 +326,16 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
                   color: statusColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.circle, color: statusColor, size: 8),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     Text(
                       statusLabel,
                       style: GoogleFonts.inter(
@@ -349,18 +357,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-
-          // Customer name
-          Text(
-            customerName,
-            style: GoogleFonts.inter(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
 
           // Address
           Row(
@@ -371,7 +368,11 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
               Expanded(
                 child: Text(
                   address,
-                  style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -379,46 +380,50 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
             ],
           ),
 
-          // Urgency badge + booked hours (quick info row)
-          if (urgency != null || bookedHours != null) ...[
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                if (urgency != null)
-                  _buildInfoChip(
-                    Icons.flag_rounded,
-                    _urgencyLabel(urgency, isThai),
-                    _urgencyColor(urgency),
-                  ),
-                if (bookedHours != null)
-                  _buildInfoChip(
-                    Icons.access_time_rounded,
-                    '$bookedHours ${isThai ? "ชม." : "hrs"}',
-                    AppColors.info,
-                  ),
-              ],
-            ),
-          ],
+          // Urgency + booked hours + date chips
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              if (urgency != null)
+                _buildInfoChip(
+                  Icons.flag_rounded,
+                  _urgencyLabel(urgency, isThai),
+                  _urgencyColor(urgency),
+                ),
+              if (bookedHours != null)
+                _buildInfoChip(
+                  Icons.access_time_rounded,
+                  '$bookedHours ${isThai ? "ชม." : "hrs"}',
+                  AppColors.info,
+                ),
+              if (dateDisplay != '-')
+                _buildInfoChip(
+                  Icons.calendar_today_rounded,
+                  dateDisplay,
+                  AppColors.textSecondary,
+                ),
+            ],
+          ),
 
           // Structured description details
           if (detailLines.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const Divider(color: AppColors.border),
             const SizedBox(height: 12),
+            const Divider(color: AppColors.border, height: 1),
+            const SizedBox(height: 10),
             ...detailLines.map((d) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(bottom: 6),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(d.icon, size: 16, color: AppColors.primary),
+                      Icon(d.icon, size: 15, color: AppColors.primary),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           d.text,
                           style: GoogleFonts.inter(
-                            fontSize: 14,
+                            fontSize: 13,
                             color: AppColors.textPrimary,
                             height: 1.4,
                           ),
@@ -431,10 +436,10 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
 
           // Special instructions
           if (specialInstructions != null && specialInstructions.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 color: const Color(0xFFFFF7ED),
                 borderRadius: BorderRadius.circular(10),
@@ -446,23 +451,23 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
                   Row(
                     children: [
                       const Icon(Icons.warning_amber_rounded,
-                          size: 16, color: Color(0xFFF59E0B)),
+                          size: 14, color: Color(0xFFF59E0B)),
                       const SizedBox(width: 6),
                       Text(
                         isThai ? 'หมายเหตุ' : 'Notes',
                         style: GoogleFonts.inter(
-                          fontSize: 13,
+                          fontSize: 12,
                           fontWeight: FontWeight.bold,
                           color: const Color(0xFF92400E),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   Text(
                     specialInstructions,
                     style: GoogleFonts.inter(
-                      fontSize: 13,
+                      fontSize: 12,
                       color: const Color(0xFF78350F),
                       height: 1.4,
                     ),
@@ -637,9 +642,18 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         } else if (status == 'arrived') {
           // Start job → navigate to ActiveJobScreen
           try {
+            // Capture GPS at job start
+            double? startLat, startLng;
+            try {
+              final pos = await Geolocator.getCurrentPosition(
+                locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+              );
+              startLat = pos.latitude;
+              startLng = pos.longitude;
+            } catch (_) {}
             final result = await context
                 .read<BookingProvider>()
-                .startActiveJob(assignmentId);
+                .startActiveJob(assignmentId, lat: startLat, lng: startLng);
             if (!mounted) return;
             Navigator.push(
               context,
@@ -797,6 +811,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return isThai ? 'กำลังดำเนินงาน' : 'In Progress';
       case 'completed':
         return isThai ? 'เสร็จสิ้น' : 'Completed';
+      case 'awaiting_payment':
+        return isThai ? 'กำลังรอการชำระ' : 'Awaiting Payment';
       case 'declined':
         return isThai ? 'ปฏิเสธแล้ว' : 'Declined';
       default:
@@ -820,10 +836,33 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return AppColors.primary;
       case 'completed':
         return AppColors.textSecondary;
+      case 'awaiting_payment':
+        return const Color(0xFFF59E0B);
       case 'declined':
         return AppColors.danger;
       default:
         return AppColors.textSecondary;
+    }
+  }
+
+  String _formatDate(String isoDate, bool isThai) {
+    if (isoDate.isEmpty) return '-';
+    try {
+      final dt = DateTime.parse(isoDate).toLocal();
+      final thMonths = [
+        '', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+        'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
+      ];
+      final enMonths = [
+        '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+      if (isThai) {
+        return '${dt.day} ${thMonths[dt.month]} ${dt.year + 543}';
+      }
+      return '${dt.day} ${enMonths[dt.month]} ${dt.year}';
+    } catch (_) {
+      return isoDate.length >= 10 ? isoDate.substring(0, 10) : isoDate;
     }
   }
 
@@ -874,68 +913,6 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     }
   }
 
-  Widget _buildCompletedJobItem(String client, String date, String amount) {
-    // Format the date nicely
-    String displayDate = date;
-    if (date.isNotEmpty) {
-      final dt = DateTime.tryParse(date);
-      if (dt != null) {
-        final local = dt.toLocal();
-        final hour = local.hour.toString().padLeft(2, '0');
-        final minute = local.minute.toString().padLeft(2, '0');
-        displayDate = '${local.day}/${local.month}/${local.year} $hour:$minute';
-      }
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.check_circle_rounded,
-                color: AppColors.primary, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(client,
-                    style: GoogleFonts.inter(
-                        fontWeight: FontWeight.bold, fontSize: 15)),
-                if (displayDate.isNotEmpty)
-                  Text(
-                    displayDate,
-                    style: GoogleFonts.inter(
-                        fontSize: 12, color: AppColors.textSecondary),
-                  ),
-              ],
-            ),
-          ),
-          Text(
-            amount,
-            style: GoogleFonts.inter(
-                fontWeight: FontWeight.bold,
-                color: AppColors.primary,
-                fontSize: 15),
-          ),
-          const SizedBox(width: 8),
-          const Icon(Icons.chevron_right_rounded,
-              color: AppColors.textSecondary, size: 20),
-        ],
-      ),
-    );
-  }
 }
 
 class _DetailLine {

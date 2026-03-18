@@ -1,5 +1,6 @@
 mod handlers;
 mod models;
+mod s3;
 mod service;
 mod state;
 
@@ -13,7 +14,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use shared::config::{DatabaseConfig, JwtConfig, RedisConfig};
+use shared::config::{DatabaseConfig, JwtConfig, RedisConfig, S3Config};
 use shared::db::create_pool;
 use shared::openapi::{SecurityAddon, ServerPrefixAddon};
 use shared::redis_client::create_redis_client;
@@ -44,11 +45,14 @@ use crate::state::AppState;
         handlers::guard_earnings,
         handlers::guard_work_history,
         handlers::guard_ratings,
+        handlers::get_guard_reviews,
         handlers::list_service_rates,
         handlers::get_service_rate,
         handlers::create_service_rate,
         handlers::update_service_rate,
         handlers::delete_service_rate,
+        handlers::submit_progress_report,
+        handlers::list_progress_reports,
     ),
     components(schemas(
         models::RequestStatus,
@@ -78,6 +82,7 @@ use crate::state::AppState;
         models::ServiceRate,
         models::CreateServiceRateDto,
         models::UpdateServiceRateDto,
+        models::ProgressReportResponse,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
@@ -89,6 +94,7 @@ use crate::state::AppState;
         (name = "Guard", description = "Guard-specific endpoints (dashboard, jobs, earnings)"),
         (name = "Payments", description = "Payment management"),
         (name = "Pricing", description = "Service rate management"),
+        (name = "Progress Reports", description = "Guard hourly progress reports"),
     ),
 )]
 struct ApiDoc;
@@ -105,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
     let db_config = DatabaseConfig::from_env()?;
     let jwt_config = JwtConfig::from_env()?;
     let redis_config = RedisConfig::from_env()?;
+    let s3_config = S3Config::from_env()?;
 
     let db = create_pool(&db_config).await?;
 
@@ -119,11 +126,41 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {e}"))?;
 
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .build()
+        .expect("Failed to build HTTP client");
+
+    // Initialize S3/MinIO client
+    let s3_creds = aws_sdk_s3::config::Credentials::new(
+        &s3_config.access_key,
+        &s3_config.secret_key,
+        None,
+        None,
+        "env",
+    );
+    let s3_sdk_config = aws_sdk_s3::Config::builder()
+        .endpoint_url(&s3_config.endpoint)
+        .region(aws_sdk_s3::config::Region::new("us-east-1"))
+        .credentials_provider(s3_creds)
+        .force_path_style(true) // Required for MinIO
+        .behavior_version_latest()
+        .build();
+    let s3_client = aws_sdk_s3::Client::from_conf(s3_sdk_config);
+    let s3_public_url =
+        std::env::var("S3_PUBLIC_URL").unwrap_or_else(|_| s3_config.endpoint.clone());
+
     let state = Arc::new(AppState {
         db,
         jwt_config,
         redis_client,
         redis_conn,
+        http_client,
+        s3_client,
+        s3_bucket: s3_config.bucket.clone(),
+        s3_endpoint: s3_config.endpoint.clone(),
+        s3_public_url,
     });
 
     let app = Router::new()
@@ -157,12 +194,17 @@ async fn main() -> anyhow::Result<()> {
             "/assignments/{id}/review",
             post(handlers::submit_review),
         )
+        .route(
+            "/assignments/{id}/progress-reports",
+            post(handlers::submit_progress_report).get(handlers::list_progress_reports),
+        )
         // WebSocket — real-time assignment status updates
         .route("/ws/assignments", get(handlers::ws_assignment_status))
         // Payments
         .route("/payments", post(handlers::create_payment))
         // Available guards (customer discovery)
         .route("/available-guards", get(handlers::available_guards))
+        .route("/guards/{guard_id}/reviews", get(handlers::get_guard_reviews))
         // Guard-specific endpoints
         .route("/guard/dashboard", get(handlers::guard_dashboard))
         .route("/guard/active-job", get(handlers::get_active_job))

@@ -265,8 +265,8 @@ async function apiFetch<T>(
         );
       }
     }
-    // Refresh failed — redirect to login
-    if (typeof window !== "undefined") {
+    // Refresh failed — redirect to login (skip if already on login page)
+    if (typeof window !== "undefined" && !window.location.pathname.endsWith("/login")) {
       window.location.href = `${BASE_PATH}/login`;
     }
     throw new ApiError(401, "unauthorized", "Session expired");

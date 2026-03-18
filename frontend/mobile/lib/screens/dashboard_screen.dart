@@ -95,7 +95,7 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 );
                 if (context.mounted) {
-                  context.read<NotificationProvider>().fetchUnreadCount();
+                  context.read<NotificationProvider>().fetchUnreadCount(role: 'guard');
                 }
               },
               child: Container(

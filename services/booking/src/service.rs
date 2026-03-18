@@ -12,10 +12,68 @@ use crate::models::{
     CreatePaymentDto, CreateRequestDto, CreateServiceRateDto, DailyEarning,
     GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary,
     GuardRequestResponse, GuardRequestRow, ListRequestsQuery, PaymentResponse, PaymentRow,
-    RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate,
-    UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse,
-    WorkHistoryRow,
+    ProgressReportResponse, ProgressReportRow, RatingSummaryRow, RequestStatus, ReviewItem,
+    ReviewRow, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem,
+    WorkHistoryResponse, WorkHistoryRow,
 };
+
+/// Validate and sanitise optional lat/lng. Returns (None, None) if invalid or (0,0).
+fn sanitize_coords(lat: Option<f64>, lng: Option<f64>) -> (Option<f64>, Option<f64>) {
+    match (lat, lng) {
+        (Some(la), Some(lo))
+            if (-90.0..=90.0).contains(&la)
+                && (-180.0..=180.0).contains(&lo)
+                && !(la == 0.0 && lo == 0.0) =>
+        {
+            (Some(la), Some(lo))
+        }
+        _ => (None, None),
+    }
+}
+
+/// Reverse geocode lat/lng to a place name via Nominatim (fire-and-forget style).
+/// Returns a short place name or None if geocoding fails.
+async fn reverse_geocode(http: &reqwest::Client, lat: f64, lng: f64) -> Option<String> {
+    let resp = http
+        .get("https://nominatim.openstreetmap.org/reverse")
+        .query(&[
+            ("lat", lat.to_string()),
+            ("lon", lng.to_string()),
+            ("format", "json".to_string()),
+            ("zoom", "16".to_string()),
+            ("accept-language", "th,en".to_string()),
+        ])
+        .header("User-Agent", "SecureGuardApp/1.0")
+        .send()
+        .await
+        .ok()?;
+
+    let data: serde_json::Value = resp.json().await.ok()?;
+
+    // Try short display: road + suburb/district
+    let addr = data.get("address")?;
+    let road = addr.get("road").and_then(|v| v.as_str());
+    let suburb = addr
+        .get("suburb")
+        .or_else(|| addr.get("district"))
+        .or_else(|| addr.get("subdistrict"))
+        .and_then(|v| v.as_str());
+
+    match (road, suburb) {
+        (Some(r), Some(s)) => Some(format!("{}, {}", r, s)),
+        (Some(r), None) => Some(r.to_string()),
+        (None, Some(s)) => Some(s.to_string()),
+        (None, None) => data.get("display_name").and_then(|v| v.as_str()).map(|s| {
+            // Truncate long display_name to first 2 parts
+            let parts: Vec<&str> = s.splitn(3, ", ").collect();
+            if parts.len() >= 2 {
+                format!("{}, {}", parts[0], parts[1])
+            } else {
+                s.to_string()
+            }
+        }),
+    }
+}
 
 /// Insert a notification log entry (fire-and-forget via tokio::spawn).
 /// Since booking and notification share the same PostgreSQL instance,
@@ -102,7 +160,7 @@ pub async fn create_request(
         r#"
         INSERT INTO booking.guard_requests (customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, urgency, booked_hours)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::urgency_level, $9)
-        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
+        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, NULL::assignment_status AS assignment_status, created_at, updated_at
         "#,
     )
     .bind(customer_id)
@@ -124,7 +182,7 @@ pub async fn create_request(
         "การจองสำเร็จ".to_string(),
         format!("คำขอจองเจ้าหน้าที่ รปภ. ที่ {} ถูกสร้างแล้ว", req.address),
         "booking_created",
-        Some(serde_json::json!({"request_id": row.id.to_string()})),
+        Some(serde_json::json!({"request_id": row.id.to_string(), "target_role": "customer"})),
     );
 
     Ok(GuardRequestResponse::from(row))
@@ -154,10 +212,18 @@ pub async fn list_requests(
                     .to_string();
                 sqlx::query_as::<_, GuardRequestRow>(
                     r#"
-                    SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
-                    FROM booking.guard_requests
-                    WHERE status = $1::request_status
-                    ORDER BY created_at DESC
+                    SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
+                           gr.description, gr.offered_price, gr.special_instructions, gr.status,
+                           gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+                    FROM booking.guard_requests gr
+                    LEFT JOIN LATERAL (
+                        SELECT a.status AS assignment_status
+                        FROM booking.assignments a
+                        WHERE a.request_id = gr.id AND a.status != 'declined'
+                        ORDER BY a.assigned_at DESC LIMIT 1
+                    ) la ON true
+                    WHERE gr.status = $1::request_status
+                    ORDER BY gr.created_at DESC
                     LIMIT $2 OFFSET $3
                     "#,
                 )
@@ -170,9 +236,17 @@ pub async fn list_requests(
             None => {
                 sqlx::query_as::<_, GuardRequestRow>(
                     r#"
-                    SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
-                    FROM booking.guard_requests
-                    ORDER BY created_at DESC
+                    SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
+                           gr.description, gr.offered_price, gr.special_instructions, gr.status,
+                           gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+                    FROM booking.guard_requests gr
+                    LEFT JOIN LATERAL (
+                        SELECT a.status AS assignment_status
+                        FROM booking.assignments a
+                        WHERE a.request_id = gr.id AND a.status != 'declined'
+                        ORDER BY a.assigned_at DESC LIMIT 1
+                    ) la ON true
+                    ORDER BY gr.created_at DESC
                     LIMIT $1 OFFSET $2
                     "#,
                 )
@@ -186,7 +260,10 @@ pub async fn list_requests(
         // Guard sees assigned requests
         sqlx::query_as::<_, GuardRequestRow>(
             r#"
-            SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address, gr.description, gr.offered_price, gr.special_instructions, gr.status, gr.urgency, gr.booked_hours, gr.created_at, gr.updated_at
+            SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
+                   gr.description, gr.offered_price, gr.special_instructions, gr.status,
+                   gr.urgency, gr.booked_hours, a.status AS assignment_status,
+                   gr.created_at, gr.updated_at
             FROM booking.guard_requests gr
             INNER JOIN booking.assignments a ON a.request_id = gr.id
             WHERE a.guard_id = $1
@@ -203,10 +280,18 @@ pub async fn list_requests(
         // Customer sees their own requests
         sqlx::query_as::<_, GuardRequestRow>(
             r#"
-            SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, created_at, updated_at
-            FROM booking.guard_requests
-            WHERE customer_id = $1
-            ORDER BY created_at DESC
+            SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
+                   gr.description, gr.offered_price, gr.special_instructions, gr.status,
+                   gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+            FROM booking.guard_requests gr
+            LEFT JOIN LATERAL (
+                SELECT a.status AS assignment_status
+                FROM booking.assignments a
+                WHERE a.request_id = gr.id AND a.status != 'declined'
+                ORDER BY a.assigned_at DESC LIMIT 1
+            ) la ON true
+            WHERE gr.customer_id = $1
+            ORDER BY gr.created_at DESC
             LIMIT $2 OFFSET $3
             "#,
         )
@@ -230,9 +315,17 @@ pub async fn get_request(
 ) -> Result<GuardRequestResponse, AppError> {
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
-        FROM booking.guard_requests
-        WHERE id = $1
+        SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
+               gr.description, gr.offered_price, gr.special_instructions, gr.status,
+               gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+        FROM booking.guard_requests gr
+        LEFT JOIN LATERAL (
+            SELECT a.status AS assignment_status
+            FROM booking.assignments a
+            WHERE a.request_id = gr.id AND a.status != 'declined'
+            ORDER BY a.assigned_at DESC LIMIT 1
+        ) la ON true
+        WHERE gr.id = $1
         "#,
     )
     .bind(request_id)
@@ -257,9 +350,12 @@ pub async fn cancel_request(
 
     let existing = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
-        FROM booking.guard_requests
-        WHERE id = $1
+        SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
+               gr.description, gr.offered_price, gr.special_instructions, gr.status,
+               gr.urgency, gr.booked_hours, NULL::assignment_status AS assignment_status,
+               gr.created_at, gr.updated_at
+        FROM booking.guard_requests gr
+        WHERE gr.id = $1
         FOR UPDATE
         "#,
     )
@@ -286,7 +382,7 @@ pub async fn cancel_request(
         UPDATE booking.guard_requests
         SET status = 'cancelled'::request_status, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
+        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, NULL::assignment_status AS assignment_status, created_at, updated_at
         "#,
     )
     .bind(request_id)
@@ -324,7 +420,9 @@ pub async fn assign_guard(
     // Verify request exists and is pending (lock row)
     let request = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price,
+               special_instructions, status, urgency, booked_hours,
+               NULL::assignment_status AS assignment_status, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         FOR UPDATE
@@ -363,6 +461,9 @@ pub async fn assign_guard(
         INSERT INTO booking.assignments (request_id, guard_id, status)
         VALUES ($1, $2, 'pending_acceptance'::assignment_status)
         RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::timestamptz AS en_route_at, NULL::float8 AS en_route_lat, NULL::float8 AS en_route_lng, NULL::float8 AS arrived_lat, NULL::float8 AS arrived_lng, NULL::TEXT AS en_route_place, NULL::TEXT AS arrived_place,
+               NULL::float8 AS started_lat, NULL::float8 AS started_lng, NULL::TEXT AS started_place,
+               NULL::float8 AS completion_lat, NULL::float8 AS completion_lng, NULL::TEXT AS completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         "#,
     )
@@ -385,6 +486,7 @@ pub async fn assign_guard(
         Some(serde_json::json!({
             "request_id": request_id.to_string(),
             "assignment_id": assignment.id.to_string(),
+            "target_role": "guard",
         })),
     );
 
@@ -402,12 +504,15 @@ pub async fn update_assignment_status(
     role: &str,
     req: UpdateAssignmentStatusDto,
     redis_conn: &redis::aio::MultiplexedConnection,
+    http_client: &reqwest::Client,
 ) -> Result<AssignmentResponse, AppError> {
     let mut tx = db.begin().await?;
 
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
@@ -459,6 +564,77 @@ pub async fn update_assignment_status(
         existing.completion_requested_at
     };
 
+    // Validate incoming coordinates
+    let (req_lat, req_lng) = sanitize_coords(req.lat, req.lng);
+
+    // Check-in location: capture GPS at en_route and arrived transitions
+    let en_route_at = if req.status == AssignmentStatus::EnRoute {
+        Some(now)
+    } else {
+        existing.en_route_at
+    };
+    let en_route_lat = if req.status == AssignmentStatus::EnRoute {
+        req_lat
+    } else {
+        existing.en_route_lat
+    };
+    let en_route_lng = if req.status == AssignmentStatus::EnRoute {
+        req_lng
+    } else {
+        existing.en_route_lng
+    };
+    let arrived_lat = if req.status == AssignmentStatus::Arrived {
+        req_lat
+    } else {
+        existing.arrived_lat
+    };
+    let arrived_lng = if req.status == AssignmentStatus::Arrived {
+        req_lng
+    } else {
+        existing.arrived_lng
+    };
+
+    // Capture GPS at completion transition
+    let completion_lat = if req.status == AssignmentStatus::PendingCompletion {
+        req_lat
+    } else {
+        existing.completion_lat
+    };
+    let completion_lng = if req.status == AssignmentStatus::PendingCompletion {
+        req_lng
+    } else {
+        existing.completion_lng
+    };
+
+    // Reverse geocode to get place name for check-in location
+    let (en_route_place, arrived_place, completion_place) = match req.status {
+        AssignmentStatus::EnRoute => {
+            let place = if let (Some(lat), Some(lng)) = (req_lat, req_lng) {
+                reverse_geocode(http_client, lat, lng).await
+            } else {
+                None
+            };
+            (place, existing.arrived_place.clone(), existing.completion_place.clone())
+        }
+        AssignmentStatus::Arrived => {
+            let place = if let (Some(lat), Some(lng)) = (req_lat, req_lng) {
+                reverse_geocode(http_client, lat, lng).await
+            } else {
+                None
+            };
+            (existing.en_route_place.clone(), place, existing.completion_place.clone())
+        }
+        AssignmentStatus::PendingCompletion => {
+            let place = if let (Some(lat), Some(lng)) = (req_lat, req_lng) {
+                reverse_geocode(http_client, lat, lng).await
+            } else {
+                None
+            };
+            (existing.en_route_place.clone(), existing.arrived_place.clone(), place)
+        }
+        _ => (existing.en_route_place.clone(), existing.arrived_place.clone(), existing.completion_place.clone()),
+    };
+
     let status_str = serde_json::to_value(&req.status)
         .map_err(|e| AppError::Internal(format!("Failed to serialize status: {e}")))?
         .as_str()
@@ -468,9 +644,14 @@ pub async fn update_assignment_status(
     let row = sqlx::query_as::<_, AssignmentRow>(
         r#"
         UPDATE booking.assignments
-        SET status = $2::assignment_status, arrived_at = $3, completed_at = $4, completion_requested_at = $5
+        SET status = $2::assignment_status, arrived_at = $3, completed_at = $4, completion_requested_at = $5,
+            en_route_at = $6, en_route_lat = $7, en_route_lng = $8, arrived_lat = $9, arrived_lng = $10,
+            en_route_place = $11, arrived_place = $12,
+            completion_lat = $13, completion_lng = $14, completion_place = $15
         WHERE id = $1
         RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         "#,
     )
@@ -479,6 +660,16 @@ pub async fn update_assignment_status(
     .bind(arrived_at)
     .bind(completed_at)
     .bind(completion_requested_at)
+    .bind(en_route_at)
+    .bind(en_route_lat)
+    .bind(en_route_lng)
+    .bind(arrived_lat)
+    .bind(arrived_lng)
+    .bind(&en_route_place)
+    .bind(&arrived_place)
+    .bind(completion_lat)
+    .bind(completion_lng)
+    .bind(&completion_place)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -551,6 +742,7 @@ pub async fn update_assignment_status(
                     Some(serde_json::json!({
                         "request_id": req_id.to_string(),
                         "assignment_id": a_id.to_string(),
+                        "target_role": "customer",
                     })),
                 );
             }
@@ -573,6 +765,8 @@ pub async fn get_assignments(
         SELECT a.id, a.request_id, a.guard_id,
                u.full_name AS guard_name,
                a.status, a.assigned_at, a.arrived_at, a.completed_at, a.started_at, a.completion_requested_at,
+               a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
+               a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place,
                r.overall_rating::float8 AS review_overall_rating,
                r.punctuality::float8 AS review_punctuality,
                r.professionalism::float8 AS review_professionalism,
@@ -641,6 +835,8 @@ pub async fn get_guard_jobs(
                        gr.created_at, gr.updated_at,
                        a.id AS assignment_id, a.status AS assignment_status,
                        a.assigned_at, a.arrived_at, a.completed_at, a.started_at,
+                       a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
+                       a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place,
                        rv.overall_rating::float8 AS review_overall_rating,
                        rv.punctuality::float8 AS review_punctuality,
                        rv.professionalism::float8 AS review_professionalism,
@@ -675,6 +871,8 @@ pub async fn get_guard_jobs(
                        gr.created_at, gr.updated_at,
                        a.id AS assignment_id, a.status AS assignment_status,
                        a.assigned_at, a.arrived_at, a.completed_at, a.started_at,
+                       a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
+                       a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place,
                        rv.overall_rating::float8 AS review_overall_rating,
                        rv.punctuality::float8 AS review_punctuality,
                        rv.professionalism::float8 AS review_professionalism,
@@ -802,6 +1000,8 @@ pub async fn get_guard_dashboard_summary(
                    gr.created_at, gr.updated_at,
                    a.id AS assignment_id, a.status AS assignment_status,
                    a.assigned_at, a.arrived_at, a.completed_at, a.started_at,
+                   a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
+                   a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place,
                    NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality,
                    NULL::float8 AS review_professionalism, NULL::float8 AS review_communication,
                    NULL::float8 AS review_appearance, NULL::TEXT AS review_text
@@ -1287,6 +1487,9 @@ pub async fn accept_or_decline_assignment(
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               NULL::timestamptz AS en_route_at, NULL::float8 AS en_route_lat, NULL::float8 AS en_route_lng, NULL::float8 AS arrived_lat, NULL::float8 AS arrived_lng, NULL::TEXT AS en_route_place, NULL::TEXT AS arrived_place,
+               NULL::float8 AS started_lat, NULL::float8 AS started_lng, NULL::TEXT AS started_place,
+               NULL::float8 AS completion_lat, NULL::float8 AS completion_lng, NULL::TEXT AS completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
@@ -1318,6 +1521,8 @@ pub async fn accept_or_decline_assignment(
         SET status = $2::assignment_status
         WHERE id = $1
         RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         "#,
     )
@@ -1369,6 +1574,7 @@ pub async fn accept_or_decline_assignment(
                         Some(serde_json::json!({
                             "request_id": req_id.to_string(),
                             "assignment_id": a_id.to_string(),
+                            "target_role": "customer",
                         })),
                     );
                 } else {
@@ -1380,6 +1586,7 @@ pub async fn accept_or_decline_assignment(
                         "booking_cancelled",
                         Some(serde_json::json!({
                             "request_id": req_id.to_string(),
+                            "target_role": "customer",
                         })),
                     );
                 }
@@ -1414,7 +1621,9 @@ pub async fn create_payment(
     // Verify request exists and belongs to customer
     let request = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, created_at, updated_at
+        SELECT id, customer_id, location_lat, location_lng, address, description, offered_price,
+               special_instructions, status, urgency, booked_hours,
+               NULL::assignment_status AS assignment_status, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
         FOR UPDATE
@@ -1496,6 +1705,7 @@ pub async fn create_payment(
                     "booking_created",
                     Some(serde_json::json!({
                         "request_id": req_id.to_string(),
+                        "target_role": "guard",
                     })),
                 );
             }
@@ -1513,12 +1723,26 @@ pub async fn start_job(
     db: &PgPool,
     assignment_id: Uuid,
     guard_id: Uuid,
+    lat: Option<f64>,
+    lng: Option<f64>,
+    http_client: &reqwest::Client,
 ) -> Result<ActiveJobResponse, AppError> {
+    // Validate and reverse geocode BEFORE the transaction to avoid holding the row lock
+    // during a potentially slow external HTTP call
+    let (lat, lng) = sanitize_coords(lat, lng);
+    let started_place = if let (Some(lt), Some(lg)) = (lat, lng) {
+        reverse_geocode(http_client, lt, lg).await
+    } else {
+        None
+    };
+
     let mut tx = db.begin().await?;
 
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
@@ -1549,10 +1773,13 @@ pub async fn start_job(
     let now = Utc::now();
 
     sqlx::query(
-        "UPDATE booking.assignments SET started_at = $2 WHERE id = $1",
+        "UPDATE booking.assignments SET started_at = $2, started_lat = $3, started_lng = $4, started_place = $5 WHERE id = $1",
     )
     .bind(assignment_id)
     .bind(now)
+    .bind(lat)
+    .bind(lng)
+    .bind(&started_place)
     .execute(&mut *tx)
     .await?;
 
@@ -1594,6 +1821,20 @@ pub async fn start_job(
         assignment_status: AssignmentStatus::Arrived,
         offered_price: info.offered_price.and_then(|d| d.to_f64()),
         completion_requested_at: None,
+        en_route_at: existing.en_route_at,
+        en_route_lat: existing.en_route_lat,
+        en_route_lng: existing.en_route_lng,
+        arrived_at: existing.arrived_at,
+        arrived_lat: existing.arrived_lat,
+        arrived_lng: existing.arrived_lng,
+        en_route_place: existing.en_route_place,
+        arrived_place: existing.arrived_place,
+        started_lat: lat,
+        started_lng: lng,
+        started_place,
+        completion_lat: None,
+        completion_lng: None,
+        completion_place: None,
     })
 }
 
@@ -1616,13 +1857,29 @@ pub async fn get_active_job(
         completion_requested_at: Option<chrono::DateTime<Utc>>,
         assignment_status: AssignmentStatus,
         offered_price: Option<rust_decimal::Decimal>,
+        en_route_at: Option<chrono::DateTime<Utc>>,
+        en_route_lat: Option<f64>,
+        en_route_lng: Option<f64>,
+        arrived_at: Option<chrono::DateTime<Utc>>,
+        arrived_lat: Option<f64>,
+        arrived_lng: Option<f64>,
+        en_route_place: Option<String>,
+        arrived_place: Option<String>,
+        started_lat: Option<f64>,
+        started_lng: Option<f64>,
+        started_place: Option<String>,
+        completion_lat: Option<f64>,
+        completion_lng: Option<f64>,
+        completion_place: Option<String>,
     }
 
     let row = sqlx::query_as::<_, ActiveJobRow>(
         r#"
         SELECT a.id AS assignment_id, gr.id AS request_id,
                COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours,
-               a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price
+               a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price,
+               a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_at, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
+               a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place
         FROM booking.assignments a
         INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
         INNER JOIN auth.users u ON u.id = gr.customer_id
@@ -1657,6 +1914,20 @@ pub async fn get_active_job(
                 assignment_status: r.assignment_status,
                 offered_price: r.offered_price.and_then(|d| d.to_f64()),
                 completion_requested_at: r.completion_requested_at,
+                en_route_at: r.en_route_at,
+                en_route_lat: r.en_route_lat,
+                en_route_lng: r.en_route_lng,
+                arrived_at: r.arrived_at,
+                arrived_lat: r.arrived_lat,
+                arrived_lng: r.arrived_lng,
+                en_route_place: r.en_route_place,
+                arrived_place: r.arrived_place,
+                started_lat: r.started_lat,
+                started_lng: r.started_lng,
+                started_place: r.started_place,
+                completion_lat: r.completion_lat,
+                completion_lng: r.completion_lng,
+                completion_place: r.completion_place,
             }))
         }
     }
@@ -1700,13 +1971,29 @@ pub async fn get_customer_active_job(
         completion_requested_at: Option<chrono::DateTime<Utc>>,
         assignment_status: AssignmentStatus,
         offered_price: Option<rust_decimal::Decimal>,
+        en_route_at: Option<chrono::DateTime<Utc>>,
+        en_route_lat: Option<f64>,
+        en_route_lng: Option<f64>,
+        arrived_at: Option<chrono::DateTime<Utc>>,
+        arrived_lat: Option<f64>,
+        arrived_lng: Option<f64>,
+        en_route_place: Option<String>,
+        arrived_place: Option<String>,
+        started_lat: Option<f64>,
+        started_lng: Option<f64>,
+        started_place: Option<String>,
+        completion_lat: Option<f64>,
+        completion_lng: Option<f64>,
+        completion_place: Option<String>,
     }
 
     let row = sqlx::query_as::<_, ActiveJobRow>(
         r#"
         SELECT a.id AS assignment_id, gr.id AS request_id,
                u.full_name AS guard_name, gr.address, gr.booked_hours,
-               a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price
+               a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price,
+               a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_at, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
+               a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place
         FROM booking.assignments a
         INNER JOIN booking.guard_requests gr ON gr.id = a.request_id
         INNER JOIN auth.users u ON u.id = a.guard_id
@@ -1740,6 +2027,20 @@ pub async fn get_customer_active_job(
                 assignment_status: r.assignment_status,
                 offered_price: r.offered_price.and_then(|d| d.to_f64()),
                 completion_requested_at: r.completion_requested_at,
+                en_route_at: r.en_route_at,
+                en_route_lat: r.en_route_lat,
+                en_route_lng: r.en_route_lng,
+                arrived_at: r.arrived_at,
+                arrived_lat: r.arrived_lat,
+                arrived_lng: r.arrived_lng,
+                en_route_place: r.en_route_place,
+                arrived_place: r.arrived_place,
+                started_lat: r.started_lat,
+                started_lng: r.started_lng,
+                started_place: r.started_place,
+                completion_lat: r.completion_lat,
+                completion_lng: r.completion_lng,
+                completion_place: r.completion_place,
             }))
         }
     }
@@ -1762,6 +2063,8 @@ pub async fn review_completion(
     let existing = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
@@ -1806,6 +2109,8 @@ pub async fn review_completion(
             SET status = 'completed'::assignment_status, completed_at = $2
             WHERE id = $1
             RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
             "#,
         )
@@ -1835,6 +2140,7 @@ pub async fn review_completion(
             Some(serde_json::json!({
                 "request_id": existing.request_id.to_string(),
                 "assignment_id": assignment_id.to_string(),
+                "target_role": "guard",
             })),
         );
 
@@ -1847,6 +2153,8 @@ pub async fn review_completion(
             SET status = 'arrived'::assignment_status, completion_requested_at = NULL
             WHERE id = $1
             RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
             "#,
         )
@@ -1897,6 +2205,8 @@ pub async fn submit_review(
     let assignment = sqlx::query_as::<_, AssignmentRow>(
         r#"
         SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
                NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
         FROM booking.assignments
         WHERE id = $1
@@ -1963,6 +2273,7 @@ pub async fn submit_review(
         Some(serde_json::json!({
             "assignment_id": assignment_id.to_string(),
             "rating": req.overall_rating.to_string(),
+            "target_role": "guard",
         })),
     );
 
@@ -2044,4 +2355,228 @@ pub async fn list_available_guards(
     .await?;
 
     Ok(rows.into_iter().map(AvailableGuardResponse::from).collect())
+}
+
+// =============================================================================
+// Progress Reports
+// =============================================================================
+
+/// Lightweight row for verifying assignment ownership + status.
+#[derive(Debug, sqlx::FromRow)]
+struct ProgressAssignmentCheck {
+    pub guard_id: Uuid,
+    pub status: AssignmentStatus,
+    pub booked_hours: Option<i32>,
+    pub customer_id: Uuid,
+}
+
+/// Submit an hourly progress report (guard only).
+/// Uses runtime queries (sqlx::query) because progress_reports table is new and
+/// not available at compile-time without a running DB.
+pub async fn submit_progress_report(
+    db: &PgPool,
+    s3_client: &aws_sdk_s3::Client,
+    s3_bucket: &str,
+    s3_endpoint: &str,
+    s3_public_url: &str,
+    assignment_id: Uuid,
+    guard_id: Uuid,
+    hour_number: i32,
+    message: Option<String>,
+    photo_data: Option<(Vec<u8>, String)>, // (bytes, mime_type)
+) -> Result<ProgressReportResponse, AppError> {
+    // 1. Verify assignment exists, belongs to this guard, and is in active status
+    let row = sqlx::query_as::<_, ProgressAssignmentCheck>(
+        r#"
+        SELECT a.guard_id, a.status AS "status",
+               gr.booked_hours, gr.customer_id
+        FROM booking.assignments a
+        JOIN booking.guard_requests gr ON gr.id = a.request_id
+        WHERE a.id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    if row.guard_id != guard_id {
+        return Err(AppError::Forbidden(
+            "You can only submit reports for your own assignments".to_string(),
+        ));
+    }
+
+    let active_statuses = [
+        AssignmentStatus::Accepted,
+        AssignmentStatus::EnRoute,
+        AssignmentStatus::Arrived,
+        AssignmentStatus::PendingCompletion,
+    ];
+    if !active_statuses.contains(&row.status) {
+        return Err(AppError::BadRequest(
+            "Assignment is not in an active state".to_string(),
+        ));
+    }
+
+    // 2. Validate hour_number
+    if hour_number < 1 {
+        return Err(AppError::BadRequest(
+            "hour_number must be >= 1".to_string(),
+        ));
+    }
+    if let Some(booked) = row.booked_hours {
+        if hour_number > booked {
+            return Err(AppError::BadRequest(format!(
+                "hour_number ({hour_number}) exceeds booked_hours ({booked})"
+            )));
+        }
+    }
+
+    // 3. Upload photo if provided
+    let (photo_file_key, photo_mime_type) = if let Some((data, mime)) = photo_data {
+        let ext = crate::s3::mime_to_extension(&mime);
+        let file_key = format!("reports/{assignment_id}/{hour_number}.{ext}");
+        crate::s3::upload_file(s3_client, s3_bucket, &file_key, data, &mime).await?;
+        (Some(file_key), Some(mime))
+    } else {
+        (None, None)
+    };
+
+    // 4. INSERT with ON CONFLICT DO NOTHING — returns None if duplicate
+    let inserted = sqlx::query_as::<_, ProgressReportRow>(
+        r#"
+        INSERT INTO booking.progress_reports (assignment_id, guard_id, hour_number, message, photo_file_key, photo_mime_type)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (assignment_id, hour_number) DO NOTHING
+        RETURNING id, assignment_id, guard_id, hour_number, message, photo_file_key, photo_mime_type, created_at
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(guard_id)
+    .bind(hour_number)
+    .bind(message.as_deref())
+    .bind(photo_file_key.as_deref())
+    .bind(photo_mime_type.as_deref())
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| {
+        AppError::Conflict(format!(
+            "Progress report for hour {hour_number} already submitted"
+        ))
+    })?;
+
+    // 5. Generate signed photo URL
+    let photo_url = if let Some(ref key) = inserted.photo_file_key {
+        let url = crate::s3::get_signed_url(s3_client, s3_bucket, key).await?;
+        // Host rewrite for dev (minio:9000 → public URL)
+        let url = if s3_endpoint != s3_public_url {
+            url.replacen(s3_endpoint, s3_public_url, 1)
+        } else {
+            url
+        };
+        Some(url)
+    } else {
+        None
+    };
+
+    // 6. Notify customer (fire-and-forget)
+    spawn_notification(
+        db.clone(),
+        row.customer_id,
+        "รายงานความคืบหน้า".to_string(),
+        format!("เจ้าหน้าที่ส่งรายงานความคืบหน้าชั่วโมงที่ {hour_number}"),
+        "system",
+        Some(serde_json::json!({
+            "assignment_id": assignment_id.to_string(),
+            "hour_number": hour_number,
+        })),
+    );
+
+    Ok(ProgressReportResponse {
+        id: inserted.id,
+        assignment_id: inserted.assignment_id,
+        guard_id: inserted.guard_id,
+        hour_number: inserted.hour_number,
+        message: inserted.message,
+        photo_url,
+        created_at: inserted.created_at,
+    })
+}
+
+/// List progress reports for an assignment (guard, customer, or admin).
+pub async fn list_progress_reports(
+    db: &PgPool,
+    s3_client: &aws_sdk_s3::Client,
+    s3_bucket: &str,
+    s3_endpoint: &str,
+    s3_public_url: &str,
+    assignment_id: Uuid,
+    user_id: Uuid,
+    user_role: &str,
+) -> Result<Vec<ProgressReportResponse>, AppError> {
+    // 1. Verify access: admin can see all, guard/customer must be involved
+    if user_role != "admin" {
+        let has_access: Option<bool> = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM booking.assignments a
+                JOIN booking.guard_requests gr ON gr.id = a.request_id
+                WHERE a.id = $1
+                  AND (a.guard_id = $2 OR gr.customer_id = $2)
+            )
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(user_id)
+        .fetch_one(db)
+        .await?;
+
+        if has_access != Some(true) {
+            return Err(AppError::Forbidden(
+                "You don't have access to this assignment's reports".to_string(),
+            ));
+        }
+    }
+
+    // 2. Fetch all reports
+    let rows = sqlx::query_as::<_, ProgressReportRow>(
+        r#"
+        SELECT id, assignment_id, guard_id, hour_number, message, photo_file_key, photo_mime_type, created_at
+        FROM booking.progress_reports
+        WHERE assignment_id = $1
+        ORDER BY hour_number ASC
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_all(db)
+    .await?;
+
+    // 3. Re-sign photo URLs
+    let rewrite = s3_endpoint != s3_public_url;
+    let mut responses = Vec::with_capacity(rows.len());
+    for row in rows {
+        let photo_url = if let Some(ref key) = row.photo_file_key {
+            let url = crate::s3::get_signed_url(s3_client, s3_bucket, key).await?;
+            let url = if rewrite {
+                url.replacen(s3_endpoint, s3_public_url, 1)
+            } else {
+                url
+            };
+            Some(url)
+        } else {
+            None
+        };
+
+        responses.push(ProgressReportResponse {
+            id: row.id,
+            assignment_id: row.assignment_id,
+            guard_id: row.guard_id,
+            hour_number: row.hour_number,
+            message: row.message,
+            photo_url,
+            created_at: row.created_at,
+        });
+    }
+
+    Ok(responses)
 }

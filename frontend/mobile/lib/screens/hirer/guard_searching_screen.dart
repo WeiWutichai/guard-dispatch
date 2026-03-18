@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
+import 'guard_detail_screen.dart';
 import 'waiting_for_guard_screen.dart';
 
 class GuardSearchingScreen extends StatefulWidget {
@@ -410,6 +411,22 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
       ),
       child: Column(
         children: [
+          // Tappable area → guard detail
+          GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GuardDetailScreen(
+                    guard: guard,
+                    onConfirm: () => _assignGuard(guardId, guard),
+                  ),
+                ),
+              );
+            },
+            behavior: HitTestBehavior.opaque,
+            child: Column(
+              children: [
           // Top section
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
@@ -636,48 +653,99 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
             ),
           ),
 
+              ],
+            ),
+          ), // end GestureDetector
+
           const SizedBox(height: 14),
 
-          // Confirm button
+          // Action buttons row
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: SizedBox(
-              width: double.infinity,
-              height: 46,
-              child: ElevatedButton(
-                onPressed:
-                    _isAssigning ? null : () => _assignGuard(guardId, guard),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  disabledBackgroundColor:
-                      AppColors.primary.withValues(alpha: 0.5),
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                child: isAssigningThis
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2),
-                      )
-                    : Row(
+            child: Row(
+              children: [
+                // View reviews button
+                Expanded(
+                  child: SizedBox(
+                    height: 46,
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => GuardDetailScreen(
+                              guard: guard,
+                              onConfirm: () => _assignGuard(guardId, guard),
+                            ),
+                          ),
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        side: const BorderSide(color: AppColors.primary),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.shield_rounded, size: 18),
-                          const SizedBox(width: 8),
+                          const Icon(Icons.rate_review_outlined, size: 16),
+                          const SizedBox(width: 6),
                           Text(
-                            isThai ? 'ยืนยันการจอง' : 'Confirm Booking',
+                            isThai ? 'ดูรีวิว' : 'Reviews',
                             style: GoogleFonts.inter(
-                              fontSize: 15,
+                              fontSize: 14,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
                       ),
-              ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Confirm booking button
+                Expanded(
+                  flex: 2,
+                  child: SizedBox(
+                    height: 46,
+                    child: ElevatedButton(
+                      onPressed:
+                          _isAssigning ? null : () => _assignGuard(guardId, guard),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        disabledBackgroundColor:
+                            AppColors.primary.withValues(alpha: 0.5),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: isAssigningThis
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2),
+                            )
+                          : Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.shield_rounded, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  isThai ? 'ยืนยันการจอง' : 'Confirm Booking',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],

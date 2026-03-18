@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:provider/provider.dart';
@@ -85,9 +86,22 @@ class _GuardNavigationScreenState extends State<GuardNavigationScreen> {
     final isThai = LanguageProvider.of(context).isThai;
     setState(() => _isUpdating = true);
     try {
+      // Capture GPS at arrived check-in
+      double? gpsLat;
+      double? gpsLng;
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+        );
+        gpsLat = pos.latitude;
+        gpsLng = pos.longitude;
+      } catch (_) {
+        // Proceed without GPS if unavailable
+      }
+      if (!mounted) return;
       await context
           .read<BookingProvider>()
-          .updateAssignmentStatus(widget.assignmentId, 'arrived');
+          .updateAssignmentStatus(widget.assignmentId, 'arrived', lat: gpsLat, lng: gpsLng);
       if (!mounted) return;
       // Clear navigation tracking (back to general GPS)
       context.read<TrackingProvider>().clearAssignment();

@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:provider/provider.dart';
 import 'package:web_socket_channel/io.dart';
 import '../../theme/colors.dart';
@@ -344,6 +347,9 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                     ),
                   ),
 
+                  // Location map
+                  _buildLocationMap(job, isThai),
+
                   // Urgency badge
                   if (urgency != 'medium') ...[
                     const SizedBox(height: 12),
@@ -473,6 +479,9 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                       ),
                     ),
                   ],
+
+                  // Check-in timeline
+                  _buildCheckinTimeline(_job, isThai),
 
                   // Action button area
                   if (assignmentStatus == 'pending_acceptance') ...[
@@ -617,6 +626,204 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
   }
 
   // =========================================================================
+  // Check-in timeline
+  // =========================================================================
+
+  String _formatCheckinTime(String? isoString) {
+    if (isoString == null) return '--:--';
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '--:--';
+    }
+  }
+
+  String _formatCoords(double? lat, double? lng) {
+    if (lat == null || lng == null) return '';
+    return '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+  }
+
+  Widget _buildCheckinTimeline(Map<String, dynamic> job, bool isThai) {
+    final enRouteAt = job['en_route_at'] as String?;
+    final arrivedAt = job['arrived_at'] as String?;
+    final startedAt = job['started_at'] as String?;
+
+    // Only show if at least one check-in has happened
+    if (enRouteAt == null && arrivedAt == null && startedAt == null) {
+      return const SizedBox.shrink();
+    }
+
+    final enRoutePlace = job['en_route_place'] as String?;
+    final arrivedPlace = job['arrived_place'] as String?;
+    final enRouteLat = (job['en_route_lat'] as num?)?.toDouble();
+    final enRouteLng = (job['en_route_lng'] as num?)?.toDouble();
+    final arrivedLat = (job['arrived_lat'] as num?)?.toDouble();
+    final arrivedLng = (job['arrived_lng'] as num?)?.toDouble();
+
+    return Column(
+      children: [
+        const SizedBox(height: 20),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF0FDF4),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppColors.primary.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.timeline_rounded,
+                      size: 18, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    isThai ? 'ไทม์ไลน์เช็คอิน' : 'Check-in Timeline',
+                    style: GoogleFonts.inter(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildTimelineStep(
+                icon: Icons.directions_car_rounded,
+                label: isThai ? 'เริ่มเดินทาง' : 'En Route',
+                time: _formatCheckinTime(enRouteAt),
+                coords: enRoutePlace ?? _formatCoords(enRouteLat, enRouteLng),
+                isActive: enRouteAt != null,
+                isLast: false,
+              ),
+              _buildTimelineStep(
+                icon: Icons.location_on_rounded,
+                label: isThai ? 'ถึงจุดหมาย' : 'Arrived',
+                time: _formatCheckinTime(arrivedAt),
+                coords: arrivedPlace ?? _formatCoords(arrivedLat, arrivedLng),
+                isActive: arrivedAt != null,
+                isLast: false,
+              ),
+              _buildTimelineStep(
+                icon: Icons.play_circle_rounded,
+                label: isThai ? 'เริ่มงาน' : 'Started',
+                time: _formatCheckinTime(startedAt),
+                coords: '',
+                isActive: startedAt != null,
+                isLast: true,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTimelineStep({
+    required IconData icon,
+    required String label,
+    required String time,
+    required String coords,
+    required bool isActive,
+    required bool isLast,
+  }) {
+    final color = isActive ? AppColors.primary : const Color(0xFFCBD5E1);
+    final hasCoords = coords.isNotEmpty && isActive;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Timeline dot and line
+        Column(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: isActive
+                    ? AppColors.primary.withValues(alpha: 0.15)
+                    : const Color(0xFFF1F5F9),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 16, color: color),
+            ),
+            if (!isLast)
+              Container(
+                width: 2,
+                height: hasCoords ? 36 : 24,
+                color: isActive
+                    ? AppColors.primary.withValues(alpha: 0.3)
+                    : const Color(0xFFE2E8F0),
+              ),
+          ],
+        ),
+        const SizedBox(width: 12),
+        // Label, time, and coordinates
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: isLast ? 0 : 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+                          color: isActive
+                              ? AppColors.textPrimary
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      time,
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: isActive
+                            ? AppColors.primary
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+                if (hasCoords) ...[
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Icon(Icons.pin_drop_outlined,
+                          size: 12,
+                          color: AppColors.textSecondary.withValues(alpha: 0.7)),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          coords,
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            color: AppColors.textSecondary.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // =========================================================================
   // Description parser
   // =========================================================================
 
@@ -747,6 +954,120 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // =========================================================================
+  // Location map
+  // =========================================================================
+
+  Widget _buildLocationMap(Map<String, dynamic> job, bool isThai) {
+    final lat = (job['location_lat'] as num?)?.toDouble();
+    final lng = (job['location_lng'] as num?)?.toDouble();
+
+    if (lat == null || lng == null) return const SizedBox.shrink();
+
+    final center = LatLng(lat, lng);
+    final address = job['address'] as String? ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Map header with expand button
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              color: const Color(0xFFF8FAFC),
+              child: Row(
+                children: [
+                  const Icon(Icons.location_on_rounded,
+                      size: 18, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      isThai ? 'ตำแหน่งงาน' : 'Job Location',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => _openFullscreenMap(center, address, isThai),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Icon(Icons.fullscreen_rounded,
+                          size: 20, color: AppColors.primary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Map
+            GestureDetector(
+              onTap: () => _openFullscreenMap(center, address, isThai),
+              child: SizedBox(
+                height: 180,
+                child: AbsorbPointer(
+                  child: FlutterMap(
+                    options: MapOptions(
+                      initialCenter: center,
+                      initialZoom: 15,
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.secureguard.app',
+                      ),
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: center,
+                            width: 40,
+                            height: 40,
+                            child: const Icon(
+                              Icons.location_on_rounded,
+                              color: AppColors.danger,
+                              size: 40,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openFullscreenMap(LatLng center, String address, bool isThai) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _FullscreenMapScreen(
+          center: center,
+          address: address,
+          isThai: isThai,
+        ),
       ),
     );
   }
@@ -964,9 +1285,18 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
             }
           } else if (status == 'arrived') {
             try {
+              // Capture GPS at job start
+              double? startLat, startLng;
+              try {
+                final pos = await Geolocator.getCurrentPosition(
+                  locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+                );
+                startLat = pos.latitude;
+                startLng = pos.longitude;
+              } catch (_) {}
               final result = await context
                   .read<BookingProvider>()
-                  .startActiveJob(assignmentId);
+                  .startActiveJob(assignmentId, lat: startLat, lng: startLng);
               if (!context.mounted) return;
               Navigator.pushReplacement(
                 context,
@@ -995,12 +1325,25 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
               );
             }
           } else if (status == 'accepted' || status == 'assigned') {
-            // Start Route → update status + navigate to map navigation
+            // Start Route → capture GPS + update status + navigate to map
             final customerLat = (_job['location_lat'] as num?)?.toDouble();
             final customerLng = (_job['location_lng'] as num?)?.toDouble();
+            // Capture GPS at check-in
+            double? gpsLat;
+            double? gpsLng;
+            try {
+              final pos = await Geolocator.getCurrentPosition(
+                desiredAccuracy: LocationAccuracy.high,
+              );
+              gpsLat = pos.latitude;
+              gpsLng = pos.longitude;
+            } catch (_) {
+              // Proceed without GPS if unavailable
+            }
+            if (!context.mounted) return;
             await context
                 .read<BookingProvider>()
-                .updateAssignmentStatus(assignmentId, 'en_route');
+                .updateAssignmentStatus(assignmentId, 'en_route', lat: gpsLat, lng: gpsLng);
             if (!context.mounted) return;
             if (customerLat != null && customerLng != null) {
               Navigator.push(
@@ -1062,4 +1405,224 @@ class _DetailLine {
   final IconData icon;
   final String text;
   const _DetailLine({required this.icon, required this.text});
+}
+
+// =============================================================================
+// Fullscreen Map Screen
+// =============================================================================
+
+class _FullscreenMapScreen extends StatefulWidget {
+  final LatLng center;
+  final String address;
+  final bool isThai;
+
+  const _FullscreenMapScreen({
+    required this.center,
+    required this.address,
+    required this.isThai,
+  });
+
+  @override
+  State<_FullscreenMapScreen> createState() => _FullscreenMapScreenState();
+}
+
+class _FullscreenMapScreenState extends State<_FullscreenMapScreen> {
+  final MapController _mapController = MapController();
+
+  void _zoomIn() {
+    final zoom = _mapController.camera.zoom;
+    _mapController.move(_mapController.camera.center, zoom + 1);
+  }
+
+  void _zoomOut() {
+    final zoom = _mapController.camera.zoom;
+    if (zoom > 2) {
+      _mapController.move(_mapController.camera.center, zoom - 1);
+    }
+  }
+
+  void _recenter() {
+    _mapController.move(widget.center, 15);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Stack(
+        children: [
+          // Full map
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: widget.center,
+              initialZoom: 15,
+              minZoom: 3,
+              maxZoom: 18,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate:
+                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.secureguard.app',
+              ),
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: widget.center,
+                    width: 48,
+                    height: 48,
+                    child: const Icon(
+                      Icons.location_on_rounded,
+                      color: AppColors.danger,
+                      size: 48,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          // Top bar
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(8, 56, 16, 12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.5),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white, size: 20),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.isThai ? 'ตำแหน่งงาน' : 'Job Location',
+                          style: GoogleFonts.inter(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        if (widget.address.isNotEmpty)
+                          Text(
+                            widget.address,
+                            style: GoogleFonts.inter(
+                              fontSize: 12,
+                              color: Colors.white.withValues(alpha: 0.9),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Zoom controls
+          Positioned(
+            right: 16,
+            bottom: 100,
+            child: Column(
+              children: [
+                _buildMapButton(Icons.add_rounded, _zoomIn),
+                const SizedBox(height: 8),
+                _buildMapButton(Icons.remove_rounded, _zoomOut),
+                const SizedBox(height: 8),
+                _buildMapButton(Icons.my_location_rounded, _recenter),
+              ],
+            ),
+          ),
+
+          // Bottom address card
+          if (widget.address.isNotEmpty)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 40,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.location_on_rounded,
+                          color: AppColors.primary, size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        widget.address,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textPrimary,
+                          height: 1.4,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMapButton(IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Icon(icon, color: AppColors.textPrimary, size: 22),
+      ),
+    );
+  }
 }

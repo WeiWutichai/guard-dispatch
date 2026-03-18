@@ -3,9 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:web_socket_channel/io.dart';
+import '../../l10n/app_strings.dart';
 import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
 import '../../services/auth_service.dart';
@@ -45,6 +48,25 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
   bool _isCompleting = false;
   bool _isPendingCompletion = false;
 
+  // Progress report tracking
+  final Set<int> _reportedHours = {};
+  int _lastCheckedHour = 0;
+  bool _isReportDialogOpen = false;
+
+  // Check-in timestamps and locations (populated from server sync)
+  String? _enRouteAt;
+  String? _arrivedAt;
+  String? _startedAt;
+  double? _enRouteLat;
+  double? _enRouteLng;
+  double? _arrivedLat;
+  double? _arrivedLng;
+  String? _enRoutePlace;
+  String? _arrivedPlace;
+  String? _startedPlace;
+  String? _completionPlace;
+  String? _completionRequestedAt;
+
   // WebSocket for real-time status updates (customer review detection)
   IOWebSocketChannel? _wsChannel;
   StreamSubscription<dynamic>? _wsSub;
@@ -59,6 +81,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_remaining > 0 && !_isPendingCompletion) {
         setState(() => _remaining--);
+        _checkHourBoundary();
       } else if (_remaining <= 0 && !_isPendingCompletion) {
         _timer?.cancel();
         _showCompleteDialog();
@@ -71,6 +94,9 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
 
     // Immediate sync to get accurate server time
     _resyncTimer();
+
+    // Load existing reports to populate _reportedHours
+    _loadExistingReports();
   }
 
   Future<void> _connectAssignmentWs(String requestId) async {
@@ -198,6 +224,25 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       _startStatusPolling();
     }
 
+    // Update check-in timestamps and locations from server
+    final enRouteAt = data['en_route_at'] as String?;
+    final arrivedAt = data['arrived_at'] as String?;
+    final startedAtVal = data['started_at'] as String?;
+    setState(() {
+      _enRouteAt = enRouteAt ?? _enRouteAt;
+      _arrivedAt = arrivedAt ?? _arrivedAt;
+      _startedAt = startedAtVal ?? _startedAt;
+      _enRouteLat = (data['en_route_lat'] as num?)?.toDouble() ?? _enRouteLat;
+      _enRouteLng = (data['en_route_lng'] as num?)?.toDouble() ?? _enRouteLng;
+      _arrivedLat = (data['arrived_lat'] as num?)?.toDouble() ?? _arrivedLat;
+      _arrivedLng = (data['arrived_lng'] as num?)?.toDouble() ?? _arrivedLng;
+      _enRoutePlace = (data['en_route_place'] as String?) ?? _enRoutePlace;
+      _arrivedPlace = (data['arrived_place'] as String?) ?? _arrivedPlace;
+      _startedPlace = (data['started_place'] as String?) ?? _startedPlace;
+      _completionPlace = (data['completion_place'] as String?) ?? _completionPlace;
+      _completionRequestedAt = (data['completion_requested_at'] as String?) ?? _completionRequestedAt;
+    });
+
     // Prefer started_at-based calculation for consistency with customer screen
     final serverStartedAt = data['started_at'] as String?;
     if (serverStartedAt != null) {
@@ -292,9 +337,18 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     final isThai = LanguageProvider.of(context).isThai;
     setState(() => _isCompleting = true);
     try {
+      // Capture GPS at completion
+      double? lat, lng;
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        );
+        lat = pos.latitude;
+        lng = pos.longitude;
+      } catch (_) {}
       await context
           .read<BookingProvider>()
-          .updateAssignmentStatus(widget.assignmentId, 'pending_completion');
+          .updateAssignmentStatus(widget.assignmentId, 'pending_completion', lat: lat, lng: lng);
       if (!mounted) return;
       setState(() {
         _isPendingCompletion = true;
@@ -433,6 +487,65 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     );
   }
 
+  // =========================================================================
+  // Progress Report — Hour Boundary Detection
+  // =========================================================================
+
+  void _checkHourBoundary() {
+    final total = widget.bookedHours * 3600;
+    final elapsed = total - _remaining;
+    final currentHour = elapsed ~/ 3600; // 0→1→2→3...
+
+    if (currentHour > _lastCheckedHour && currentHour <= widget.bookedHours) {
+      _lastCheckedHour = currentHour;
+      if (!_reportedHours.contains(currentHour) && !_isReportDialogOpen) {
+        _showProgressReportDialog(currentHour);
+      }
+    }
+  }
+
+  Future<void> _loadExistingReports() async {
+    try {
+      final reports = await context
+          .read<BookingProvider>()
+          .fetchProgressReports(widget.assignmentId)
+          .then((_) => context.read<BookingProvider>().progressReports);
+      if (!mounted) return;
+      setState(() {
+        for (final r in reports) {
+          final h = r['hour_number'] as int?;
+          if (h != null) _reportedHours.add(h);
+        }
+        // Set _lastCheckedHour so we don't re-trigger for past hours
+        final total = widget.bookedHours * 3600;
+        final elapsed = total - _remaining;
+        _lastCheckedHour = elapsed ~/ 3600;
+      });
+    } catch (_) {}
+  }
+
+  void _showProgressReportDialog(int hourNumber) {
+    _isReportDialogOpen = true;
+    final isThai = LanguageProvider.of(context).isThai;
+    final strings = ProgressReportStrings(isThai: isThai);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ProgressReportSheet(
+        hourNumber: hourNumber,
+        assignmentId: widget.assignmentId,
+        strings: strings,
+        isThai: isThai,
+      ),
+    ).then((_) {
+      _isReportDialogOpen = false;
+      // Mark hour as handled (whether submitted or skipped)
+      setState(() => _reportedHours.add(hourNumber));
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
@@ -522,136 +635,149 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
             ),
           ),
 
-          const Spacer(flex: 2),
+          // Scrollable content area
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Column(
+                children: [
+                  const SizedBox(height: 24),
 
-          // Countdown timer ring
-          SizedBox(
-            width: 240,
-            height: 240,
-            child: CustomPaint(
-              painter: _TimerRingPainter(
-                progress: _progress,
-                isTimeUp: isTimeUp,
-                isPending: _isPendingCompletion,
-              ),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_isPendingCompletion) ...[
-                      Icon(Icons.hourglass_top_rounded,
-                          size: 40, color: Colors.amber.shade700),
-                      const SizedBox(height: 8),
-                      Text(
-                        isThai ? 'รอตรวจสอบ' : 'Pending',
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.amber.shade700,
+                  // Countdown timer ring
+                  SizedBox(
+                    width: 220,
+                    height: 220,
+                    child: CustomPaint(
+                      painter: _TimerRingPainter(
+                        progress: _progress,
+                        isTimeUp: isTimeUp,
+                        isPending: _isPendingCompletion,
+                      ),
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_isPendingCompletion) ...[
+                              Icon(Icons.hourglass_top_rounded,
+                                  size: 40, color: Colors.amber.shade700),
+                              const SizedBox(height: 8),
+                              Text(
+                                isThai ? 'รอตรวจสอบ' : 'Pending',
+                                style: GoogleFonts.inter(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.amber.shade700,
+                                ),
+                              ),
+                            ] else ...[
+                              Text(
+                                timeStr,
+                                style: GoogleFonts.inter(
+                                  fontSize: 40,
+                                  fontWeight: FontWeight.bold,
+                                  color: isTimeUp
+                                      ? AppColors.danger
+                                      : AppColors.textPrimary,
+                                  letterSpacing: 2,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                isThai ? 'เวลาที่เหลือ' : 'Remaining',
+                                style: GoogleFonts.inter(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                    ] else ...[
-                      Text(
-                        timeStr,
-                        style: GoogleFonts.inter(
-                          fontSize: 40,
-                          fontWeight: FontWeight.bold,
-                          color: isTimeUp
-                              ? AppColors.danger
-                              : AppColors.textPrimary,
-                          letterSpacing: 2,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        isThai ? 'เวลาที่เหลือ' : 'Remaining',
-                        style: GoogleFonts.inter(
-                          fontSize: 13,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 36),
-
-          // Job details card
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFC),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Column(
-              children: [
-                if (widget.customerName != null) ...[
-                  _buildDetailRow(
-                    Icons.person_rounded,
-                    isThai ? 'ลูกค้า' : 'Customer',
-                    widget.customerName!,
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (widget.address != null) ...[
-                  _buildDetailRow(
-                    Icons.location_on_rounded,
-                    isThai ? 'สถานที่' : 'Location',
-                    widget.address!,
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                _buildDetailRow(
-                  Icons.access_time_rounded,
-                  isThai ? 'ระยะเวลาจอง' : 'Booked Duration',
-                  '${widget.bookedHours} ${isThai ? 'ชั่วโมง' : 'hours'}',
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          // Status badge
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            decoration: BoxDecoration(
-              color: badgeColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: badgeColor.withValues(alpha: 0.3),
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(badgeIcon, size: 20, color: badgeColor),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    badgeText,
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: badgeColor,
                     ),
                   ),
-                ),
-              ],
+
+                  const SizedBox(height: 24),
+
+                  // Job details card
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 24),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      children: [
+                        if (widget.customerName != null) ...[
+                          _buildDetailRow(
+                            Icons.person_rounded,
+                            isThai ? 'ลูกค้า' : 'Customer',
+                            widget.customerName!,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (widget.address != null) ...[
+                          _buildDetailRow(
+                            Icons.location_on_rounded,
+                            isThai ? 'สถานที่' : 'Location',
+                            widget.address!,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        _buildDetailRow(
+                          Icons.access_time_rounded,
+                          isThai ? 'ระยะเวลาจอง' : 'Booked Duration',
+                          '${widget.bookedHours} ${isThai ? 'ชั่วโมง' : 'hours'}',
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Check-in timeline
+                  _buildCheckinTimeline(isThai),
+
+                  const SizedBox(height: 16),
+
+                  // Status badge
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 24),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: badgeColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: badgeColor.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(badgeIcon, size: 20, color: badgeColor),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            badgeText,
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: badgeColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
 
-          const Spacer(flex: 3),
-
-          // Complete job button (disabled when pending)
+          // Bottom buttons (fixed)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
             child: SizedBox(
               width: double.infinity,
               height: 54,
@@ -700,9 +826,6 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
             ),
           ),
 
-          const SizedBox(height: 12),
-
-          // Back to home button
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
             child: SizedBox(
@@ -731,6 +854,144 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  String _formatCheckinTime(String? isoString) {
+    if (isoString == null) return '--:--';
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '--:--';
+    }
+  }
+
+  String _formatCoords(double? lat, double? lng) {
+    if (lat == null || lng == null) return '';
+    return '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
+  }
+
+  Widget _buildCheckinTimeline(bool isThai) {
+    if (_enRouteAt == null && _arrivedAt == null && _startedAt == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.timeline_rounded,
+                  size: 16, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Text(
+                isThai ? 'เช็คอิน' : 'Check-in',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildTimelineRow(
+            Icons.directions_car_rounded,
+            isThai ? 'เริ่มเดินทาง' : 'En Route',
+            _formatCheckinTime(_enRouteAt),
+            _enRoutePlace ?? _formatCoords(_enRouteLat, _enRouteLng),
+            _enRouteAt != null,
+          ),
+          const SizedBox(height: 6),
+          _buildTimelineRow(
+            Icons.location_on_rounded,
+            isThai ? 'ถึงจุดหมาย' : 'Arrived',
+            _formatCheckinTime(_arrivedAt),
+            _arrivedPlace ?? _formatCoords(_arrivedLat, _arrivedLng),
+            _arrivedAt != null,
+          ),
+          const SizedBox(height: 6),
+          _buildTimelineRow(
+            Icons.play_circle_rounded,
+            isThai ? 'เริ่มงาน' : 'Started',
+            _formatCheckinTime(_startedAt),
+            _startedPlace ?? '',
+            _startedAt != null,
+          ),
+          if (_completionRequestedAt != null) ...[
+            const SizedBox(height: 6),
+            _buildTimelineRow(
+              Icons.check_circle_rounded,
+              isThai ? 'สิ้นสุดงาน' : 'Job Ended',
+              _formatCheckinTime(_completionRequestedAt),
+              _completionPlace ?? '',
+              true,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimelineRow(
+      IconData icon, String label, String time, String coords, bool isActive) {
+    final color = isActive ? AppColors.primary : const Color(0xFFCBD5E1);
+    final hasCoords = coords.isNotEmpty && isActive;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: isActive ? AppColors.textPrimary : AppColors.textSecondary,
+                ),
+              ),
+            ),
+            Text(
+              time,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isActive ? AppColors.primary : AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+        if (hasCoords)
+          Padding(
+            padding: const EdgeInsets.only(left: 24, top: 2),
+            child: Row(
+              children: [
+                Icon(Icons.pin_drop_outlined,
+                    size: 11,
+                    color: AppColors.textSecondary.withValues(alpha: 0.7)),
+                const SizedBox(width: 4),
+                Text(
+                  coords,
+                  style: GoogleFonts.inter(
+                    fontSize: 10,
+                    color: AppColors.textSecondary.withValues(alpha: 0.7),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 
@@ -823,4 +1084,313 @@ class _TimerRingPainter extends CustomPainter {
       old.progress != progress ||
       old.isTimeUp != isTimeUp ||
       old.isPending != isPending;
+}
+
+// =============================================================================
+// Progress Report Bottom Sheet
+// =============================================================================
+
+class _ProgressReportSheet extends StatefulWidget {
+  final int hourNumber;
+  final String assignmentId;
+  final ProgressReportStrings strings;
+  final bool isThai;
+
+  const _ProgressReportSheet({
+    required this.hourNumber,
+    required this.assignmentId,
+    required this.strings,
+    required this.isThai,
+  });
+
+  @override
+  State<_ProgressReportSheet> createState() => _ProgressReportSheetState();
+}
+
+class _ProgressReportSheetState extends State<_ProgressReportSheet> {
+  final _messageController = TextEditingController();
+  File? _photo;
+  bool _isSubmitting = false;
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (picked != null && mounted) {
+        setState(() => _photo = File(picked.path));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _submit() async {
+    setState(() => _isSubmitting = true);
+    try {
+      await context.read<BookingProvider>().submitProgressReport(
+            widget.assignmentId,
+            hourNumber: widget.hourNumber,
+            message: _messageController.text.trim().isEmpty
+                ? null
+                : _messageController.text.trim(),
+            photo: _photo,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.strings.submitSuccess),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.primary,
+        ),
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${widget.strings.submitError}: $e'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.strings;
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Container(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Drag handle
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1D5DB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Title
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.assignment_rounded,
+                      color: AppColors.primary, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.title,
+                        style: GoogleFonts.inter(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        '${s.hourLabel} ${widget.hourNumber}',
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // Photo section
+            if (_photo != null) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.file(
+                  _photo!,
+                  height: 180,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton.icon(
+                  onPressed: () => setState(() => _photo = null),
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  label: Text(
+                    widget.isThai ? 'ลบรูป' : 'Remove Photo',
+                    style: GoogleFonts.inter(fontSize: 13),
+                  ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                  ),
+                ),
+              ),
+            ] else ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildPhotoButton(
+                      Icons.camera_alt_rounded,
+                      s.takePhoto,
+                      () => _pickPhoto(ImageSource.camera),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildPhotoButton(
+                      Icons.photo_library_rounded,
+                      s.chooseGallery,
+                      () => _pickPhoto(ImageSource.gallery),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 16),
+
+            // Message input
+            TextField(
+              controller: _messageController,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText: s.messagePlaceholder,
+                hintStyle: GoogleFonts.inter(
+                  fontSize: 14,
+                  color: AppColors.textSecondary,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AppColors.border),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AppColors.border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+                ),
+                contentPadding: const EdgeInsets.all(14),
+              ),
+              style: GoogleFonts.inter(fontSize: 14),
+            ),
+            const SizedBox(height: 20),
+
+            // Submit button
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                onPressed: _isSubmitting ? null : _submit,
+                icon: _isSubmitting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send_rounded, size: 20),
+                label: Text(
+                  _isSubmitting ? s.submitting : s.submit,
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.5),
+                  disabledForegroundColor: Colors.white70,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Skip button
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: TextButton(
+                onPressed: _isSubmitting ? null : () => Navigator.pop(context),
+                child: Text(
+                  s.skip,
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoButton(IconData icon, String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        decoration: BoxDecoration(
+          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, size: 28, color: AppColors.primary),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

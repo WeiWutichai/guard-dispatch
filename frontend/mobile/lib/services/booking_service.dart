@@ -1,3 +1,7 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
+
 import '../services/api_client.dart';
 
 class BookingService {
@@ -43,11 +47,16 @@ class BookingService {
   /// PUT /booking/assignments/{id}/status
   Future<Map<String, dynamic>> updateAssignmentStatus(
     String assignmentId,
-    String status,
-  ) async {
+    String status, {
+    double? lat,
+    double? lng,
+  }) async {
+    final body = <String, dynamic>{'status': status};
+    if (lat != null) body['lat'] = lat;
+    if (lng != null) body['lng'] = lng;
     final response = await _apiClient.dio.put(
       '/booking/assignments/$assignmentId/status',
-      data: {'status': status},
+      data: body,
     );
     return response.data['data'] as Map<String, dynamic>;
   }
@@ -110,6 +119,18 @@ class BookingService {
   /// GET /booking/guard/ratings
   Future<Map<String, dynamic>> getGuardRatings() async {
     final response = await _apiClient.dio.get('/booking/guard/ratings');
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// GET /booking/guards/{guardId}/reviews — public guard reviews (any authenticated user).
+  Future<Map<String, dynamic>> getGuardReviews(String guardId) async {
+    final response = await _apiClient.dio.get('/booking/guards/$guardId/reviews');
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// GET /auth/guards/{guardId}/profile — public guard profile with documents (no bank info).
+  Future<Map<String, dynamic>> getGuardProfile(String guardId) async {
+    final response = await _apiClient.dio.get('/auth/guards/$guardId/profile');
     return response.data['data'] as Map<String, dynamic>;
   }
 
@@ -284,9 +305,17 @@ class BookingService {
   // =========================================================================
 
   /// PUT /booking/assignments/{id}/start — guard starts the job.
-  Future<Map<String, dynamic>> startJob(String assignmentId) async {
+  Future<Map<String, dynamic>> startJob(
+    String assignmentId, {
+    double? lat,
+    double? lng,
+  }) async {
+    final body = <String, dynamic>{};
+    if (lat != null) body['lat'] = lat;
+    if (lng != null) body['lng'] = lng;
     final response = await _apiClient.dio.put(
       '/booking/assignments/$assignmentId/start',
+      data: body.isNotEmpty ? body : null,
     );
     return response.data['data'] as Map<String, dynamic>;
   }
@@ -323,5 +352,51 @@ class BookingService {
     } catch (_) {
       return null;
     }
+  }
+
+  // =========================================================================
+  // Progress Reports
+  // =========================================================================
+
+  /// POST /booking/assignments/{id}/progress-reports — submit hourly report (multipart).
+  Future<Map<String, dynamic>> submitProgressReport(
+    String assignmentId, {
+    required int hourNumber,
+    String? message,
+    File? photo,
+  }) async {
+    final formMap = <String, dynamic>{
+      'hour_number': hourNumber.toString(),
+    };
+    if (message != null && message.isNotEmpty) {
+      formMap['message'] = message;
+    }
+    if (photo != null) {
+      formMap['photo'] = await MultipartFile.fromFile(
+        photo.path,
+        filename: photo.path.split('/').last,
+      );
+    }
+
+    final formData = FormData.fromMap(formMap);
+    final response = await _apiClient.dio.post(
+      '/booking/assignments/$assignmentId/progress-reports',
+      data: formData,
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// GET /booking/assignments/{id}/progress-reports — list reports for assignment.
+  Future<List<Map<String, dynamic>>> getProgressReports(
+    String assignmentId,
+  ) async {
+    final response = await _apiClient.dio.get(
+      '/booking/assignments/$assignmentId/progress-reports',
+    );
+    final data = response.data['data'];
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
   }
 }

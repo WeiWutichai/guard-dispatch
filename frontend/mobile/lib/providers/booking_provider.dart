@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import '../services/booking_service.dart';
 
@@ -50,12 +52,52 @@ class BookingProvider extends ChangeNotifier {
   String? _error;
   String? get error => _error;
 
+  // Guard reviews (public, for customer view)
+  Map<String, dynamic>? _guardReviews;
+  Map<String, dynamic>? get guardReviews => _guardReviews;
+
+  bool _isLoadingReviews = false;
+  bool get isLoadingReviews => _isLoadingReviews;
+
+  // Guard profile (public, documents — no bank info)
+  Map<String, dynamic>? _guardProfile;
+  Map<String, dynamic>? get guardProfile => _guardProfile;
+
+  bool _isLoadingProfile = false;
+  bool get isLoadingProfile => _isLoadingProfile;
+
+  Future<void> fetchGuardDetail(String guardId) async {
+    _isLoadingReviews = true;
+    _isLoadingProfile = true;
+    _guardReviews = null;
+    _guardProfile = null;
+    notifyListeners();
+
+    // Fetch independently so one failure doesn't block the other
+    final results = await Future.wait([
+      _service.getGuardReviews(guardId).then<Map<String, dynamic>?>((v) => v).catchError((_) => null),
+      _service.getGuardProfile(guardId).then<Map<String, dynamic>?>((v) => v).catchError((_) => null),
+    ]);
+    _guardReviews = results[0];
+    _guardProfile = results[1];
+
+    _isLoadingReviews = false;
+    _isLoadingProfile = false;
+    notifyListeners();
+  }
+
   Future<void> fetchDashboard() async {
     _isLoading = true;
     _error = null;
     notifyListeners();
     try {
       _dashboard = await _service.getGuardDashboard();
+      // Also fetch active job so home tab shows busy status
+      try {
+        _activeJob = await _service.getActiveJob();
+      } catch (_) {
+        _activeJob = null;
+      }
     } catch (e) {
       _error = e.toString();
     }
@@ -91,6 +133,27 @@ class BookingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Fetch guard jobs and return the full list (for notification navigation).
+  Future<List<Map<String, dynamic>>> fetchJobsAndReturn() async {
+    final allJobs = await _service.getGuardJobs(limit: 100);
+    _currentJobs = allJobs
+        .where((j) {
+          final s = j['assignment_status'] as String?;
+          return s == 'pending_acceptance' ||
+              s == 'accepted' ||
+              s == 'awaiting_payment' ||
+              s == 'assigned' ||
+              s == 'en_route' ||
+              s == 'arrived';
+        })
+        .toList();
+    _completedJobs = allJobs
+        .where((j) => j['assignment_status'] == 'completed')
+        .toList();
+    notifyListeners();
+    return allJobs;
+  }
+
   Future<void> fetchEarnings() async {
     _isLoading = true;
     _error = null;
@@ -106,12 +169,15 @@ class BookingProvider extends ChangeNotifier {
 
   Future<void> updateAssignmentStatus(
     String assignmentId,
-    String status,
-  ) async {
+    String status, {
+    double? lat,
+    double? lng,
+  }) async {
     try {
-      await _service.updateAssignmentStatus(assignmentId, status);
-      // Refresh jobs after status update
+      await _service.updateAssignmentStatus(assignmentId, status, lat: lat, lng: lng);
+      // Refresh jobs and active job after status update
       await fetchJobs();
+      await fetchActiveJob();
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -299,6 +365,7 @@ class BookingProvider extends ChangeNotifier {
     try {
       await _service.acceptDeclineAssignment(assignmentId, true);
       await fetchJobs();
+      await fetchActiveJob();
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -376,10 +443,14 @@ class BookingProvider extends ChangeNotifier {
     }
   }
 
-  Future<Map<String, dynamic>> startActiveJob(String assignmentId) async {
+  Future<Map<String, dynamic>> startActiveJob(
+    String assignmentId, {
+    double? lat,
+    double? lng,
+  }) async {
     _error = null;
     try {
-      final result = await _service.startJob(assignmentId);
+      final result = await _service.startJob(assignmentId, lat: lat, lng: lng);
       _activeJob = result;
       notifyListeners();
       return result;
@@ -416,5 +487,53 @@ class BookingProvider extends ChangeNotifier {
   /// Fetch guard's latest location. Returns null on error (for polling).
   Future<Map<String, dynamic>?> getGuardLocation(String guardId) async {
     return await _service.getGuardLocation(guardId);
+  }
+
+  // =========================================================================
+  // Progress Reports
+  // =========================================================================
+
+  List<Map<String, dynamic>> _progressReports = [];
+  List<Map<String, dynamic>> get progressReports => _progressReports;
+
+  bool _isSubmittingReport = false;
+  bool get isSubmittingReport => _isSubmittingReport;
+
+  Future<Map<String, dynamic>> submitProgressReport(
+    String assignmentId, {
+    required int hourNumber,
+    String? message,
+    File? photo,
+  }) async {
+    _isSubmittingReport = true;
+    notifyListeners();
+    try {
+      final result = await _service.submitProgressReport(
+        assignmentId,
+        hourNumber: hourNumber,
+        message: message,
+        photo: photo,
+      );
+      // Add to local list
+      _progressReports.add(result);
+      _isSubmittingReport = false;
+      notifyListeners();
+      return result;
+    } catch (e) {
+      _isSubmittingReport = false;
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> fetchProgressReports(String assignmentId) async {
+    try {
+      _progressReports = await _service.getProgressReports(assignmentId);
+      notifyListeners();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+    }
   }
 }

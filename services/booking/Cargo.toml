@@ -28,4 +28,7 @@ utoipa          = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 rust_decimal    = { workspace = true }
 futures-util    = "0.3"
+reqwest         = { workspace = true }
+aws-sdk-s3      = { workspace = true }
+bytes           = { workspace = true }
 shared          = { workspace = true }

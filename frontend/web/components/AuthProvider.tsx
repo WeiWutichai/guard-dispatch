@@ -34,7 +34,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAuthenticated = !!user;
 
   // Load user profile on mount — cookies are sent automatically
+  // Skip on login page to avoid 401 → redirect → reload loop
   useEffect(() => {
+    if (pathname === "/login") {
+      setIsLoading(false);
+      return;
+    }
     authApi
       .getProfile()
       .then((profile) => {
@@ -44,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
       })
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [pathname]);
 
   // Redirect to login if not authenticated (except on login page)
   useEffect(() => {

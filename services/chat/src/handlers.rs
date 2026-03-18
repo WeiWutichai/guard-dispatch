@@ -15,7 +15,7 @@ use shared::models::ApiResponse;
 pub struct AttachmentUploadForm {
     /// UUID of the conversation
     pub conversation_id: String,
-    /// Image file (JPEG, PNG, or WEBP, max 10MB)
+    /// Image or video file (JPEG/PNG/WEBP max 10MB, MP4/MOV max 50MB)
     #[schema(format = "binary")]
     pub file: Vec<u8>,
 }
@@ -276,7 +276,7 @@ pub async fn upload_attachment(
         file_data.ok_or_else(|| AppError::BadRequest("file is required".to_string()))?;
     let mime = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Validate file per CLAUDE.md rules (checks MIME + magic bytes + size)
+    // Validate file (checks MIME + magic bytes + size — images 10MB, videos 50MB)
     crate::s3::validate_upload(&mime, data.len(), &data)?;
 
     let ext = crate::s3::mime_to_extension(&mime);
@@ -291,24 +291,35 @@ pub async fn upload_attachment(
     crate::s3::upload_file(&state.s3_client, &state.s3_bucket, &file_key, data, &mime)
         .await?;
 
-    // Generate signed URL
-    let file_url =
+    // Generate signed URL and rewrite host for client access (per CLAUDE.md presigned URL host rewrite)
+    let raw_url =
         crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &file_key).await?;
+    let file_url = if state.s3_endpoint != state.s3_public_url {
+        raw_url.replacen(&state.s3_endpoint, &state.s3_public_url, 1)
+    } else {
+        raw_url
+    };
 
-    // Create image message
+    // Determine message type based on MIME
+    let message_type = if crate::s3::is_video_mime(&mime) {
+        crate::models::MessageType::Video
+    } else {
+        crate::models::MessageType::Image
+    };
+
+    // Insert message (without publish — we'll publish with file_url after saving attachment)
     let msg = crate::models::IncomingChatMessage {
         conversation_id,
         content: original_filename,
-        message_type: Some(crate::models::MessageType::Image),
+        message_type: Some(message_type),
         sender_role: None,
     };
-    let outgoing =
-        crate::service::send_message(&state.db, &state.redis_pubsub, user.user_id, msg).await?;
+    let row = crate::service::insert_message(&state.db, user.user_id, &msg).await?;
 
     // Save attachment metadata
     let attachment = crate::service::save_attachment(
         &state.db,
-        outgoing.id,
+        row.id,
         user.user_id,
         &file_key,
         &file_url,
@@ -316,6 +327,20 @@ pub async fn upload_attachment(
         &mime,
     )
     .await?;
+
+    // Publish to Redis with file_url included so receiving clients can display media
+    let outgoing = crate::models::OutgoingChatMessage {
+        id: row.id,
+        conversation_id: row.conversation_id,
+        sender_id: row.sender_id,
+        content: row.content,
+        message_type: row.message_type,
+        sender_role: row.sender_role,
+        created_at: row.created_at,
+        file_url: Some(file_url),
+        file_mime_type: Some(mime),
+    };
+    crate::service::publish_chat_message(&state.redis_pubsub, &outgoing).await;
 
     Ok(Json(ApiResponse::success(attachment)))
 }
@@ -354,10 +379,15 @@ pub async fn get_signed_url(
         ));
     }
 
-    // Regenerate signed URL (previous one may have expired)
-    let fresh_url =
+    // Regenerate signed URL (previous one may have expired) + host rewrite
+    let raw_url =
         crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &attachment.file_key)
             .await?;
+    let fresh_url = if state.s3_endpoint != state.s3_public_url {
+        raw_url.replacen(&state.s3_endpoint, &state.s3_public_url, 1)
+    } else {
+        raw_url
+    };
 
     Ok(Json(ApiResponse::success(AttachmentResponse {
         id: attachment.id,

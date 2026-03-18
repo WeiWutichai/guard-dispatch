@@ -18,14 +18,14 @@ class NotificationProvider extends ChangeNotifier {
   int _unreadCount = 0;
   int get unreadCount => _unreadCount;
 
-  /// Fetch notifications list from API.
-  Future<void> fetchNotifications({bool unreadOnly = false}) async {
+  /// Fetch notifications list from API, filtered by role.
+  Future<void> fetchNotifications({bool unreadOnly = false, String? role}) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
     try {
       _notifications =
-          await _service.listNotifications(unreadOnly: unreadOnly);
+          await _service.listNotifications(unreadOnly: unreadOnly, role: role);
       // Update unread count from the fetched data
       _unreadCount =
           _notifications.where((n) => n['is_read'] != true).length;
@@ -36,10 +36,10 @@ class NotificationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Fetch unread count (lightweight — for badge display).
-  Future<void> fetchUnreadCount() async {
+  /// Fetch unread count (lightweight — for badge display), filtered by role.
+  Future<void> fetchUnreadCount({String? role}) async {
     try {
-      _unreadCount = await _service.getUnreadCount();
+      _unreadCount = await _service.getUnreadCount(role: role);
       notifyListeners();
     } catch (e) {
       debugPrint('[NotificationProvider] fetchUnreadCount error: $e');
@@ -66,10 +66,10 @@ class NotificationProvider extends ChangeNotifier {
     }
   }
 
-  /// Mark all notifications as read.
-  Future<void> markAllAsRead() async {
+  /// Mark all notifications as read, optionally filtered by role.
+  Future<void> markAllAsRead({String? role}) async {
     try {
-      await _service.markAllAsRead();
+      await _service.markAllAsRead(role: role);
       for (var i = 0; i < _notifications.length; i++) {
         _notifications[i] = {..._notifications[i], 'is_read': true};
       }

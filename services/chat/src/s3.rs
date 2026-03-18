@@ -5,10 +5,17 @@ use std::time::Duration;
 use shared::error::AppError;
 
 const SIGNED_URL_EXPIRY_SECS: u64 = 3600; // 1 hour per CLAUDE.md
-const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB per CLAUDE.md
+const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB for images
+const MAX_VIDEO_SIZE: usize = 50 * 1024 * 1024; // 50MB for videos
 
-/// Allowed MIME types (per CLAUDE.md: JPEG, PNG, WEBP only)
-const ALLOWED_MIME_TYPES: &[&str] = &["image/jpeg", "image/png", "image/webp"];
+/// Allowed MIME types: images (JPEG, PNG, WEBP) + videos (MP4, QuickTime)
+const ALLOWED_MIME_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "video/mp4",
+    "video/quicktime",
+];
 
 /// Detect actual file type from magic bytes, ignoring the client-declared MIME type.
 fn detect_mime_from_bytes(data: &[u8]) -> Option<&'static str> {
@@ -21,7 +28,23 @@ fn detect_mime_from_bytes(data: &[u8]) -> Option<&'static str> {
     if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         return Some("image/webp");
     }
+    // MP4/MOV: bytes 4-7 = "ftyp" (ISO base media file format)
+    if data.len() >= 8 && &data[4..8] == b"ftyp" {
+        // Check ftyp brand to distinguish MP4 vs MOV
+        if data.len() >= 12 {
+            let brand = &data[8..12];
+            if brand == b"qt  " {
+                return Some("video/quicktime");
+            }
+        }
+        return Some("video/mp4");
+    }
     None
+}
+
+/// Check if MIME type is a video type
+pub fn is_video_mime(mime_type: &str) -> bool {
+    mime_type.starts_with("video/")
 }
 
 /// Validate file upload constraints.
@@ -29,23 +52,37 @@ fn detect_mime_from_bytes(data: &[u8]) -> Option<&'static str> {
 pub fn validate_upload(mime_type: &str, file_size: usize, data: &[u8]) -> Result<(), AppError> {
     if !ALLOWED_MIME_TYPES.contains(&mime_type) {
         return Err(AppError::BadRequest(format!(
-            "Unsupported file type: {mime_type}. Allowed: JPEG, PNG, WEBP"
+            "Unsupported file type: {mime_type}. Allowed: JPEG, PNG, WEBP, MP4, MOV"
         )));
     }
 
-    if file_size > MAX_FILE_SIZE {
+    // Size check before magic bytes (prevent large allocation before reject)
+    let max_size = if is_video_mime(mime_type) {
+        MAX_VIDEO_SIZE
+    } else {
+        MAX_IMAGE_SIZE
+    };
+    if file_size > max_size {
         return Err(AppError::BadRequest(format!(
-            "File too large: {} bytes. Maximum: {} bytes (10MB)",
-            file_size, MAX_FILE_SIZE
+            "File too large: {} bytes. Maximum: {} bytes ({})",
+            file_size,
+            max_size,
+            if is_video_mime(mime_type) { "50MB" } else { "10MB" }
         )));
     }
 
     // Verify actual file content matches the declared MIME type
     let detected = detect_mime_from_bytes(data).ok_or_else(|| {
-        AppError::BadRequest("File content does not match any allowed image format".to_string())
+        AppError::BadRequest(
+            "File content does not match any allowed format (image or video)".to_string(),
+        )
     })?;
 
-    if detected != mime_type {
+    // For video: allow mp4/quicktime interchangeably since container format is the same
+    let is_match = detected == mime_type
+        || (is_video_mime(detected) && is_video_mime(mime_type));
+
+    if !is_match {
         return Err(AppError::BadRequest(format!(
             "MIME type mismatch: declared {mime_type} but file content is {detected}"
         )));
@@ -60,6 +97,8 @@ pub fn mime_to_extension(mime_type: &str) -> &str {
         "image/jpeg" => "jpg",
         "image/png" => "png",
         "image/webp" => "webp",
+        "video/mp4" => "mp4",
+        "video/quicktime" => "mov",
         _ => "bin",
     }
 }
@@ -130,6 +169,8 @@ mod tests {
     const JPEG_HEADER: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
     const PNG_HEADER: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     const WEBP_HEADER: &[u8] = b"RIFF\x00\x00\x00\x00WEBP";
+    const MP4_HEADER: &[u8] = b"\x00\x00\x00\x1cftypisom\x00\x00\x02\x00";
+    const MOV_HEADER: &[u8] = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00";
     const GIF_HEADER: &[u8] = b"GIF89a";
 
     // =========================================================================
@@ -149,6 +190,16 @@ mod tests {
     #[test]
     fn detect_webp_magic_bytes() {
         assert_eq!(detect_mime_from_bytes(WEBP_HEADER), Some("image/webp"));
+    }
+
+    #[test]
+    fn detect_mp4_magic_bytes() {
+        assert_eq!(detect_mime_from_bytes(MP4_HEADER), Some("video/mp4"));
+    }
+
+    #[test]
+    fn detect_mov_magic_bytes() {
+        assert_eq!(detect_mime_from_bytes(MOV_HEADER), Some("video/quicktime"));
     }
 
     #[test]
@@ -175,6 +226,16 @@ mod tests {
     #[test]
     fn validate_upload_accepts_webp() {
         assert!(validate_upload("image/webp", WEBP_HEADER.len(), WEBP_HEADER).is_ok());
+    }
+
+    #[test]
+    fn validate_upload_accepts_mp4() {
+        assert!(validate_upload("video/mp4", MP4_HEADER.len(), MP4_HEADER).is_ok());
+    }
+
+    #[test]
+    fn validate_upload_accepts_mov() {
+        assert!(validate_upload("video/quicktime", MOV_HEADER.len(), MOV_HEADER).is_ok());
     }
 
     #[test]
@@ -226,11 +287,24 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn validate_upload_rejects_over_10mb() {
+    fn validate_upload_rejects_image_over_10mb() {
         let over_10mb = 10 * 1024 * 1024 + 1;
-        // Size check happens before magic byte check
         let result = validate_upload("image/jpeg", over_10mb, JPEG_HEADER);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_upload_rejects_video_over_50mb() {
+        let over_50mb = 50 * 1024 * 1024 + 1;
+        let result = validate_upload("video/mp4", over_50mb, MP4_HEADER);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_upload_accepts_video_under_50mb() {
+        // 20MB video should pass
+        let size_20mb = 20 * 1024 * 1024;
+        assert!(validate_upload("video/mp4", size_20mb, MP4_HEADER).is_ok());
     }
 
     // =========================================================================
@@ -253,13 +327,23 @@ mod tests {
     }
 
     #[test]
+    fn mime_to_extension_mp4() {
+        assert_eq!(mime_to_extension("video/mp4"), "mp4");
+    }
+
+    #[test]
+    fn mime_to_extension_mov() {
+        assert_eq!(mime_to_extension("video/quicktime"), "mov");
+    }
+
+    #[test]
     fn mime_to_extension_unknown_returns_bin() {
         assert_eq!(mime_to_extension("application/pdf"), "bin");
         assert_eq!(mime_to_extension(""), "bin");
     }
 
     // =========================================================================
-    // Constants validation (per CLAUDE.md)
+    // Constants validation
     // =========================================================================
 
     #[test]
@@ -268,15 +352,22 @@ mod tests {
     }
 
     #[test]
-    fn max_file_size_is_10mb() {
-        assert_eq!(MAX_FILE_SIZE, 10 * 1024 * 1024);
+    fn max_image_size_is_10mb() {
+        assert_eq!(MAX_IMAGE_SIZE, 10 * 1024 * 1024);
     }
 
     #[test]
-    fn only_three_mime_types_allowed() {
-        assert_eq!(ALLOWED_MIME_TYPES.len(), 3);
+    fn max_video_size_is_50mb() {
+        assert_eq!(MAX_VIDEO_SIZE, 50 * 1024 * 1024);
+    }
+
+    #[test]
+    fn five_mime_types_allowed() {
+        assert_eq!(ALLOWED_MIME_TYPES.len(), 5);
         assert!(ALLOWED_MIME_TYPES.contains(&"image/jpeg"));
         assert!(ALLOWED_MIME_TYPES.contains(&"image/png"));
         assert!(ALLOWED_MIME_TYPES.contains(&"image/webp"));
+        assert!(ALLOWED_MIME_TYPES.contains(&"video/mp4"));
+        assert!(ALLOWED_MIME_TYPES.contains(&"video/quicktime"));
     }
 }

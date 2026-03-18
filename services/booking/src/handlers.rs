@@ -1,10 +1,12 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use futures_util::StreamExt;
 use std::sync::Arc;
+
+use uuid::Uuid;
 
 use shared::auth::AuthUser;
 use shared::error::{AppError, ErrorBody};
@@ -15,8 +17,8 @@ use crate::models::{
     AvailableGuardResponse, AvailableGuardsQuery, CreatePaymentDto, CreateRequestDto,
     CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
     GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
-    ListRequestsQuery, PaymentResponse, ReviewCompletionDto, ServiceRate,
-    SubmitReviewResponse, UpdateAssignmentStatusDto, UpdateServiceRateDto,
+    ListRequestsQuery, PaymentResponse, ProgressReportResponse, ReviewCompletionDto, ServiceRate,
+    StartJobDto, SubmitReviewResponse, UpdateAssignmentStatusDto, UpdateServiceRateDto,
     WorkHistoryResponse,
 };
 use crate::state::AppState;
@@ -170,7 +172,7 @@ pub async fn update_assignment_status(
     Json(req): Json<UpdateAssignmentStatusDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
     let assignment =
-        crate::service::update_assignment_status(&state.db, id, user.user_id, &user.role, req, &state.redis_conn).await?;
+        crate::service::update_assignment_status(&state.db, id, user.user_id, &user.role, req, &state.redis_conn, &state.http_client).await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -404,6 +406,32 @@ pub async fn guard_ratings(
 }
 
 // =============================================================================
+// Public Guard Reviews (any authenticated user)
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/guards/{guard_id}/reviews",
+    tag = "Guards",
+    security(("bearer" = [])),
+    params(
+        ("guard_id" = Uuid, Path, description = "Guard user ID"),
+    ),
+    responses(
+        (status = 200, description = "Guard ratings and reviews", body = GuardRatingsSummary),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn get_guard_reviews(
+    State(state): State<Arc<AppState>>,
+    Path(guard_id): Path<Uuid>,
+    _user: AuthUser,
+) -> Result<Json<ApiResponse<GuardRatingsSummary>>, AppError> {
+    let ratings = crate::service::get_guard_ratings(&state.db, guard_id).await?;
+    Ok(Json(ApiResponse::success(ratings)))
+}
+
+// =============================================================================
 // Accept / Decline Assignment
 // =============================================================================
 
@@ -478,11 +506,13 @@ pub async fn start_job(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
     Path(id): Path<uuid::Uuid>,
+    body: Option<Json<StartJobDto>>,
 ) -> Result<Json<ApiResponse<ActiveJobResponse>>, AppError> {
     if user.role != "guard" {
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
-    let job = crate::service::start_job(&state.db, id, user.user_id).await?;
+    let (lat, lng) = body.map(|b| (b.lat, b.lng)).unwrap_or((None, None));
+    let job = crate::service::start_job(&state.db, id, user.user_id, lat, lng, &state.http_client).await?;
     Ok(Json(ApiResponse::success(job)))
 }
 
@@ -799,4 +829,130 @@ async fn handle_assignment_ws(mut socket: WebSocket, state: Arc<AppState>, user:
         request_id,
         user.user_id
     );
+}
+
+// =============================================================================
+// Progress Reports
+// =============================================================================
+
+/// Submit an hourly progress report (guard, multipart: hour_number + message + photo)
+#[utoipa::path(
+    post,
+    path = "/assignments/{id}/progress-reports",
+    tag = "Progress Reports",
+    params(("id" = Uuid, Path, description = "Assignment ID")),
+    responses(
+        (status = 200, description = "Report submitted", body = ProgressReportResponse),
+        (status = 409, description = "Already reported for this hour"),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn submit_progress_report(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<ProgressReportResponse>>, AppError> {
+    let mut hour_number: Option<i32> = None;
+    let mut message: Option<String> = None;
+    let mut photo_data: Option<Vec<u8>> = None;
+    let mut photo_mime: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Failed to read multipart: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+
+        match name.as_str() {
+            "hour_number" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Invalid hour_number: {e}")))?;
+                hour_number = Some(
+                    text.parse::<i32>()
+                        .map_err(|e| AppError::BadRequest(format!("Invalid hour_number: {e}")))?,
+                );
+            }
+            "message" => {
+                message = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(format!("Invalid message: {e}")))?,
+                );
+            }
+            "photo" => {
+                photo_mime = field.content_type().map(|s| s.to_string());
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Failed to read photo: {e}")))?
+                    .to_vec();
+                photo_data = Some(data);
+            }
+            _ => {}
+        }
+    }
+
+    let hour_number =
+        hour_number.ok_or_else(|| AppError::BadRequest("hour_number is required".to_string()))?;
+
+    // Validate photo if provided
+    let validated_photo = if let Some(data) = photo_data {
+        let mime = photo_mime.unwrap_or_else(|| "application/octet-stream".to_string());
+        crate::s3::validate_upload(&mime, data.len(), &data)?;
+        Some((data, mime))
+    } else {
+        None
+    };
+
+    let result = crate::service::submit_progress_report(
+        &state.db,
+        &state.s3_client,
+        &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
+        id,
+        user.user_id,
+        hour_number,
+        message,
+        validated_photo,
+    )
+    .await?;
+
+    Ok(Json(ApiResponse::success(result)))
+}
+
+/// List progress reports for an assignment
+#[utoipa::path(
+    get,
+    path = "/assignments/{id}/progress-reports",
+    tag = "Progress Reports",
+    params(("id" = Uuid, Path, description = "Assignment ID")),
+    responses(
+        (status = 200, description = "Progress reports list", body = Vec<ProgressReportResponse>),
+    ),
+    security(("bearer" = [])),
+)]
+pub async fn list_progress_reports(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ApiResponse<Vec<ProgressReportResponse>>>, AppError> {
+    let reports = crate::service::list_progress_reports(
+        &state.db,
+        &state.s3_client,
+        &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
+        id,
+        user.user_id,
+        &user.role,
+    )
+    .await?;
+
+    Ok(Json(ApiResponse::success(reports)))
 }

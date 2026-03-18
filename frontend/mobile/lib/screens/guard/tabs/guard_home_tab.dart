@@ -27,7 +27,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<BookingProvider>().fetchDashboard();
-      context.read<NotificationProvider>().fetchUnreadCount();
+      context.read<NotificationProvider>().fetchUnreadCount(role: 'guard');
     });
   }
 
@@ -84,7 +84,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           ),
         );
         if (mounted) {
-          context.read<NotificationProvider>().fetchUnreadCount();
+          context.read<NotificationProvider>().fetchUnreadCount(role: 'guard');
         }
       },
       child: SizedBox(
@@ -182,8 +182,10 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
 
   Widget _buildStatusToggle(GuardHomeStrings strings) {
     final tracking = context.watch<TrackingProvider>();
+    final booking = context.watch<BookingProvider>();
     final isOnline = tracking.isOnline;
     final isConnecting = tracking.isConnecting;
+    final hasActiveJob = booking.activeJob != null;
 
     // Status label
     String statusText;
@@ -191,6 +193,9 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
     if (isConnecting) {
       statusText = strings.connecting;
       dotColor = AppColors.warning;
+    } else if (hasActiveJob && isOnline) {
+      statusText = strings.busy;
+      dotColor = const Color(0xFFF59E0B);
     } else if (isOnline) {
       statusText = strings.ready;
       dotColor = AppColors.success;
@@ -211,31 +216,36 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      color: dotColor,
-                      shape: BoxShape.circle,
+              Expanded(
+                child: Row(
+                  children: [
+                    Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: dotColor,
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    statusText,
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        statusText,
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               Switch.adaptive(
                 value: isOnline || isConnecting,
-                activeTrackColor: AppColors.primary,
-                onChanged: isConnecting
+                activeTrackColor: hasActiveJob ? const Color(0xFFF59E0B) : AppColors.primary,
+                onChanged: (isConnecting || hasActiveJob)
                     ? null
                     : (_) => context.read<TrackingProvider>().toggle(),
               ),

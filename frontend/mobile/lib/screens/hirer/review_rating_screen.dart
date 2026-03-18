@@ -33,6 +33,21 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
   final _reviewController = TextEditingController();
   bool _isSubmitting = false;
 
+  void _updateCategoryAndRecalc(void Function() update) {
+    setState(() {
+      update();
+      // Auto-compute overall as average of filled categories
+      final filled = <double>[];
+      if (_punctuality > 0) filled.add(_punctuality);
+      if (_professionalism > 0) filled.add(_professionalism);
+      if (_communication > 0) filled.add(_communication);
+      if (_appearance > 0) filled.add(_appearance);
+      if (filled.isNotEmpty) {
+        _overallRating = (filled.reduce((a, b) => a + b) / filled.length).roundToDouble();
+      }
+    });
+  }
+
   @override
   void dispose() {
     _reviewController.dispose();
@@ -242,7 +257,7 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
 
                   const SizedBox(height: 28),
 
-                  // Overall rating (required)
+                  // Overall rating (required) — auto-calculated from categories
                   _buildRatingSection(
                     strings.overallRating,
                     _overallRating,
@@ -261,29 +276,29 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
 
                   const SizedBox(height: 20),
 
-                  // Category ratings (optional)
+                  // Category ratings (optional) — auto-updates overall average
                   _buildRatingSection(
                     strings.punctuality,
                     _punctuality,
-                    (val) => setState(() => _punctuality = val),
+                    (val) => _updateCategoryAndRecalc(() => _punctuality = val),
                   ),
                   const SizedBox(height: 14),
                   _buildRatingSection(
                     strings.professionalism,
                     _professionalism,
-                    (val) => setState(() => _professionalism = val),
+                    (val) => _updateCategoryAndRecalc(() => _professionalism = val),
                   ),
                   const SizedBox(height: 14),
                   _buildRatingSection(
                     strings.communication,
                     _communication,
-                    (val) => setState(() => _communication = val),
+                    (val) => _updateCategoryAndRecalc(() => _communication = val),
                   ),
                   const SizedBox(height: 14),
                   _buildRatingSection(
                     strings.appearance,
                     _appearance,
-                    (val) => setState(() => _appearance = val),
+                    (val) => _updateCategoryAndRecalc(() => _appearance = val),
                   ),
 
                   const SizedBox(height: 24),
@@ -404,6 +419,17 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
                 style: GoogleFonts.inter(
                   fontSize: 14,
                   color: AppColors.danger,
+                ),
+              ),
+            ],
+            if (currentRating > 0) ...[
+              const SizedBox(width: 8),
+              Text(
+                currentRating.toStringAsFixed(1),
+                style: GoogleFonts.inter(
+                  fontSize: isLarge ? 16 : 14,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.amber.shade700,
                 ),
               ),
             ],

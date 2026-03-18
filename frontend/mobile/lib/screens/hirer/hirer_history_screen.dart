@@ -9,6 +9,7 @@ import 'customer_tracking_screen.dart';
 import 'customer_active_job_screen.dart';
 import 'payment_screen.dart';
 import 'customer_completed_job_screen.dart';
+import 'guard_searching_screen.dart';
 
 class HirerHistoryScreen extends StatefulWidget {
   const HirerHistoryScreen({super.key});
@@ -256,8 +257,10 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
     HirerHistoryStrings s,
   ) {
     final status = req['status'] as String? ?? 'pending';
-    final statusLabel = _statusLabel(status, s);
-    final statusColor = _statusColor(status);
+    final assignmentStatus = req['assignment_status'] as String?;
+    final displayStatus = assignmentStatus ?? status;
+    final statusLabel = _statusLabel(displayStatus, s);
+    final statusColor = _statusColor(displayStatus);
     final address = req['address'] as String? ?? '';
     final description = req['description'] as String? ?? '';
     final specialInstructions = req['special_instructions'] as String?;
@@ -441,20 +444,23 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
             ),
           ],
 
-          // Track guard button for active bookings
+          // Action button for active bookings (status-aware using assignment status)
           if (status == 'assigned' || status == 'in_progress') ...[
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
                 onPressed: () => _trackGuard(req, isThai),
-                icon: const Icon(Icons.map_rounded, size: 18),
+                icon: Icon(
+                  _actionButtonIcon(displayStatus),
+                  size: 18,
+                ),
                 label: Text(
-                  isThai ? 'ติดตามเจ้าหน้าที่' : 'Track Guard',
+                  _actionButtonLabel(displayStatus, isThai),
                   style: GoogleFonts.inter(fontWeight: FontWeight.w600),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
+                  backgroundColor: _actionButtonColor(displayStatus),
                   foregroundColor: Colors.white,
                   elevation: 0,
                   shape: RoundedRectangleBorder(
@@ -553,14 +559,20 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
       });
 
       if (active.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              isThai ? 'ยังไม่มีเจ้าหน้าที่ที่สามารถติดตามได้' : 'No guard to track yet',
+        // Check if any assignments were declined
+        final declined = assignments.where((a) => a['status'] == 'declined');
+        if (declined.isNotEmpty) {
+          _showDeclinedDialog(req, isThai);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                isThai ? 'ยังไม่มีเจ้าหน้าที่ที่สามารถติดตามได้' : 'No guard to track yet',
+              ),
+              behavior: SnackBarBehavior.floating,
             ),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+          );
+        }
         return;
       }
 
@@ -648,6 +660,115 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
     }
   }
 
+  void _showDeclinedDialog(Map<String, dynamic> req, bool isThai) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.person_off_rounded,
+                  size: 40, color: Colors.red),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              isThai ? 'เจ้าหน้าที่ปฏิเสธงาน' : 'Guard Declined',
+              style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isThai
+                  ? 'เจ้าหน้าที่ได้ปฏิเสธงานนี้แล้ว คุณสามารถค้นหาเจ้าหน้าที่คนใหม่ได้'
+                  : 'The guard has declined this job. You can search for a new guard.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _searchNewGuard(req);
+                },
+                icon: const Icon(Icons.search_rounded, size: 18),
+                label: Text(
+                  isThai ? 'ค้นหาเจ้าหน้าที่ใหม่' : 'Search New Guard',
+                  style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(
+                isThai ? 'ปิด' : 'Close',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _searchNewGuard(Map<String, dynamic> req) {
+    final requestId = req['id'] as String;
+    final lat = (req['location_lat'] as num?)?.toDouble() ?? 0;
+    final lng = (req['location_lng'] as num?)?.toDouble() ?? 0;
+    final price = req['offered_price'];
+    final totalAmount = (price is num ? price.toDouble() : double.tryParse(price?.toString() ?? '') ?? 0);
+    final bookedHours = (req['booked_hours'] as num?)?.toInt() ?? 6;
+    final guardCount = (req['guard_count'] as num?)?.toInt() ?? 1;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GuardSearchingScreen(
+          requestId: requestId,
+          lat: lat,
+          lng: lng,
+          totalAmount: totalAmount,
+          subtotal: totalAmount,
+          baseFee: 0,
+          tip: 0,
+          bookedHours: bookedHours,
+          guardCount: guardCount,
+        ),
+      ),
+    ).then((_) {
+      // Refresh requests after returning
+      if (mounted) {
+        context.read<BookingProvider>().fetchMyRequests();
+      }
+    });
+  }
+
   Future<void> _cancelRequest(String requestId) async {
     final isThai = LanguageProvider.of(context).isThai;
     final confirmed = await showDialog<bool>(
@@ -680,13 +801,50 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
   }
 
   String _statusLabel(String status, HirerHistoryStrings s) {
+    final isThai = LanguageProvider.of(context).isThai;
     return switch (status) {
       'pending' => s.statusInProgress,
-      'assigned' => s.statusInProgress,
+      'assigned' => isThai ? 'มอบหมายแล้ว' : 'Assigned',
       'in_progress' => s.statusInProgress,
       'completed' => s.statusCompleted,
       'cancelled' => s.statusCancelled,
+      'awaiting_payment' => isThai ? 'กำลังรอการชำระ' : 'Awaiting Payment',
+      'pending_acceptance' => isThai ? 'รอเจ้าหน้าที่ตอบรับ' : 'Pending Acceptance',
+      'accepted' => isThai ? 'ตอบรับแล้ว' : 'Accepted',
+      'en_route' => isThai ? 'กำลังเดินทาง' : 'En Route',
+      'arrived' => isThai ? 'ถึงจุดหมาย' : 'Arrived',
+      'pending_completion' => isThai ? 'รอยืนยันเสร็จงาน' : 'Pending Completion',
       _ => status,
+    };
+  }
+
+  String _actionButtonLabel(String displayStatus, bool isThai) {
+    return switch (displayStatus) {
+      'awaiting_payment' => isThai ? 'ชำระเงิน' : 'Make Payment',
+      'pending_acceptance' => isThai ? 'รอเจ้าหน้าที่ตอบรับ' : 'Awaiting Guard',
+      'en_route' => isThai ? 'เจ้าหน้าที่กำลังเดินทาง' : 'Guard En Route',
+      'arrived' || 'pending_completion' => isThai ? 'ดูสถานะงาน' : 'View Job Status',
+      _ => isThai ? 'ติดตามเจ้าหน้าที่' : 'Track Guard',
+    };
+  }
+
+  IconData _actionButtonIcon(String displayStatus) {
+    return switch (displayStatus) {
+      'awaiting_payment' => Icons.payment_rounded,
+      'pending_acceptance' => Icons.hourglass_top_rounded,
+      'en_route' => Icons.directions_car_rounded,
+      'arrived' || 'pending_completion' => Icons.work_rounded,
+      _ => Icons.map_rounded,
+    };
+  }
+
+  Color _actionButtonColor(String displayStatus) {
+    return switch (displayStatus) {
+      'awaiting_payment' => const Color(0xFFF59E0B),
+      'pending_acceptance' => const Color(0xFFF59E0B),
+      'en_route' => AppColors.info,
+      'arrived' || 'pending_completion' => AppColors.primary,
+      _ => AppColors.primary,
     };
   }
 
@@ -697,6 +855,12 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
       'in_progress' => AppColors.success,
       'completed' => AppColors.success,
       'cancelled' => Colors.red,
+      'awaiting_payment' => Colors.amber.shade700,
+      'pending_acceptance' => Colors.amber.shade700,
+      'accepted' => AppColors.info,
+      'en_route' => AppColors.info,
+      'arrived' => AppColors.success,
+      'pending_completion' => AppColors.primary,
       _ => AppColors.textSecondary,
     };
   }
