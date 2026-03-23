@@ -44,10 +44,14 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
     return Platform.isIOS ? 'http://localhost:80' : 'http://10.0.2.2:80';
   }
 
+  // DEBUG: must match guard's active_job_screen.dart settings
+  static const _debugFastTimer = true;
+  static const _debugSpeedMultiplier = 120; // must match guard's _debugTickAmount
+
   late int _remaining;
+  String? _serverStartedAt; // single source of truth from server
   String _guardName = '-';
   Timer? _timer;
-  Timer? _syncTimer;
   Timer? _statusTimer;
   bool _isPendingCompletion = false;
   bool _isReviewDialogShown = false;
@@ -70,15 +74,18 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
   // Progress reports from guard
   List<Map<String, dynamic>> _progressReports = [];
   String? _assignmentId;
+  int _lastReportPoll = 0; // track poll count to throttle report fetches
 
   // WebSocket for real-time status updates
   IOWebSocketChannel? _wsChannel;
   StreamSubscription<dynamic>? _wsSub;
 
   /// Calculate remaining seconds from a started_at timestamp string.
+  /// Uses same speed multiplier as guard so both screens show identical time.
   int _calcRemainingFromStartedAt(String startedAtStr) {
     final startedAt = DateTime.parse(startedAtStr);
-    final elapsed = DateTime.now().toUtc().difference(startedAt).inSeconds;
+    final realElapsed = DateTime.now().toUtc().difference(startedAt).inSeconds;
+    final elapsed = _debugFastTimer ? realElapsed * _debugSpeedMultiplier : realElapsed;
     final total = widget.bookedHours * 3600;
     return (total - elapsed).clamp(0, total);
   }
@@ -87,26 +94,27 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
   void initState() {
     super.initState();
     _guardName = widget.guardName;
+    _serverStartedAt = widget.startedAt;
 
-    // Use startedAt for accurate initial value; fall back to passed-in value
-    if (widget.startedAt != null) {
-      _remaining = _calcRemainingFromStartedAt(widget.startedAt!);
+    // Calculate initial remaining from started_at (same reference as guard)
+    if (_serverStartedAt != null) {
+      _remaining = _calcRemainingFromStartedAt(_serverStartedAt!);
     } else {
       _remaining = widget.remainingSeconds;
     }
 
-    // Local 1-second countdown
+    // Recalculate from started_at every second — no independent countdown.
+    // Both guard and customer derive time from the same started_at timestamp.
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_remaining > 0) {
-        setState(() => _remaining--);
+      if (!_isPendingCompletion && _serverStartedAt != null) {
+        final r = _calcRemainingFromStartedAt(_serverStartedAt!);
+        if (r != _remaining) {
+          setState(() => _remaining = r);
+        }
       }
     });
 
-    // Sync with server every 30 seconds to correct drift
-    _syncTimer =
-        Timer.periodic(const Duration(seconds: 30), (_) => _resyncTimer());
-
-    // Poll assignment status every 3 seconds for near real-time updates
+    // Poll assignment status every 3 seconds (also syncs started_at)
     _statusTimer =
         Timer.periodic(const Duration(seconds: 3), (_) => _pollStatus());
 
@@ -163,32 +171,31 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
   void _handleWsStatusChange(String status) {
     if (status == 'completed') {
       _timer?.cancel();
-      _syncTimer?.cancel();
       _statusTimer?.cancel();
       setState(() => _isPendingCompletion = false);
       _showCompletedDialog();
     } else if (status == 'pending_completion' && !_isReviewDialogShown) {
       _timer?.cancel();
       _timer = null;
-      _syncTimer?.cancel();
-      _syncTimer = null;
       setState(() => _isPendingCompletion = true);
-      // Fetch assignment data for the review dialog
       _fetchAndShowReview();
     } else if (status == 'arrived' && _isPendingCompletion) {
-      // Guard resumed (customer held)
+      // Guard resumed (customer rejected completion)
       setState(() {
         _isPendingCompletion = false;
         _isReviewDialogShown = false;
       });
       _resyncTimer();
+      // Restart display timer — recalculates from started_at each tick
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_remaining > 0) setState(() => _remaining--);
+        if (!_isPendingCompletion && _serverStartedAt != null) {
+          final r = _calcRemainingFromStartedAt(_serverStartedAt!);
+          if (r != _remaining) {
+            setState(() => _remaining = r);
+          }
+        }
       });
-      _syncTimer?.cancel();
-      _syncTimer = Timer.periodic(
-          const Duration(seconds: 30), (_) => _resyncTimer());
     }
   }
 
@@ -249,17 +256,21 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
       _fetchProgressReports();
     }
 
-    // Prefer started_at-based calculation (same reference as guard screen)
+    // Update started_at — the single source of truth for timer calculation.
+    // Both guard and customer derive remaining time from this same timestamp.
     final serverStartedAt = data['started_at'] as String?;
     if (serverStartedAt != null) {
+      _serverStartedAt = serverStartedAt;
       setState(() => _remaining = _calcRemainingFromStartedAt(serverStartedAt));
-      return;
-    }
-
-    // Fallback to server-calculated remaining_seconds
-    final serverRemaining = (data['remaining_seconds'] as num?)?.toInt();
-    if (serverRemaining != null) {
-      setState(() => _remaining = serverRemaining);
+    } else if (_serverStartedAt != null) {
+      // Already have started_at from previous sync — recalculate (don't fallback to real-time)
+      setState(() => _remaining = _calcRemainingFromStartedAt(_serverStartedAt!));
+    } else {
+      // No started_at yet (job not started) — use server remaining as initial estimate
+      final serverRemaining = (data['remaining_seconds'] as num?)?.toInt();
+      if (serverRemaining != null) {
+        setState(() => _remaining = serverRemaining);
+      }
     }
   }
 
@@ -278,6 +289,12 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
   }
 
   Future<void> _pollStatus() async {
+    // Re-fetch progress reports every ~3rd poll (~9s) instead of every 3s
+    _lastReportPoll++;
+    if (_lastReportPoll % 3 == 0) {
+      _fetchProgressReports();
+    }
+
     try {
       final assignments = await context
           .read<BookingProvider>()
@@ -286,9 +303,14 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
 
       for (final a in assignments) {
         final status = a['status'] as String?;
+        // Update started_at from assignment data if available
+        final aStartedAt = a['started_at'] as String?;
+        if (aStartedAt != null) {
+          _serverStartedAt = aStartedAt;
+        }
+
         if (status == 'completed') {
           _timer?.cancel();
-          _syncTimer?.cancel();
           _statusTimer?.cancel();
           setState(() => _isPendingCompletion = false);
           _showCompletedDialog();
@@ -297,27 +319,26 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
         if (status == 'pending_completion' && !_isReviewDialogShown) {
           _timer?.cancel();
           _timer = null;
-          _syncTimer?.cancel();
-          _syncTimer = null;
           setState(() => _isPendingCompletion = true);
           _showReviewDialog(a);
           return;
         }
         if (status == 'arrived' && _isPendingCompletion) {
-          // Guard resumed (customer held from another device, or state reset)
+          // Guard resumed (customer rejected completion)
           setState(() {
             _isPendingCompletion = false;
             _isReviewDialogShown = false;
           });
           _resyncTimer();
           _timer?.cancel();
-          _timer = Timer.periodic(
-              const Duration(seconds: 1), (_) {
-            if (_remaining > 0) setState(() => _remaining--);
+          _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+            if (!_isPendingCompletion && _serverStartedAt != null) {
+              final r = _calcRemainingFromStartedAt(_serverStartedAt!);
+              if (r != _remaining) {
+                setState(() => _remaining = r);
+              }
+            }
           });
-          _syncTimer?.cancel();
-          _syncTimer = Timer.periodic(
-              const Duration(seconds: 30), (_) => _resyncTimer());
           return;
         }
       }
@@ -398,7 +419,7 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
     final strings = CustomerActiveJobStrings(isThai: isThai);
     final assignmentId = assignment['id'] as String? ?? '';
 
-    // Parse times
+    // Parse times — in debug fast mode, apply speed multiplier to worked duration
     final startedAtStr = assignment['started_at'] as String?;
     final completionAtStr = assignment['completion_requested_at'] as String?;
 
@@ -412,15 +433,30 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
           '${startedAt.hour.toString().padLeft(2, '0')}:${startedAt.minute.toString().padLeft(2, '0')}';
     }
     if (completionAtStr != null) {
-      final completionAt = DateTime.parse(completionAtStr).toLocal();
-      endTimeDisplay =
-          '${completionAt.hour.toString().padLeft(2, '0')}:${completionAt.minute.toString().padLeft(2, '0')}';
+      if (_debugFastTimer && startedAtStr != null) {
+        // In debug mode, calculate simulated end time
+        final startUtc = DateTime.parse(startedAtStr);
+        final endUtc = DateTime.parse(completionAtStr);
+        final realDiffSec = endUtc.difference(startUtc).inSeconds;
+        final simulatedEnd = startUtc.add(Duration(seconds: realDiffSec * _debugSpeedMultiplier));
+        final localEnd = simulatedEnd.toLocal();
+        endTimeDisplay =
+            '${localEnd.hour.toString().padLeft(2, '0')}:${localEnd.minute.toString().padLeft(2, '0')}';
+      } else {
+        final completionAt = DateTime.parse(completionAtStr).toLocal();
+        endTimeDisplay =
+            '${completionAt.hour.toString().padLeft(2, '0')}:${completionAt.minute.toString().padLeft(2, '0')}';
+      }
     }
     if (startedAtStr != null && completionAtStr != null) {
-      final diff = DateTime.parse(completionAtStr)
+      final realDiff = DateTime.parse(completionAtStr)
           .difference(DateTime.parse(startedAtStr));
-      final h = diff.inHours;
-      final m = diff.inMinutes % 60;
+      // In debug mode, multiply real elapsed by speed to get simulated worked time
+      final workedSeconds = _debugFastTimer
+          ? realDiff.inSeconds * _debugSpeedMultiplier
+          : realDiff.inSeconds;
+      final h = workedSeconds ~/ 3600;
+      final m = (workedSeconds % 3600) ~/ 60;
       workedDisplay = h > 0
           ? '$h ${strings.hours} $m ${strings.minutes}'
           : '$m ${strings.minutes}';
@@ -565,7 +601,7 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
       Navigator.pop(dialogCtx);
 
       _timer?.cancel();
-      _syncTimer?.cancel();
+      
       _statusTimer?.cancel();
       _wsSub?.cancel();
       _wsChannel?.sink.close();
@@ -618,7 +654,7 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    _syncTimer?.cancel();
+    
     _statusTimer?.cancel();
     _wsSub?.cancel();
     _wsChannel?.sink.close();
@@ -733,12 +769,12 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
                             Text(
                               timeStr,
                               style: GoogleFonts.inter(
-                                fontSize: 40,
+                                fontSize: 28,
                                 fontWeight: FontWeight.bold,
                                 color: isTimeUp
                                     ? AppColors.danger
                                     : AppColors.textPrimary,
-                                letterSpacing: 2,
+                                letterSpacing: 0,
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -933,15 +969,69 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
     }
   }
 
+  /// Format end time — in debug mode, calculate simulated end time from started_at + (realDiff * multiplier)
+  String _formatSimulatedEndTime(String? completionIso) {
+    if (completionIso == null) return '--:--';
+    try {
+      if (_debugFastTimer && _startedAtDisplay != null) {
+        final start = DateTime.parse(_startedAtDisplay!);
+        final end = DateTime.parse(completionIso);
+        final realDiffSec = end.difference(start).inSeconds;
+        final simulatedEnd = start.add(Duration(seconds: realDiffSec * _debugSpeedMultiplier));
+        final local = simulatedEnd.toLocal();
+        return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+      }
+      final dt = DateTime.parse(completionIso).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '--:--';
+    }
+  }
+
   String _formatCoords(double? lat, double? lng) {
     if (lat == null || lng == null) return '';
     return '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
   }
 
   Widget _buildProgressReportsSection(bool isThai) {
-    if (_progressReports.isEmpty) return const SizedBox.shrink();
-
     final prStrings = ProgressReportStrings(isThai: isThai);
+    final totalSlots = widget.bookedHours + 1; // 0 (เริ่มงาน) + 1..bookedHours
+
+    // Calculate current period
+    final total = widget.bookedHours * 3600;
+    final elapsed = total - _remaining;
+    final period = elapsed ~/ 3600;
+
+    // Build set of reported hour numbers
+    final reportedHours = <int>{};
+    final reportMap = <int, Map<String, dynamic>>{};
+    for (final r in _progressReports) {
+      final h = r['hour_number'] as int?;
+      if (h != null) {
+        reportedHours.add(h);
+        reportMap[h] = r;
+      }
+    }
+
+    // Determine which hours to show
+    List<int> visibleHours;
+    if (_isPendingCompletion || _remaining <= 0) {
+      // Job done — show all slots 0..bookedHours
+      visibleHours = List.generate(totalSlots, (i) => i);
+    } else {
+      // During job — show only reported + missed (past deadline)
+      final missedSet = <int>{};
+      for (int h = 0; h < period && h <= widget.bookedHours; h++) {
+        if (!reportedHours.contains(h)) missedSet.add(h);
+      }
+      visibleHours = <int>{...reportedHours, ...missedSet}.toList()..sort();
+    }
+
+    if (visibleHours.isEmpty) return const SizedBox.shrink();
+
+    // Missed = visible but not reported
+    final missedHours = visibleHours.where((h) => !reportedHours.contains(h)).toSet();
+    final missedCount = missedHours.length;
 
     return Column(
       children: [
@@ -950,7 +1040,7 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
           margin: const EdgeInsets.symmetric(horizontal: 24),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF), // light blue
+            color: const Color(0xFFEFF6FF),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: Colors.blue.withValues(alpha: 0.2)),
           ),
@@ -979,7 +1069,7 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${_progressReports.length}',
+                      '${reportedHours.length}/$totalSlots',
                       style: GoogleFonts.inter(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
@@ -989,8 +1079,45 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
                   ),
                 ],
               ),
+              if (missedCount > 0) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.warning_rounded,
+                          size: 14, color: Colors.red.shade600),
+                      const SizedBox(width: 4),
+                      Text(
+                        isThai
+                            ? 'ไม่ได้รายงาน $missedCount รอบ'
+                            : '$missedCount missed report${missedCount > 1 ? 's' : ''}',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.red.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
-              ..._progressReports.map((report) => _buildReportCard(report, isThai)),
+              for (int i = 0; i < visibleHours.length; i++) ...[
+                if (i > 0) const Divider(height: 1),
+                _buildCustomerHourRow(
+                  visibleHours[i],
+                  isThai,
+                  reported: reportedHours.contains(visibleHours[i]),
+                  missed: missedHours.contains(visibleHours[i]),
+                  report: reportMap[visibleHours[i]],
+                ),
+              ],
             ],
           ),
         ),
@@ -998,12 +1125,95 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
     );
   }
 
-  Widget _buildReportCard(Map<String, dynamic> report, bool isThai) {
+  Widget _buildCustomerHourRow(
+    int hourNumber,
+    bool isThai, {
+    required bool reported,
+    required bool missed,
+    Map<String, dynamic>? report,
+  }) {
+    Color badgeColor;
+    Color badgeTextColor;
+    if (reported) {
+      badgeColor = AppColors.primary.withValues(alpha: 0.1);
+      badgeTextColor = AppColors.primary;
+    } else if (missed) {
+      badgeColor = Colors.red.withValues(alpha: 0.1);
+      badgeTextColor = Colors.red.shade700;
+    } else {
+      badgeColor = Colors.orange.withValues(alpha: 0.1);
+      badgeTextColor = Colors.orange.shade700;
+    }
+
+    return InkWell(
+      onTap: reported && report != null
+          ? () => _showCustomerReportDetail(report, isThai)
+          : null,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: badgeColor,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                hourNumber == 0
+                    ? (isThai ? 'เริ่มงาน' : 'Start')
+                    : '${isThai ? 'ชม.' : 'Hr'} $hourNumber',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: badgeTextColor,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                reported
+                    ? (isThai ? 'ส่งรายงานแล้ว' : 'Reported')
+                    : missed
+                        ? (isThai ? 'ไม่ได้รายงาน' : 'Missed')
+                        : (isThai ? 'รอรายงาน' : 'Pending'),
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: reported
+                      ? AppColors.primary
+                      : missed
+                          ? Colors.red.shade700
+                          : AppColors.textSecondary,
+                ),
+              ),
+            ),
+            if (reported) ...[
+              Icon(Icons.check_circle_rounded,
+                  size: 20, color: AppColors.primary),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right_rounded,
+                  size: 18, color: AppColors.primary.withValues(alpha: 0.5)),
+            ] else if (missed)
+              Icon(Icons.warning_rounded,
+                  size: 20, color: Colors.red.shade600)
+            else
+              Icon(Icons.schedule_rounded,
+                  size: 18, color: Colors.orange.shade400),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showCustomerReportDetail(Map<String, dynamic> report, bool isThai) {
     final prStrings = ProgressReportStrings(isThai: isThai);
     final hourNumber = report['hour_number'] as int? ?? 0;
     final message = report['message'] as String?;
-    final photoUrl = report['photo_url'] as String?;
     final createdAt = report['created_at'] as String?;
+    final mediaList = (report['media'] as List<dynamic>?) ?? [];
+    final photoUrl = report['photo_url'] as String?;
 
     String timeDisplay = '';
     if (createdAt != null) {
@@ -1014,106 +1224,70 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
       } catch (_) {}
     }
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '${prStrings.hourLabel} $hourNumber',
-                    style: GoogleFonts.inter(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                if (timeDisplay.isNotEmpty)
-                  Text(
-                    timeDisplay,
-                    style: GoogleFonts.inter(
-                      fontSize: 11,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-              ],
-            ),
-            if (photoUrl != null && photoUrl.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              GestureDetector(
-                onTap: () => _showFullPhoto(photoUrl),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    photoUrl,
-                    height: 140,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      height: 60,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Center(
-                        child: Icon(Icons.broken_image_rounded,
-                            color: Colors.grey),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-            if (message != null && message.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(
-                message,
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showFullPhoto(String url) {
     showDialog(
       context: context,
-      builder: (ctx) => GestureDetector(
-        onTap: () => Navigator.pop(ctx),
-        child: Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(16),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.network(
-              url,
-              fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => const Center(
-                child: Icon(Icons.broken_image_rounded,
-                    color: Colors.white, size: 48),
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.check_circle_rounded,
+                      size: 20, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    hourNumber == 0
+                        ? (isThai ? 'เริ่มงาน' : 'Start')
+                        : '${prStrings.hourLabel} $hourNumber',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (timeDisplay.isNotEmpty)
+                    Text(
+                      timeDisplay,
+                      style: GoogleFonts.inter(
+                          fontSize: 12, color: AppColors.textSecondary),
+                    ),
+                ],
               ),
-            ),
+              if (message != null && message.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(message, style: GoogleFonts.inter(fontSize: 14)),
+              ],
+              if (mediaList.isNotEmpty || photoUrl != null) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    mediaList.isNotEmpty
+                        ? (mediaList.first['url'] as String? ?? '')
+                        : (photoUrl ?? ''),
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(
+                    isThai ? 'ปิด' : 'Close',
+                    style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -1180,7 +1354,7 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
             _buildTimelineRow(
               Icons.stop_circle_rounded,
               isThai ? 'สิ้นสุดงาน' : 'Job Ended',
-              _formatCheckinTime(_completionRequestedAt),
+              _formatSimulatedEndTime(_completionRequestedAt),
               _completionPlace != null
                   ? '$_completionPlace\n${_formatWorkedDuration(isThai)}'
                   : _formatWorkedDuration(isThai),
@@ -1197,9 +1371,13 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
     try {
       final start = DateTime.parse(_startedAtDisplay!);
       final end = DateTime.parse(_completionRequestedAt!);
-      final diff = end.difference(start);
-      final h = diff.inHours;
-      final m = diff.inMinutes % 60;
+      final realDiff = end.difference(start);
+      // In debug mode, multiply real elapsed by speed to get simulated worked time
+      final workedSeconds = _debugFastTimer
+          ? realDiff.inSeconds * _debugSpeedMultiplier
+          : realDiff.inSeconds;
+      final h = workedSeconds ~/ 3600;
+      final m = (workedSeconds % 3600) ~/ 60;
       if (h > 0) {
         return isThai
             ? 'ระยะเวลาทำงาน $h ชม. $m นาที'

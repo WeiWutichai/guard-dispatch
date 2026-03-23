@@ -13,6 +13,7 @@ import '../../chat_screen.dart';
 import '../active_job_screen.dart';
 import '../guard_job_detail_screen.dart';
 import '../completed_job_detail_screen.dart';
+import '../guard_navigation_screen.dart';
 
 class GuardJobsTab extends StatefulWidget {
   const GuardJobsTab({super.key});
@@ -266,6 +267,9 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         icon = Icons.access_time_rounded;
       } else if (lower.startsWith('จำนวน') || lower.startsWith('guards:')) {
         icon = Icons.people_rounded;
+      } else if (lower.startsWith('ประเภทงาน:') ||
+          lower.startsWith('job type:')) {
+        icon = Icons.work_rounded;
       } else if (lower.startsWith('บริการเพิ่มเติม:') || lower.startsWith('additional:')) {
         icon = Icons.add_circle_outline_rounded;
       } else if (lower.startsWith('อุปกรณ์:') || lower.startsWith('equipment:')) {
@@ -625,6 +629,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
                     address: job['address'] as String?,
                     bookedHours: bookedHours,
                     remainingSeconds: remaining,
+                    startedAt: activeJob['started_at'] as String?,
                   ),
                 ),
               );
@@ -666,6 +671,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
                   remainingSeconds:
                       (result['remaining_seconds'] as num?)?.toInt() ??
                           (((job['booked_hours'] as num?)?.toInt() ?? 6) * 3600),
+                  startedAt: result['started_at'] as String?,
                 ),
               ),
             );
@@ -679,12 +685,73 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
               ),
             );
           }
+        } else if (status == 'accepted' || status == 'assigned') {
+          // Start route → update status + navigate to map
+          try {
+            double? gpsLat, gpsLng;
+            try {
+              final pos = await Geolocator.getCurrentPosition(
+                locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+              );
+              gpsLat = pos.latitude;
+              gpsLng = pos.longitude;
+            } catch (_) {}
+            if (!mounted) return;
+            await context
+                .read<BookingProvider>()
+                .updateAssignmentStatus(assignmentId, 'en_route', lat: gpsLat, lng: gpsLng);
+            if (!mounted) return;
+            final customerLat = (job['location_lat'] as num?)?.toDouble();
+            final customerLng = (job['location_lng'] as num?)?.toDouble();
+            if (customerLat != null && customerLng != null) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GuardNavigationScreen(
+                    assignmentId: assignmentId,
+                    customerName: job['customer_name'] as String? ?? '-',
+                    customerPhone: job['customer_phone'] as String?,
+                    address: job['address'] as String? ?? '-',
+                    customerLat: customerLat,
+                    customerLng: customerLng,
+                  ),
+                ),
+              );
+            }
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error: $e'),
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: AppColors.danger,
+              ),
+            );
+          }
+        } else if (status == 'en_route') {
+          // Already en route → open navigation map
+          final customerLat = (job['location_lat'] as num?)?.toDouble();
+          final customerLng = (job['location_lng'] as num?)?.toDouble();
+          if (customerLat != null && customerLng != null) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => GuardNavigationScreen(
+                  assignmentId: assignmentId,
+                  customerName: job['customer_name'] as String? ?? '-',
+                  customerPhone: job['customer_phone'] as String?,
+                  address: job['address'] as String? ?? '-',
+                  customerLat: customerLat,
+                  customerLng: customerLng,
+                ),
+              ),
+            );
+          }
         } else {
-          final nextStatus =
-              (status == 'accepted' || status == 'assigned') ? 'en_route' : 'arrived';
+          // Fallback: update status
           context
               .read<BookingProvider>()
-              .updateAssignmentStatus(assignmentId, nextStatus);
+              .updateAssignmentStatus(assignmentId, 'arrived');
         }
       },
       icon: Icon(buttonIcon, size: 20),
@@ -815,6 +882,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return isThai ? 'กำลังรอการชำระ' : 'Awaiting Payment';
       case 'declined':
         return isThai ? 'ปฏิเสธแล้ว' : 'Declined';
+      case 'pending_completion':
+        return isThai ? 'รอลูกค้าตรวจสอบ' : 'Pending Review';
       default:
         return status;
     }
@@ -834,6 +903,8 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         return AppColors.success;
       case 'started':
         return AppColors.primary;
+      case 'pending_completion':
+        return Colors.orange;
       case 'completed':
         return AppColors.textSecondary;
       case 'awaiting_payment':

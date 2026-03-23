@@ -120,7 +120,8 @@ class BookingProvider extends ChangeNotifier {
                 s == 'awaiting_payment' ||
                 s == 'assigned' ||
                 s == 'en_route' ||
-                s == 'arrived';
+                s == 'arrived' ||
+                s == 'pending_completion';
           })
           .toList();
       _completedJobs = allJobs
@@ -144,7 +145,8 @@ class BookingProvider extends ChangeNotifier {
               s == 'awaiting_payment' ||
               s == 'assigned' ||
               s == 'en_route' ||
-              s == 'arrived';
+              s == 'arrived' ||
+              s == 'pending_completion';
         })
         .toList();
     _completedJobs = allJobs
@@ -503,7 +505,7 @@ class BookingProvider extends ChangeNotifier {
     String assignmentId, {
     required int hourNumber,
     String? message,
-    File? photo,
+    List<File> files = const [],
   }) async {
     _isSubmittingReport = true;
     notifyListeners();
@@ -512,7 +514,7 @@ class BookingProvider extends ChangeNotifier {
         assignmentId,
         hourNumber: hourNumber,
         message: message,
-        photo: photo,
+        files: files,
       );
       // Add to local list
       _progressReports.add(result);

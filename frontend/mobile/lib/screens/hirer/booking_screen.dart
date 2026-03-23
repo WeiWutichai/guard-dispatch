@@ -48,6 +48,10 @@ class _BookingScreenState extends State<BookingScreen> {
   };
   final _otherEquipmentController = TextEditingController();
 
+  // Job type
+  String? _selectedJobType;
+  final _otherJobTypeController = TextEditingController();
+
   // Additional services
   final Map<String, bool> _services = {
     'has_pets': false,
@@ -88,6 +92,7 @@ class _BookingScreenState extends State<BookingScreen> {
     _jobDetailsController.dispose();
     _notesController.dispose();
     _tipController.dispose();
+    _otherJobTypeController.dispose();
     _otherEquipmentController.dispose();
     _otherServiceController.dispose();
     super.dispose();
@@ -314,6 +319,22 @@ class _BookingScreenState extends State<BookingScreen> {
         ? 'จำนวน รปภ.: $_guardCount คน'
         : 'Guards: $_guardCount');
 
+    if (_selectedJobType != null) {
+      String jtLabel;
+      if (_selectedJobType == 'other') {
+        final custom = _otherJobTypeController.text.trim();
+        jtLabel = custom.isNotEmpty
+            ? custom
+            : (isThai ? 'อื่นๆ' : 'Other');
+      } else {
+        final jt = _jobTypes.firstWhere((t) => t['key'] == _selectedJobType);
+        jtLabel = (isThai ? jt['th'] : jt['en']) as String;
+      }
+      parts.add(isThai
+          ? 'ประเภทงาน: $jtLabel'
+          : 'Job Type: $jtLabel');
+    }
+
     final selectedServices = _services.entries
         .where((e) => e.value)
         .map((e) => _serviceLabel(e.key, isThai))
@@ -423,6 +444,8 @@ class _BookingScreenState extends State<BookingScreen> {
                   _buildServiceTimeSection(isThai),
                   const SizedBox(height: 20),
                   _buildLocationSection(isThai),
+                  const SizedBox(height: 20),
+                  _buildJobTypeSection(isThai),
                   const SizedBox(height: 20),
                   _buildEquipmentSection(isThai),
                   const SizedBox(height: 20),
@@ -896,7 +919,91 @@ class _BookingScreenState extends State<BookingScreen> {
   }
 
   // ===========================================================================
-  // Section 3: Security Equipment
+  // Section 3: Job Type
+  // ===========================================================================
+
+  static const _jobTypes = [
+    {'key': 'village', 'th': 'งานหมู่บ้าน', 'en': 'Village', 'icon': Icons.holiday_village_rounded},
+    {'key': 'condo', 'th': 'คอนโด', 'en': 'Condo', 'icon': Icons.apartment_rounded},
+    {'key': 'factory', 'th': 'โรงงาน', 'en': 'Factory', 'icon': Icons.factory_rounded},
+    {'key': 'other', 'th': 'อื่นๆ', 'en': 'Other', 'icon': Icons.more_horiz_rounded},
+  ];
+
+  Widget _buildJobTypeSection(bool isThai) {
+    return _buildSectionCard(
+      icon: Icons.work_rounded,
+      title: isThai ? 'ประเภทงาน' : 'Job Type',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: _jobTypes.map((type) {
+              final key = type['key'] as String;
+              final label = (isThai ? type['th'] : type['en']) as String;
+              final icon = type['icon'] as IconData;
+              final isSelected = _selectedJobType == key;
+              return GestureDetector(
+                onTap: () => setState(() => _selectedJobType = key),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppColors.primary : Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isSelected ? AppColors.primary : AppColors.border,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: 18,
+                          color: isSelected ? Colors.white : AppColors.textSecondary),
+                      const SizedBox(width: 8),
+                      Text(
+                        label,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                          color: isSelected ? Colors.white : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          if (_selectedJobType == 'other')
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: TextField(
+                  controller: _otherJobTypeController,
+                  decoration: InputDecoration(
+                    hintText: isThai ? 'โปรดระบุประเภทงาน' : 'Please specify job type',
+                    border: InputBorder.none,
+                    hintStyle: GoogleFonts.inter(
+                        fontSize: 13, color: AppColors.textSecondary),
+                  ),
+                  style: GoogleFonts.inter(fontSize: 14),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // Section 4: Security Equipment
   // ===========================================================================
 
   Widget _buildEquipmentSection(bool isThai) {

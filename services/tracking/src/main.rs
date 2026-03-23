@@ -80,6 +80,31 @@ async fn main() -> anyhow::Result<()> {
         jwt_config,
     });
 
+    // Background task: clean up old location history every 6 hours
+    {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                match sqlx::query_scalar::<_, i64>(
+                    "SELECT tracking.cleanup_old_history(90)"
+                )
+                .fetch_one(&db)
+                .await
+                {
+                    Ok(deleted) => {
+                        if deleted > 0 {
+                            tracing::info!("Location history cleanup: deleted {deleted} old rows");
+                        }
+                    }
+                    Err(e) => tracing::error!("Location history cleanup failed: {e}"),
+                }
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/health", get(health_check))
         // WebSocket — GPS data MUST flow through WebSocket only (per CLAUDE.md)

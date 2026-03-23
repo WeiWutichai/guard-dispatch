@@ -21,6 +21,7 @@ class CustomerCompletedJobScreen extends StatefulWidget {
 class _CustomerCompletedJobScreenState
     extends State<CustomerCompletedJobScreen> {
   Map<String, dynamic>? _assignment;
+  List<Map<String, dynamic>> _progressReports = [];
   bool _isLoading = true;
 
   @override
@@ -43,8 +44,27 @@ class _CustomerCompletedJobScreenState
       final completed = assignments.where(
         (a) => a['status'] == 'completed',
       );
+      final found = completed.isNotEmpty
+          ? completed.first
+          : assignments.isNotEmpty
+              ? assignments.first
+              : null;
+      // Fetch progress reports for the assignment
+      List<Map<String, dynamic>> reports = [];
+      if (found != null) {
+        final assignmentId = found['id'] as String? ?? '';
+        if (assignmentId.isNotEmpty) {
+          try {
+            final bp = context.read<BookingProvider>();
+            await bp.fetchProgressReports(assignmentId);
+            reports = List<Map<String, dynamic>>.from(bp.progressReports);
+          } catch (_) {}
+        }
+      }
+      if (!mounted) return;
       setState(() {
-        _assignment = completed.isNotEmpty ? completed.first : assignments.isNotEmpty ? assignments.first : null;
+        _assignment = found;
+        _progressReports = reports;
         _isLoading = false;
       });
     } catch (_) {
@@ -442,6 +462,12 @@ class _CustomerCompletedJobScreenState
                           _buildWriteReviewButton(isThai),
                         ],
 
+                        // Progress Reports
+                        if (_progressReports.isNotEmpty) ...[
+                          const SizedBox(height: 20),
+                          _buildProgressReportsSection(isThai),
+                        ],
+
                         // Timeline
                         const SizedBox(height: 24),
                         _buildTimeline(
@@ -629,6 +655,314 @@ class _CustomerCompletedJobScreenState
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // =========================================================================
+  // Progress Reports Section
+  // =========================================================================
+
+  Widget _buildProgressReportsSection(bool isThai) {
+    // Sort by hour_number
+    final sorted = List<Map<String, dynamic>>.from(_progressReports)
+      ..sort((a, b) =>
+          (a['hour_number'] as int? ?? 0).compareTo(b['hour_number'] as int? ?? 0));
+
+    return _buildSectionCard(
+      icon: Icons.assignment_rounded,
+      title: isThai ? 'รายงานความคืบหน้า' : 'Progress Reports',
+      backgroundColor: const Color(0xFFF0F7FF),
+      borderColor: Colors.blue.withValues(alpha: 0.15),
+      child: Column(
+        children: [
+          for (int i = 0; i < sorted.length; i++) ...[
+            if (i > 0) const Divider(height: 1),
+            _buildReportRow(sorted[i], isThai),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReportRow(Map<String, dynamic> report, bool isThai) {
+    final hourNumber = report['hour_number'] as int? ?? 0;
+    final message = report['message'] as String?;
+    final createdAt = report['created_at'] as String?;
+    final mediaList = report['media'] as List? ?? [];
+    final photoUrl = report['photo_url'] as String?;
+
+    // Collect media
+    final List<Map<String, dynamic>> mediaItems = [];
+    for (final m in mediaList) {
+      if (m is Map<String, dynamic>) mediaItems.add(m);
+    }
+    if (mediaItems.isEmpty && photoUrl != null) {
+      mediaItems.add({'url': photoUrl, 'mime_type': 'image/jpeg'});
+    }
+
+    String? timeStr;
+    if (createdAt != null) {
+      try {
+        final dt = DateTime.parse(createdAt).toLocal();
+        timeStr = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      } catch (_) {}
+    }
+
+    return InkWell(
+      onTap: () => _showReportDetail(report, isThai),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${isThai ? 'ชม.' : 'Hr'} $hourNumber',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (message != null && message.isNotEmpty)
+                    Text(
+                      message,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.inter(fontSize: 12),
+                    )
+                  else
+                    Text(
+                      isThai ? 'ส่งรายงานแล้ว' : 'Reported',
+                      style: GoogleFonts.inter(
+                          fontSize: 12, color: AppColors.textSecondary),
+                    ),
+                  if (timeStr != null)
+                    Text(
+                      timeStr,
+                      style: GoogleFonts.inter(
+                          fontSize: 11, color: AppColors.textSecondary),
+                    ),
+                ],
+              ),
+            ),
+            if (mediaItems.isNotEmpty) ...[
+              Icon(Icons.photo_library_rounded,
+                  size: 16, color: AppColors.primary.withValues(alpha: 0.6)),
+              const SizedBox(width: 2),
+              Text(
+                '${mediaItems.length}',
+                style: GoogleFonts.inter(
+                    fontSize: 11, color: AppColors.textSecondary),
+              ),
+            ],
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right_rounded,
+                size: 18, color: Colors.grey.shade400),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showReportDetail(Map<String, dynamic> report, bool isThai) {
+    final hourNumber = report['hour_number'] as int? ?? 0;
+    final message = report['message'] as String?;
+    final createdAt = report['created_at'] as String?;
+    final mediaList = report['media'] as List? ?? [];
+    final photoUrl = report['photo_url'] as String?;
+
+    final List<Map<String, dynamic>> mediaItems = [];
+    for (final m in mediaList) {
+      if (m is Map<String, dynamic>) mediaItems.add(m);
+    }
+    if (mediaItems.isEmpty && photoUrl != null) {
+      mediaItems.add({'url': photoUrl, 'mime_type': 'image/jpeg'});
+    }
+
+    String? formattedTime;
+    if (createdAt != null) {
+      try {
+        final dt = DateTime.parse(createdAt).toLocal();
+        final d = dt.day.toString().padLeft(2, '0');
+        final mo = dt.month.toString().padLeft(2, '0');
+        final h = dt.hour.toString().padLeft(2, '0');
+        final mi = dt.minute.toString().padLeft(2, '0');
+        formattedTime = '$d/$mo/${dt.year} $h:$mi';
+      } catch (_) {}
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.assignment_turned_in_rounded,
+                          color: AppColors.primary, size: 22),
+                      const SizedBox(width: 8),
+                      Text(
+                        isThai
+                            ? 'รายงานชั่วโมงที่ $hourNumber'
+                            : 'Hour $hourNumber Report',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (formattedTime != null) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(Icons.schedule_rounded,
+                            size: 14, color: AppColors.textSecondary),
+                        const SizedBox(width: 5),
+                        Text(
+                          '${isThai ? 'รายงานเมื่อ' : 'Reported at'} $formattedTime',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const Divider(height: 24),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (mediaItems.isNotEmpty) ...[
+                      SizedBox(
+                        height: 180,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: mediaItems.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 8),
+                          itemBuilder: (_, idx) {
+                            final item = mediaItems[idx];
+                            final url = item['url'] as String? ?? '';
+                            final mime =
+                                item['mime_type'] as String? ?? 'image/jpeg';
+                            final isVideo = mime.startsWith('video/');
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: isVideo
+                                  ? Container(
+                                      width: 180,
+                                      height: 180,
+                                      color: Colors.black87,
+                                      child: const Center(
+                                        child: Icon(
+                                            Icons.play_circle_fill_rounded,
+                                            color: Colors.white,
+                                            size: 48),
+                                      ),
+                                    )
+                                  : Image.network(
+                                      url,
+                                      width: 180,
+                                      height: 180,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) => Container(
+                                        width: 180,
+                                        height: 180,
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(
+                                            Icons.broken_image_rounded,
+                                            color: Colors.grey),
+                                      ),
+                                    ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    if (message != null && message.isNotEmpty) ...[
+                      Text(
+                        isThai ? 'ข้อความ' : 'Message',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Text(message,
+                            style: GoogleFonts.inter(fontSize: 14)),
+                      ),
+                    ] else
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          child: Text(
+                            isThai
+                                ? 'ไม่มีข้อความประกอบ'
+                                : 'No message attached',
+                            style: GoogleFonts.inter(
+                                fontSize: 13, color: AppColors.textSecondary),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -874,6 +1208,9 @@ class _CustomerCompletedJobScreenState
         icon = Icons.access_time_rounded;
       } else if (lower.startsWith('จำนวน') || lower.startsWith('guards:')) {
         icon = Icons.people_rounded;
+      } else if (lower.startsWith('ประเภทงาน:') ||
+          lower.startsWith('job type:')) {
+        icon = Icons.work_rounded;
       } else if (lower.startsWith('บริการเพิ่มเติม:') ||
           lower.startsWith('additional:')) {
         icon = Icons.add_circle_outline_rounded;

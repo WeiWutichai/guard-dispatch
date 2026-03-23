@@ -97,6 +97,7 @@ pub struct GuardLocationWithName {
     pub heading: Option<f32>,
     pub speed: Option<f32>,
     pub recorded_at: DateTime<Utc>,
+    pub is_online: bool,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -109,6 +110,7 @@ pub struct GuardLocationWithNameRow {
     pub heading: Option<f32>,
     pub speed: Option<f32>,
     pub recorded_at: DateTime<Utc>,
+    pub is_online: bool,
 }
 
 impl From<GuardLocationWithNameRow> for GuardLocationWithName {
@@ -122,6 +124,7 @@ impl From<GuardLocationWithNameRow> for GuardLocationWithName {
             heading: row.heading,
             speed: row.speed,
             recorded_at: row.recorded_at,
+            is_online: row.is_online,
         }
     }
 }
@@ -129,6 +132,11 @@ impl From<GuardLocationWithNameRow> for GuardLocationWithName {
 // =============================================================================
 // Query params
 // =============================================================================
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct LocationsQuery {
+    pub online_only: Option<bool>,
+}
 
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct HistoryQuery {

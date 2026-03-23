@@ -835,7 +835,7 @@ async fn handle_assignment_ws(mut socket: WebSocket, state: Arc<AppState>, user:
 // Progress Reports
 // =============================================================================
 
-/// Submit an hourly progress report (guard, multipart: hour_number + message + photo)
+/// Submit an hourly progress report (guard, multipart: hour_number + message + files)
 #[utoipa::path(
     post,
     path = "/assignments/{id}/progress-reports",
@@ -855,8 +855,7 @@ pub async fn submit_progress_report(
 ) -> Result<Json<ApiResponse<ProgressReportResponse>>, AppError> {
     let mut hour_number: Option<i32> = None;
     let mut message: Option<String> = None;
-    let mut photo_data: Option<Vec<u8>> = None;
-    let mut photo_mime: Option<String> = None;
+    let mut files: Vec<(Vec<u8>, String)> = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
@@ -884,14 +883,27 @@ pub async fn submit_progress_report(
                         .map_err(|e| AppError::BadRequest(format!("Invalid message: {e}")))?,
                 );
             }
-            "photo" => {
-                photo_mime = field.content_type().map(|s| s.to_string());
+            // Accept both "photo" (legacy single) and "files" (multi-file)
+            "photo" | "files" => {
+                if files.len() >= 5 {
+                    return Err(AppError::BadRequest(
+                        "Maximum 5 files per progress report".to_string(),
+                    ));
+                }
+                let declared_mime = field
+                    .content_type()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 let data = field
                     .bytes()
                     .await
-                    .map_err(|e| AppError::BadRequest(format!("Failed to read photo: {e}")))?
+                    .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
                     .to_vec();
-                photo_data = Some(data);
+                // Use magic-byte detected MIME, fallback to declared
+                let mime = crate::s3::detect_mime(&data)
+                    .unwrap_or(declared_mime);
+                crate::s3::validate_upload(&mime, data.len(), &data)?;
+                files.push((data, mime));
             }
             _ => {}
         }
@@ -899,15 +911,6 @@ pub async fn submit_progress_report(
 
     let hour_number =
         hour_number.ok_or_else(|| AppError::BadRequest("hour_number is required".to_string()))?;
-
-    // Validate photo if provided
-    let validated_photo = if let Some(data) = photo_data {
-        let mime = photo_mime.unwrap_or_else(|| "application/octet-stream".to_string());
-        crate::s3::validate_upload(&mime, data.len(), &data)?;
-        Some((data, mime))
-    } else {
-        None
-    };
 
     let result = crate::service::submit_progress_report(
         &state.db,
@@ -919,7 +922,7 @@ pub async fn submit_progress_report(
         user.user_id,
         hour_number,
         message,
-        validated_photo,
+        files,
     )
     .await?;
 

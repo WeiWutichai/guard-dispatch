@@ -12,7 +12,8 @@ use crate::models::{
     CreatePaymentDto, CreateRequestDto, CreateServiceRateDto, DailyEarning,
     GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary,
     GuardRequestResponse, GuardRequestRow, ListRequestsQuery, PaymentResponse, PaymentRow,
-    ProgressReportResponse, ProgressReportRow, RatingSummaryRow, RequestStatus, ReviewItem,
+    ProgressReportMediaItem, ProgressReportMediaRow, ProgressReportResponse, ProgressReportRow,
+    RatingSummaryRow, RequestStatus, ReviewItem,
     ReviewRow, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem,
     WorkHistoryResponse, WorkHistoryRow,
 };
@@ -2334,7 +2335,13 @@ pub async fn list_available_guards(
         WHERE u.role = 'guard'
           AND u.is_active = true
           AND u.approval_status = 'approved'
+          AND gl.is_online = true
           AND gl.recorded_at > NOW() - INTERVAL '30 minutes'
+          AND NOT EXISTS (
+              SELECT 1 FROM booking.assignments ba
+              WHERE ba.guard_id = u.id
+                AND ba.status IN ('pending_acceptance', 'accepted', 'en_route', 'arrived', 'pending_completion')
+          )
           AND (6371.0 * acos(
               LEAST(1.0, GREATEST(-1.0,
                   cos(radians($1::float8)) * cos(radians(gl.lat)) *
@@ -2383,7 +2390,7 @@ pub async fn submit_progress_report(
     guard_id: Uuid,
     hour_number: i32,
     message: Option<String>,
-    photo_data: Option<(Vec<u8>, String)>, // (bytes, mime_type)
+    files: Vec<(Vec<u8>, String)>, // Vec<(bytes, mime_type)>
 ) -> Result<ProgressReportResponse, AppError> {
     // 1. Verify assignment exists, belongs to this guard, and is in active status
     let row = sqlx::query_as::<_, ProgressAssignmentCheck>(
@@ -2418,10 +2425,10 @@ pub async fn submit_progress_report(
         ));
     }
 
-    // 2. Validate hour_number
-    if hour_number < 1 {
+    // 2. Validate hour_number (0 = initial report at job start)
+    if hour_number < 0 {
         return Err(AppError::BadRequest(
-            "hour_number must be >= 1".to_string(),
+            "hour_number must be >= 0".to_string(),
         ));
     }
     if let Some(booked) = row.booked_hours {
@@ -2432,15 +2439,35 @@ pub async fn submit_progress_report(
         }
     }
 
-    // 3. Upload photo if provided
-    let (photo_file_key, photo_mime_type) = if let Some((data, mime)) = photo_data {
-        let ext = crate::s3::mime_to_extension(&mime);
-        let file_key = format!("reports/{assignment_id}/{hour_number}.{ext}");
-        crate::s3::upload_file(s3_client, s3_bucket, &file_key, data, &mime).await?;
-        (Some(file_key), Some(mime))
-    } else {
-        (None, None)
-    };
+    // 3. Upload files in parallel via JoinSet
+    let mut uploaded: Vec<(String, String, i32)> = Vec::new(); // (file_key, mime_type, file_size)
+    if !files.is_empty() {
+        let mut join_set = tokio::task::JoinSet::new();
+        for (idx, (data, mime)) in files.into_iter().enumerate() {
+            let ext = crate::s3::mime_to_extension(&mime);
+            let file_key = format!("reports/{assignment_id}/{hour_number}/{idx}.{ext}");
+            let file_size = data.len() as i32;
+            let s3 = s3_client.clone();
+            let bucket = s3_bucket.to_string();
+            let fk = file_key.clone();
+            let mt = mime.clone();
+            join_set.spawn(async move {
+                crate::s3::upload_file(&s3, &bucket, &fk, data, &mt).await?;
+                Ok::<(String, String, i32), AppError>((file_key, mime, file_size))
+            });
+        }
+        while let Some(result) = join_set.join_next().await {
+            let item = result.map_err(|e| AppError::Internal(format!("Upload task failed: {e}")))?;
+            uploaded.push(item?);
+        }
+        // Sort by file_key to maintain consistent order (index is in the key)
+        uploaded.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+
+    // Set legacy photo_file_key from first image (backward compat)
+    let first_image = uploaded.iter().find(|(_, mime, _)| !crate::s3::is_video_mime(mime));
+    let photo_file_key = first_image.map(|(k, _, _)| k.as_str());
+    let photo_mime_type = first_image.map(|(_, m, _)| m.as_str());
 
     // 4. INSERT with ON CONFLICT DO NOTHING — returns None if duplicate
     let inserted = sqlx::query_as::<_, ProgressReportRow>(
@@ -2455,8 +2482,8 @@ pub async fn submit_progress_report(
     .bind(guard_id)
     .bind(hour_number)
     .bind(message.as_deref())
-    .bind(photo_file_key.as_deref())
-    .bind(photo_mime_type.as_deref())
+    .bind(photo_file_key)
+    .bind(photo_mime_type)
     .fetch_optional(db)
     .await?
     .ok_or_else(|| {
@@ -2465,21 +2492,44 @@ pub async fn submit_progress_report(
         ))
     })?;
 
-    // 5. Generate signed photo URL
-    let photo_url = if let Some(ref key) = inserted.photo_file_key {
-        let url = crate::s3::get_signed_url(s3_client, s3_bucket, key).await?;
-        // Host rewrite for dev (minio:9000 → public URL)
-        let url = if s3_endpoint != s3_public_url {
+    // 5. Bulk INSERT media rows + generate signed URLs
+    let rewrite = s3_endpoint != s3_public_url;
+    let mut media = Vec::with_capacity(uploaded.len());
+    for (sort_order, (file_key, mime_type, file_size)) in uploaded.into_iter().enumerate() {
+        let media_row = sqlx::query_as::<_, ProgressReportMediaRow>(
+            r#"
+            INSERT INTO booking.progress_report_media (report_id, file_key, mime_type, file_size, sort_order)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, report_id, file_key, mime_type, file_size, sort_order, created_at
+            "#,
+        )
+        .bind(inserted.id)
+        .bind(&file_key)
+        .bind(&mime_type)
+        .bind(file_size)
+        .bind(sort_order as i32)
+        .fetch_one(db)
+        .await?;
+
+        let url = crate::s3::get_signed_url(s3_client, s3_bucket, &file_key).await?;
+        let url = if rewrite {
             url.replacen(s3_endpoint, s3_public_url, 1)
         } else {
             url
         };
-        Some(url)
-    } else {
-        None
-    };
+        media.push(ProgressReportMediaItem {
+            id: media_row.id,
+            url,
+            mime_type,
+            file_size,
+            sort_order: sort_order as i32,
+        });
+    }
 
-    // 6. Notify customer (fire-and-forget)
+    // 6. photo_url = first image signed URL (backward compat)
+    let photo_url = media.iter().find(|m| !crate::s3::is_video_mime(&m.mime_type)).map(|m| m.url.clone());
+
+    // 7. Notify customer (fire-and-forget)
     spawn_notification(
         db.clone(),
         row.customer_id,
@@ -2499,6 +2549,7 @@ pub async fn submit_progress_report(
         hour_number: inserted.hour_number,
         message: inserted.message,
         photo_url,
+        media,
         created_at: inserted.created_at,
     })
 }
@@ -2551,21 +2602,77 @@ pub async fn list_progress_reports(
     .fetch_all(db)
     .await?;
 
-    // 3. Re-sign photo URLs
+    if rows.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // 3. Fetch all media for these reports in one query
+    let report_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let media_rows = sqlx::query_as::<_, ProgressReportMediaRow>(
+        r#"
+        SELECT id, report_id, file_key, mime_type, file_size, sort_order, created_at
+        FROM booking.progress_report_media
+        WHERE report_id = ANY($1)
+        ORDER BY report_id, sort_order
+        "#,
+    )
+    .bind(&report_ids)
+    .fetch_all(db)
+    .await?;
+
+    // Group media by report_id
+    let mut media_map: std::collections::HashMap<Uuid, Vec<ProgressReportMediaRow>> =
+        std::collections::HashMap::new();
+    for m in media_rows {
+        media_map.entry(m.report_id).or_default().push(m);
+    }
+
+    // 4. Build responses with signed URLs
     let rewrite = s3_endpoint != s3_public_url;
     let mut responses = Vec::with_capacity(rows.len());
     for row in rows {
-        let photo_url = if let Some(ref key) = row.photo_file_key {
-            let url = crate::s3::get_signed_url(s3_client, s3_bucket, key).await?;
-            let url = if rewrite {
-                url.replacen(s3_endpoint, s3_public_url, 1)
-            } else {
-                url
-            };
-            Some(url)
-        } else {
-            None
-        };
+        // Build media items with signed URLs
+        let mut media = Vec::new();
+        if let Some(media_rows) = media_map.remove(&row.id) {
+            for m in media_rows {
+                let url = crate::s3::get_signed_url(s3_client, s3_bucket, &m.file_key).await?;
+                let url = if rewrite {
+                    url.replacen(s3_endpoint, s3_public_url, 1)
+                } else {
+                    url
+                };
+                media.push(ProgressReportMediaItem {
+                    id: m.id,
+                    url,
+                    mime_type: m.mime_type,
+                    file_size: m.file_size,
+                    sort_order: m.sort_order,
+                });
+            }
+        }
+
+        // Legacy fallback: if no media rows but photo_file_key exists (pre-migration data)
+        if media.is_empty() {
+            if let Some(ref key) = row.photo_file_key {
+                let url = crate::s3::get_signed_url(s3_client, s3_bucket, key).await?;
+                let url = if rewrite {
+                    url.replacen(s3_endpoint, s3_public_url, 1)
+                } else {
+                    url
+                };
+                let mime = row.photo_mime_type.clone().unwrap_or_else(|| "image/jpeg".to_string());
+                media.push(ProgressReportMediaItem {
+                    id: row.id, // reuse report id for legacy
+                    url,
+                    mime_type: mime,
+                    file_size: 0, // unknown for legacy
+                    sort_order: 0,
+                });
+            }
+        }
+
+        // photo_url = first image from media (backward compat)
+        let photo_url = media.iter().find(|m| !crate::s3::is_video_mime(&m.mime_type)).map(|m| m.url.clone());
 
         responses.push(ProgressReportResponse {
             id: row.id,
@@ -2574,6 +2681,7 @@ pub async fn list_progress_reports(
             hour_number: row.hour_number,
             message: row.message,
             photo_url,
+            media,
             created_at: row.created_at,
         });
     }

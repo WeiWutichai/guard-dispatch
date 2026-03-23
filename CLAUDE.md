@@ -238,6 +238,22 @@ CREATE INDEX idx_guard_reviews_customer_id ON reviews.guard_reviews(customer_id)
 > **Category ratings optional** — only `overall_rating` is required; category breakdowns (punctuality, professionalism, communication, appearance) are optional.
 > **Real ratings in guard discovery** — `list_available_guards()` JOINs `reviews.guard_reviews` with `AVG(overall_rating)` and `COUNT(*)` instead of placeholder values.
 
+### Tracking Tables
+```sql
+CREATE TABLE tracking.guard_locations (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  guard_id    UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  lat         DOUBLE PRECISION NOT NULL,
+  lng         DOUBLE PRECISION NOT NULL,
+  accuracy    REAL,
+  heading     REAL,
+  speed       REAL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_online   BOOLEAN NOT NULL DEFAULT false
+);
+```
+> **Online status tracking:** `is_online` = `true` when guard's GPS WebSocket is connected (set in `upsert_location()`), `false` when disconnected (set in `set_offline()` called from `handle_gps_socket` on WS close). `list_available_guards()` filters `gl.is_online = true` so guards who toggled off "พร้อมให้บริการ" are immediately excluded from customer search.
+
 ### Notification Tables
 ```sql
 CREATE TABLE notification.notification_logs (
@@ -274,6 +290,10 @@ CREATE TABLE notification.fcm_tokens (
 - ทุก Service ต้องเป็น **Stateless** — ห้ามเก็บ session ใน memory
 - Session และ state ทั้งหมดเก็บใน **Redis**
 - GPS data ส่งผ่าน **WebSocket เท่านั้น** ห้ามใช้ REST polling
+- **GPS WebSocket Ping/Pong:** Server ส่ง ping ทุก 30 วินาที, ถ้าไม่ได้ pong ภายใน 10 วินาที → ถือว่า zombie → disconnect + `set_offline()` — ป้องกัน guard ที่ kill app/หมดแบตค้างเป็น online
+- **Redis PubSub GPS failure:** log-and-continue (ไม่ retry) — DB write ยังสำเร็จ, tick ถัดไป (1 วินาที) จะ publish ใหม่ — acceptable tradeoff เพราะ real-time map miss แค่ 1 frame
+- **Location History Retention:** `tracking.cleanup_old_history(90)` ลบ rows เก่ากว่า 90 วัน — background task ใน tracking-service run ทุก 6 ชม. + index `idx_location_history_recorded_at` สำหรับ efficient DELETE
+- **Location History Columns:** เก็บ `accuracy`, `heading`, `speed` ด้วย (migration 031) — สำหรับ route replay + dispute resolution
 
 ### File Upload
 - ขนาดไฟล์สูงสุด: **10MB ต่อไฟล์**
@@ -347,7 +367,9 @@ CREATE TABLE notification.fcm_tokens (
   - `ws_handler` ต้องตรวจ `user.role == "guard"` ก่อน upgrade — ห้ามให้ admin/customer ส่ง GPS
   - `GpsUpdate::validate()` ต้องตรวจ lat (-90..90), lng (-180..180), reject (0,0), accuracy (0..10000), heading (0..360), speed (0..500)
   - Server-side rate limit: max 1 GPS update/second per connection — drop excess messages
-  - `list_all_locations` ต้อง restrict เฉพาะ admin — ห้ามให้ customer เห็น bulk guard locations (TODO: เพิ่ม booking-based filtering สำหรับ customer)
+  - `list_all_locations` ต้อง restrict เฉพาะ admin — ห้ามให้ customer เห็น bulk guard locations. รองรับ `?online_only=true` query param. Response มี `is_online` field
+  - `get_latest_location` / `get_location_history`: customer ต้องมี active booking กับ guard (`has_active_booking()` check) — ห้ามดู location guard ที่ไม่เกี่ยวข้อง (IDOR prevention)
+  - **Online Status:** `tracking.guard_locations.is_online` (BOOLEAN) — set `true` ใน `upsert_location()` ทุก GPS update, set `false` ใน `set_offline()` ตอน WebSocket disconnect. `list_available_guards()` filter `gl.is_online = true`
 - **Audit Middleware:** ต้อง validate JWT signature ด้วย real secret ก่อน trust user_id — ห้ามใช้ `insecure_disable_signature_validation()`
   - ใช้ `middleware::from_fn_with_state(state.clone(), audit_middleware::<Arc<AppState>>)` — ต้อง turbofish type annotation เพราะ `HasJwtSecret` implement ทั้ง `AppState` และ `Arc<T>`
   - **ทุก service ต้องมี audit middleware** — ปัจจุบัน 5 services (auth, booking, tracking, notification, chat) ทั้งหมดมีแล้ว
@@ -779,10 +801,10 @@ RegistrationPendingScreen
 **Booking Service — Available Guards Endpoint (main.rs):**
 - `GET /available-guards` → `handlers::available_guards` (JWT) — list nearby available guards for customer
   - Query params: `lat` (required), `lng` (required), `radius_km` (optional, default 50, max 200), `limit` (optional, default 20, max 50), `offset` (optional, default 0)
-  - Returns `Vec<AvailableGuardResponse>` — guards with `role='guard'`, `is_active=true`, `approval_status='approved'`, GPS location within last 30 minutes, within radius_km
+  - Returns `Vec<AvailableGuardResponse>` — guards with `role='guard'`, `is_active=true`, `approval_status='approved'`, `is_online=true`, GPS location within last 30 minutes, within radius_km
   - **Haversine distance:** Calculated in SQL using `6371 * acos(...)` with `LEAST/GREATEST` clamping to prevent NaN from floating-point rounding
   - **Models:** `AvailableGuardsQuery` (query params), `AvailableGuardRow` (sqlx::FromRow), `AvailableGuardResponse` (API response — includes `id`, `full_name`, `avatar_url`, `experience_years`, `lat`, `lng`, `distance_km`, `last_seen_at`, `completed_jobs`, `rating`, `review_count`)
-  - **Placeholder ratings:** `rating = 4.5 + (completed_jobs * 0.01).min(0.4)`, `review_count = completed_jobs.min(200)` — TODO: replace with real reviews table
+  - **Real ratings:** JOINs `reviews.guard_reviews` — `AVG(overall_rating)` + `COUNT(*)` for actual review data
   - Ordered by distance ascending
 
 **Booking Service — Guard Acceptance & Payment Endpoints (main.rs):**
@@ -841,9 +863,10 @@ RegistrationPendingScreen
   - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
   - `updateRole()` calls `POST /auth/profile/role`, updates local pending state with role
   - `loginWithPhone(phone, pinHash)` calls `POST /auth/login/phone` → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval.
-  - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_avatarUrl`, `_customerApprovalStatus`, `_customerFullName`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
+  - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_email`, `_approvalStatus`, `_createdAt`, `_avatarUrl`, `_gender`, `_dateOfBirth`, `_yearsOfExperience`, `_previousWorkplace`, `_customerApprovalStatus`, `_customerFullName`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
+  - `fetchGuardDocs()` calls `GET /auth/guards/{userId}/profile` → populates `_guardDocUrls` map (id_card, security_license, training_cert, criminal_check, driver_license). Called from `ProfileSettingsScreen.initState()`.
   - `checkAuthStatus()`: checks stored access token **first** (tokens take priority over stale pending flag) → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout/backend down should not log out user) → else checks `isPendingApproval()` → else unauthenticated. Only falls back to unauthenticated when tokens are actually cleared by interceptor (401 + refresh failure).
-  - Profile fields: `fullName`, `phone`, `avatarUrl`, `customerApprovalStatus`, `customerFullName` (getters) — used by dashboard screens instead of hardcoded mock data
+  - Profile fields: `fullName`, `phone`, `email`, `approvalStatus`, `createdAt`, `avatarUrl`, `gender`, `dateOfBirth`, `yearsOfExperience`, `previousWorkplace`, `guardDocUrls`, `customerApprovalStatus`, `customerFullName` (getters) — used by dashboard/profile screens instead of hardcoded mock data
   - `customerFullName`: `String?` — customer display name from `customer_profiles.full_name` (separate from guard `fullName`). Hirer screens use `customerFullName ?? fullName` for display.
   - `customerApprovalStatus`: `String?` — `'pending'` | `'approved'` | `'rejected'` | `null` (no customer profile). Parsed from `GET /auth/me` response `customer_approval_status` field. Used by `RoleSelectionScreen` and `HirerDashboardScreen` for routing.
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
@@ -861,11 +884,13 @@ RegistrationPendingScreen
 - `GuardRegistrationScreen`: accepts optional `initialProfile` param for edit mode — `_prefillForm()` restores text fields, gender, DOB, bank from stored profile. Back button uses `canPop()` check to handle edit flow (no route to pop → navigate to `RegistrationPendingScreen`).
 - `GuardRegistrationScreen._onSubmit()`: only calls `submitGuardProfile(profileToken)` — no `registerWithOtp()`. Uses `reissueProfileToken()` fallback if profileToken is null/expired.
 - **Dashboard real data:** After login, dashboard screens use `AuthProvider` profile fields (`fullName`, `phone`, `avatarUrl`) from `GET /auth/me` instead of hardcoded mock data:
-  - `GuardHomeTab`: greeting uses `authProvider.fullName ?? strings.sampleGuardName`; registration check uses `authProvider.isAuthenticated` (not `AuthService.isRegistered()`); status toggle wired to `TrackingProvider` (not local `_isReady` state) — shows connecting/online/offline + GPS accuracy
+  - `GuardHomeTab`: greeting uses `authProvider.fullName ?? strings.sampleGuardName`; registration check uses `authProvider.isAuthenticated` (not `AuthService.isRegistered()`); status toggle wired to `TrackingProvider` (not local `_isReady` state) — shows connecting/online/offline + GPS accuracy. `initState` and return from `ActiveJobScreen` both call `fetchDashboard()` + `fetchActiveJob()` to clear stale busy status after job completion.
   - `GuardProfileTab`: real name, formatted phone as ID (`086-320-8235`), avatar from URL or person icon fallback, "ยืนยันแล้ว" badge only (no "ยังไม่ได้ลงทะเบียน")
+  - `ProfileSettingsScreen`: fetches all guard data from `AuthProvider` — photo section shows name + approval status badge (ใช้งาน/รอการอนุมัติ/ถูกปฏิเสธ) + registration date. Personal info: name, phone (read-only), email, address. Guard info (read-only): gender (translated), DOB (formatted), experience, workplace. Documents section: fetches 5 doc URLs via `fetchGuardDocs()` — บัตรประชาชน, ใบอนุญาตรักษาความปลอดภัย, ใบรับรองการฝึกอบรม, ใบผ่านการตรวจสอบประวัติอาชญากรรม, ใบขับขี่ — tap "ดูเอกสาร" opens image preview dialog.
   - `HirerProfileScreen`: uses `auth.customerFullName ?? auth.fullName` for customer display name, formatted phone as ID, avatar icon fallback
   - `ServiceSelectionScreen`: loads service rates from API via `BookingProvider.fetchServiceRates()` → dynamic cards with icon selection based on service name keywords. Back button uses `pushAndRemoveUntil` → `RoleSelectionScreen(phone)` (ไม่ใช่ `Navigator.pop()` ซึ่งจะทำให้จอดำ)
   - `BookingScreen`: customer fills booking form → `createRequest()` → extracts `requestId` from response → `Navigator.pushReplacement` to `GuardSearchingScreen(requestId, lat, lng)`
+    - **Job type selection:** 4 options — งานหมู่บ้าน (village), คอนโด (condo), โรงงาน (factory), อื่นๆ (other). "อื่นๆ" shows TextField for custom input. Selected type included in booking description as `ประเภทงาน: xxx`.
     - **Location selection:** `_getCurrentLocation()` (GPS) or `_openMapPicker()` (map picker sheet) — both store `_lat`/`_lng` separately and display place name in `_addressController.text`
     - **Reverse geocoding:** Nominatim `/reverse` API (Thai language) converts coordinates to place name (road/suburb/district). `_setLocationWithGeocode()` shows coordinates immediately, then async reverse geocodes. Address field shows human-readable name (e.g., "ถนนพระราม 1") while `_lat`/`_lng` store actual coordinates for API.
     - **`_MapPickerSheet`:** modal bottom sheet with flutter_map — search (forward geocode), tap-to-pin with auto reverse geocode, zoom +/- buttons (bottom-right). Returns `({LatLng latLng, String? displayName})` record type. Search results → `_selectedDisplayName` set from display_name; manual tap → reverse geocodes to get name.
@@ -873,8 +898,16 @@ RegistrationPendingScreen
   - `WaitingForGuardScreen`: shows assignment status (pending → accepted/declined). Polls `getAssignments(requestId)` every 5 seconds. Guard accepted → `PaymentScreen(requestId, guardName, amount)`. Guard declined → shows decline message + retry search. Timer auto-decline after 5 minutes.
   - `PaymentScreen`: simulated payment — amount display, payment method selection (QR/bank transfer/credit card). Confirm → `createPayment(requestId, amount, method)` → `PaymentSuccessScreen`.
   - `PaymentSuccessScreen`: success animation + booking summary. "กลับหน้าหลัก" → pop to hirer dashboard.
+  - `CustomerActiveJobScreen`: customer view of active job with countdown. Progress reports: during job shows only reported + missed (not future); when `pending_completion` or time-up shows ALL slots 0..bookedHours. Badge: `reported/totalSlots` (totalSlots = bookedHours + 1). Hour 0 label = "เริ่มงาน". Polls `_fetchProgressReports()` every ~9s (throttled via `_lastReportPoll % 3`). Debug speed multiplier must match guard's `_debugTickAmount`.
+  - `GuardJobDetailScreen`: shows progress reports section for started/pending_completion/completed jobs. Displays all slots 0..bookedHours with reported (green check) vs missed (red warning). Badge: `reported/totalSlots`. `pending_completion` status label = "รอลูกค้าตรวจสอบ" (orange).
   - `GuardJobDetailScreen`: guard views job detail — customer info, location, booking time, service type. Actions: accept/decline (calls `acceptDeclineAssignment(assignmentId, action)`), start job (calls `startJob(assignmentId)`), complete job. Chat button → `getOrCreateConversation()` → `ChatScreen`. Call button → `CallScreen`.
   - `ActiveJobScreen`: guard active job with countdown timer. Shows remaining hours/minutes from `started_at` + `booked_hours`. Location map placeholder. Complete job button. Chat/Call shortcuts.
+    - **Progress Reports (5-slot model):** Total reports = `bookedHours + 1` (e.g. 4 hrs → 5 reports). Hour 0 = "เริ่มปฏิบัติงาน" (popup at job start), hours 1..N at each hour boundary, final hour at time-up. Backend `progress_reports.hour_number CHECK >= 0`.
+    - **Report timing (example 4 hrs):** Hour 0 at minute 0, hour 1 at minute 61, hour 2 at minute 121, hour 3 at minute 181, hour 4 at minute 240 (time-up → popup before complete dialog).
+    - **Missed hours:** When crossing hour boundary, previous hour's popup auto-closes if still open → marked as "ไม่ได้รายงาน" (missed). Missed hours cannot submit retroactively. Shows warning icon (!) in red. Final hour (bookedHours) is NOT auto-missed — `_handleTimeUp()` gives it a popup chance first.
+    - **Debug timer:** `_debugFastTimer = true`, `_debugTickAmount = 120` (1 real second = 120s sim → ~30s per hour)
+    - **Hour boundary logic:** `period = elapsed ~/ 3600`. When period increases: mark unreported hours 0..period-1 as missed → close stale popup → `.then()` callback opens next via `_openNextHourPopupIfNeeded()`.
+    - **Error display:** Submit errors shown as AlertDialog (not SnackBar) to be visible over bottom sheet. Image compression uses try/finally to prevent `_isCompressing` stuck.
   - `GuardJobsTab`: wired to real API — `fetchJobs()` on init, shows pending/active/completed tabs. Tapping job → `GuardJobDetailScreen`. Chat button per job → creates/finds conversation → `ChatScreen(actingRole: 'guard')`.
 - `BookingProvider` (`booking_provider.dart`): `ChangeNotifier` for booking/guard state
   - Guard: `fetchDashboard()`, `fetchJobs()`, `fetchEarnings()`, `updateAssignmentStatus()`, `acceptDeclineAssignment(assignmentId, action)`, `startJob(assignmentId)`, `fetchActiveJob()`, `fetchWorkHistory()`, `fetchRatings()`
@@ -1211,7 +1244,8 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม accept ราคาติดลบใน service rates — `validate_prices()` ต้องตรวจ `min_price >= 0`, `max_price >= 0`, `base_fee >= 0`
 - ❌ ห้าม accept `min_price > max_price` — ต้อง validate ทั้ง create และ update (update ต้อง merge กับค่าเดิมก่อน validate)
 - ❌ ห้าม return inactive service rates จาก public GET endpoints — ต้อง filter `WHERE is_active = true` เสมอ
-- ❌ ห้าม query `available-guards` โดยไม่ filter `recorded_at > NOW() - INTERVAL '30 minutes'` — guards ที่ offline (ไม่มี GPS update ภายใน 30 นาที) ต้องไม่แสดง
+- ❌ ห้าม query `available-guards` โดยไม่ filter `gl.is_online = true AND recorded_at > NOW() - INTERVAL '30 minutes'` — guards ที่ปิดให้บริการ (WebSocket disconnected → `is_online=false`) หรือไม่มี GPS update ภายใน 30 นาทีต้องไม่แสดง
+- ❌ ห้าม GPS WebSocket disconnect โดยไม่เรียก `set_offline()` — ต้อง UPDATE `tracking.guard_locations SET is_online = false` ทุกครั้งที่ guard disconnect เพื่อให้ `available-guards` query exclude ทันที
 - ❌ ห้ามใช้ `acos()` โดยไม่ clamp ด้วย `LEAST(1.0, GREATEST(-1.0, ...))` ใน Haversine calculation — floating-point rounding อาจทำให้ค่าเกิน [-1,1] → NaN
 - ❌ ห้ามให้ non-admin, non-owner assign guard — `assign_guard` handler ต้องตรวจ `request.customer_id == user.user_id` สำหรับ non-admin users
 - ❌ ห้ามใช้ shared `_isLoading` flag ใน `BookingProvider` สำหรับ pricing — ต้องใช้ `_isLoadingRates` แยก (ป้องกัน cross-interference กับ guard/customer loading)
@@ -1299,3 +1333,13 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามให้ send message หรือ call ใน `ChatScreen` เมื่อ `request_status` เป็น `completed` หรือ `cancelled` — ต้อง pass `readOnly: true` จาก `ChatListScreen` → `ChatScreen` เพื่อ disable input + hide call button
 - ❌ ห้ามแสดงพิกัดดิบ (e.g., "13.756300, 100.501800") ใน booking address field — ต้อง reverse geocode ผ่าน Nominatim แล้วแสดงชื่อสถานที่ (road/suburb/district) แทน; `_lat`/`_lng` เก็บค่าพิกัดจริงแยก
 - ❌ ห้าม `_MapPickerSheet` return แค่ `LatLng` — ต้อง return record type `({LatLng latLng, String? displayName})` เพื่อส่งชื่อสถานที่กลับไปยัง booking screen
+- ❌ ห้าม `_debugSpeedMultiplier` ใน `CustomerActiveJobScreen` ไม่ตรงกับ `_debugTickAmount` ใน `ActiveJobScreen` — ต้องใช้ค่าเดียวกันเสมอ (ปัจจุบัน 120) ไม่งั้นเวลาแสดงผิด
+- ❌ ห้ามแสดง progress report popup สำหรับ missed hours — `_showProgressReportDialog()` ต้อง reject ถ้า `_missedHours.contains(hourNumber)`
+- ❌ ห้ามเปิด progress report popup ชม.ใหม่โดยไม่ปิด popup ชม.เก่าก่อน — `_checkHourBoundary()` ต้อง `Navigator.pop()` popup ที่ค้างอยู่แล้ว mark เป็น missed ก่อนเปิดอันใหม่
+- ❌ ห้าม `GuardHomeTab` แสดงสถานะ "ไม่ว่าง" หลังจบงานแล้ว — `initState` และ return จาก `ActiveJobScreen` ต้องเรียก `fetchActiveJob()` เพื่อ clear `_activeJob` เมื่อ backend ไม่มี active job
+- ❌ ห้ามแสดง pending/future hours ใน customer progress reports ระหว่างงาน — แสดงเฉพาะ reported + missed เท่านั้น (ค่อยโผล่เมื่อ guard ส่งรายงานมาหรือเกินเวลา); แต่เมื่อ `pending_completion` หรือ time-up → แสดงทุก slot 0..bookedHours
+- ❌ ห้าม progress report badge denominator ใช้ `visibleHours.length` — ต้องใช้ `totalSlots` (= `bookedHours + 1`) เสมอเพื่อให้ guard และ customer เห็นตัวเลขตรงกัน
+- ❌ ห้าม `progress_reports.hour_number` CHECK constraint เป็น `>= 1` — ต้องเป็น `>= 0` เพื่อรองรับ hour 0 (เริ่มปฏิบัติงาน)
+- ❌ ห้ามใช้ `available-guards` query โดยไม่ exclude guard ที่มี active assignment — ต้อง `NOT EXISTS (SELECT 1 FROM booking.assignments WHERE guard_id = u.id AND status IN ('pending_acceptance','accepted','en_route','arrived','pending_completion'))`
+- ❌ ห้าม `currentJobs` filter ใน `BookingProvider` ไม่รวม `pending_completion` — ต้องรวมเพื่อให้งานที่รอลูกค้าตรวจสอบยังแสดงในแท็บ "งานปัจจุบัน"
+- ❌ ห้าม `_statusLabel` / `_statusColor` ไม่มี case `pending_completion` — ต้องแสดง "รอลูกค้าตรวจสอบ" / "Pending Review" (สีส้ม) ทุกหน้าที่แสดง status

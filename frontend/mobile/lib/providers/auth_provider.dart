@@ -41,6 +41,9 @@ class AuthProvider extends ChangeNotifier {
   String? _fullName;
   String? _phone;
   String? _avatarUrl;
+  String? _email;
+  String? _approvalStatus;
+  String? _createdAt;
   String? _companyName;
   String? _contactPhone;
   // Guard profile fields
@@ -48,6 +51,9 @@ class AuthProvider extends ChangeNotifier {
   String? _dateOfBirth;
   int? _yearsOfExperience;
   String? _previousWorkplace;
+  // Guard document URLs (from /auth/guards/{id}/profile)
+  Map<String, String?> _guardDocUrls = {};
+  bool _docsLoaded = false;
   String? _customerFullName;
   String? _customerApprovalStatus;
   String? _customerAddress;
@@ -59,12 +65,17 @@ class AuthProvider extends ChangeNotifier {
   String? get fullName => _fullName;
   String? get phone => _phone;
   String? get avatarUrl => _avatarUrl;
+  String? get email => _email;
+  String? get approvalStatus => _approvalStatus;
+  String? get createdAt => _createdAt;
   String? get companyName => _companyName;
   String? get contactPhone => _contactPhone;
   String? get gender => _gender;
   String? get dateOfBirth => _dateOfBirth;
   int? get yearsOfExperience => _yearsOfExperience;
   String? get previousWorkplace => _previousWorkplace;
+  Map<String, String?> get guardDocUrls => _guardDocUrls;
+  bool get docsLoaded => _docsLoaded;
   /// Customer-only: full name from customer_profiles (may differ from guard name).
   String? get customerFullName => _customerFullName;
   /// Customer profile approval status (from customer_profiles.approval_status).
@@ -134,6 +145,9 @@ class AuthProvider extends ChangeNotifier {
       _userId = rawId is String ? rawId : rawId?.toString();
       _fullName = data['full_name'] as String?;
       _phone = data['phone'] as String?;
+      _email = data['email'] as String?;
+      _approvalStatus = data['approval_status'] as String?;
+      _createdAt = data['created_at'] as String?;
       _avatarUrl = data['avatar_url'] as String?;
       _companyName = data['company_name'] as String?;
       _contactPhone = data['contact_phone'] as String?;
@@ -155,6 +169,28 @@ class AuthProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('[AuthProvider] fetchProfile error: $e');
       return false;
+    }
+  }
+
+  /// Fetch guard document URLs from GET /auth/guards/{userId}/profile.
+  Future<void> fetchGuardDocs() async {
+    if (_userId == null || _docsLoaded) return;
+    try {
+      final response = await _apiClient.dio.get('/auth/guards/$_userId/profile');
+      final data = response.data['data'];
+      if (data is Map<String, dynamic>) {
+        _guardDocUrls = {
+          'id_card': data['id_card_url'] as String?,
+          'security_license': data['security_license_url'] as String?,
+          'training_cert': data['training_cert_url'] as String?,
+          'criminal_check': data['criminal_check_url'] as String?,
+          'driver_license': data['driver_license_url'] as String?,
+        };
+        _docsLoaded = true;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[AuthProvider] fetchGuardDocs error: $e');
     }
   }
 
@@ -349,15 +385,15 @@ class AuthProvider extends ChangeNotifier {
     final data = response.data['data'];
     final accessToken = data['access_token'] as String;
     final refreshToken = data['refresh_token'] as String;
-    final role = data['role'] as String;
+    final role = data['role'] as String? ?? '';
 
     await Future.wait([
       AuthService.storeTokens(accessToken, refreshToken),
-      AuthService.storeRole(role),
+      if (role.isNotEmpty) AuthService.storeRole(role),
       AuthService.clearPendingApproval(),
     ]);
 
-    _role = role;
+    _role = role.isNotEmpty ? role : null;
     await fetchProfile(); // Load profile BEFORE notifying UI
     _status = AuthStatus.authenticated;
     notifyListeners();
@@ -377,12 +413,17 @@ class AuthProvider extends ChangeNotifier {
     _fullName = null;
     _phone = null;
     _avatarUrl = null;
+    _email = null;
+    _approvalStatus = null;
+    _createdAt = null;
     _companyName = null;
     _contactPhone = null;
     _gender = null;
     _dateOfBirth = null;
     _yearsOfExperience = null;
     _previousWorkplace = null;
+    _guardDocUrls = {};
+    _docsLoaded = false;
     _customerFullName = null;
     _customerAddress = null;
     _customerApprovalStatus = null;

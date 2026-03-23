@@ -11,7 +11,7 @@ use shared::models::ApiResponse;
 
 use crate::models::{
     GpsEvent, GpsUpdate, GuardLocationWithName, HistoryQuery, LocationHistoryResponse,
-    LocationResponse,
+    LocationResponse, LocationsQuery,
 };
 use crate::state::AppState;
 
@@ -43,13 +43,65 @@ pub async fn ws_handler(
 async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
     tracing::info!("GPS WebSocket connected: guard_id={}", user.user_id);
 
+    // Mark guard as online immediately (before any GPS data arrives).
+    // This ensures stationary guards (no GPS delta) are still discoverable.
+    if let Err(e) = crate::service::set_online(&state.db, user.user_id).await {
+        tracing::error!("Failed to set guard online: {e}");
+    }
+
     // Server-side rate limiting: max 1 update per second per connection
     let mut last_update = std::time::Instant::now() - std::time::Duration::from_secs(1);
     let min_interval = std::time::Duration::from_secs(1);
 
-    while let Some(msg) = socket.recv().await {
+    // Ping/pong: detect zombie connections (e.g. guard killed app, lost signal)
+    let ping_interval = std::time::Duration::from_secs(30);
+    let pong_timeout = std::time::Duration::from_secs(10);
+    let mut last_activity = std::time::Instant::now();
+    let mut ping_sent_at: Option<std::time::Instant> = None;
+
+    loop {
+        // Calculate how long until next ping or pong timeout
+        let wait_duration = if let Some(sent) = ping_sent_at {
+            // Waiting for pong — timeout after pong_timeout
+            pong_timeout.saturating_sub(sent.elapsed())
+        } else {
+            // Waiting for next ping interval
+            ping_interval.saturating_sub(last_activity.elapsed())
+        };
+
+        let msg = match tokio::time::timeout(wait_duration, socket.recv()).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => break, // stream ended
+            Err(_) => {
+                // Timeout fired
+                if ping_sent_at.is_some() {
+                    // Pong not received in time — zombie connection
+                    tracing::warn!("GPS WebSocket pong timeout: guard_id={}", user.user_id);
+                    break;
+                }
+                // Send ping
+                if socket.send(Message::Ping(vec![].into())).await.is_err() {
+                    break;
+                }
+                ping_sent_at = Some(std::time::Instant::now());
+                continue;
+            }
+        };
+
         let msg = match msg {
-            Ok(Message::Text(text)) => text,
+            Ok(Message::Text(text)) => {
+                last_activity = std::time::Instant::now();
+                ping_sent_at = None; // any data counts as alive
+                text
+            }
+            Ok(Message::Pong(_)) => {
+                last_activity = std::time::Instant::now();
+                ping_sent_at = None;
+                // Refresh recorded_at so stationary guards (no GPS delta)
+                // don't fall off the 30-min filter in available-guards query
+                let _ = crate::service::set_online(&state.db, user.user_id).await;
+                continue;
+            }
             Ok(Message::Close(_)) => break,
             Err(e) => {
                 tracing::warn!("WebSocket recv error: {e}");
@@ -122,6 +174,10 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             .await;
     }
 
+    // Mark guard as offline in DB so available_guards query excludes them immediately
+    if let Err(e) = crate::service::set_offline(&state.db, user.user_id).await {
+        tracing::error!("Failed to set guard offline: {e}");
+    }
     tracing::info!("GPS WebSocket disconnected: guard_id={}", user.user_id);
 }
 
@@ -143,11 +199,21 @@ pub async fn get_latest_location(
     user: AuthUser,
     Path(guard_id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<LocationResponse>>, AppError> {
-    // Guards can only see their own location; admins and customers (with active booking) can see any
+    // Guards can only see their own location
     if user.role == "guard" && user.user_id != guard_id {
         return Err(AppError::Forbidden(
             "Guards can only access their own location".to_string(),
         ));
+    }
+
+    // Customers can only see guards they have an active booking with
+    if user.role == "customer" || (user.role == "guard" && user.user_id != guard_id) {
+        let has_booking = crate::service::has_active_booking(&state.db, user.user_id, guard_id).await?;
+        if !has_booking {
+            return Err(AppError::Forbidden(
+                "You can only track guards assigned to your active booking".to_string(),
+            ));
+        }
     }
 
     let location = crate::service::get_latest_location(&state.db, guard_id).await?;
@@ -175,11 +241,21 @@ pub async fn get_location_history(
     Path(guard_id): Path<uuid::Uuid>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<ApiResponse<Vec<LocationHistoryResponse>>>, AppError> {
-    // Guards can only see their own history; admins and customers (with active booking) can see any
+    // Guards can only see their own history
     if user.role == "guard" && user.user_id != guard_id {
         return Err(AppError::Forbidden(
             "Guards can only access their own location history".to_string(),
         ));
+    }
+
+    // Customers can only see history for guards they have/had a booking with
+    if user.role == "customer" {
+        let has_booking = crate::service::has_active_booking(&state.db, user.user_id, guard_id).await?;
+        if !has_booking {
+            return Err(AppError::Forbidden(
+                "You can only view history for guards assigned to your booking".to_string(),
+            ));
+        }
     }
 
     let history = crate::service::get_location_history(&state.db, guard_id, query).await?;
@@ -200,6 +276,7 @@ pub async fn get_location_history(
 pub async fn list_all_locations(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
+    Query(params): Query<LocationsQuery>,
 ) -> Result<Json<ApiResponse<Vec<GuardLocationWithName>>>, AppError> {
     // Only admins and customers can view the admin map overview
     if user.role == "guard" {
@@ -208,6 +285,7 @@ pub async fn list_all_locations(
         ));
     }
 
-    let locations = crate::service::get_all_locations(&state.db).await?;
+    let online_only = params.online_only.unwrap_or(false);
+    let locations = crate::service::get_all_locations(&state.db, online_only).await?;
     Ok(Json(ApiResponse::success(locations)))
 }

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -20,6 +22,7 @@ class ActiveJobScreen extends StatefulWidget {
   final String? address;
   final int bookedHours;
   final int remainingSeconds;
+  final String? startedAt;
 
   const ActiveJobScreen({
     super.key,
@@ -28,6 +31,7 @@ class ActiveJobScreen extends StatefulWidget {
     this.address,
     required this.bookedHours,
     required this.remainingSeconds,
+    this.startedAt,
   });
 
   @override
@@ -41,6 +45,10 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     return Platform.isIOS ? 'http://localhost:80' : 'http://10.0.2.2:80';
   }
 
+  // DEBUG: set true to speed up countdown (1 sec = 6 min for testing)
+  static const _debugFastTimer = true;
+  static const _debugTickAmount = 120; // 1 real second = 120s sim → 1 hour per ~30s
+
   late int _remaining;
   Timer? _timer;
   Timer? _syncTimer;
@@ -49,9 +57,14 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
   bool _isPendingCompletion = false;
 
   // Progress report tracking
-  final Set<int> _reportedHours = {};
+  final Set<int> _reportedHours = {}; // actually submitted
+  final Map<int, Map<String, dynamic>> _reportData = {}; // hour → report data
+  final Set<int> _dismissedHours = {}; // skipped auto-popup (don't re-trigger)
+  final Set<int> _missedHours = {}; // past hours with no report (deadline passed)
   int _lastCheckedHour = 0;
   bool _isReportDialogOpen = false;
+  int? _openDialogHour; // which hour's dialog is currently open
+  bool _reportsLoaded = false; // gate _checkHourBoundary until hour-1 handled
 
   // Check-in timestamps and locations (populated from server sync)
   String? _enRouteAt;
@@ -72,31 +85,69 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
   StreamSubscription<dynamic>? _wsSub;
   String? _requestId;
 
+  /// Calculate remaining seconds from a started_at timestamp string.
+  /// Uses same speed multiplier as debug fast timer so both screens match.
+  int _calcRemainingFromStartedAt(String startedAtStr) {
+    final startedAt = DateTime.parse(startedAtStr);
+    final realElapsed = DateTime.now().toUtc().difference(startedAt).inSeconds;
+    final elapsed = _debugFastTimer ? realElapsed * _debugTickAmount : realElapsed;
+    final total = widget.bookedHours * 3600;
+    return (total - elapsed).clamp(0, total);
+  }
+
+  /// Recalculate _remaining from started_at. Called every tick.
+  void _recalcFromStartedAt() {
+    final ref = _startedAt ?? widget.startedAt;
+    if (ref != null) {
+      final r = _calcRemainingFromStartedAt(ref);
+      if (r != _remaining) {
+        setState(() => _remaining = r);
+        _checkHourBoundary();
+        if (_remaining <= 0) {
+          _timer?.cancel();
+          _handleTimeUp();
+        }
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    _remaining = widget.remainingSeconds;
+    // Use startedAt for accurate initial value; fall back to passed-in value
+    if (widget.startedAt != null) {
+      _remaining = _calcRemainingFromStartedAt(widget.startedAt!);
+    } else {
+      _remaining = widget.remainingSeconds;
+    }
 
-    // Local 1-second countdown
+    // Recalculate from started_at every second — same formula as customer.
+    // Both screens derive time from the same started_at + speed multiplier.
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_remaining > 0 && !_isPendingCompletion) {
-        setState(() => _remaining--);
-        _checkHourBoundary();
-      } else if (_remaining <= 0 && !_isPendingCompletion) {
-        _timer?.cancel();
-        _showCompleteDialog();
+      if (!_isPendingCompletion) {
+        _recalcFromStartedAt();
       }
     });
 
-    // Sync with server every 30 seconds to correct drift
+    // Sync with server every 30 seconds
     _syncTimer =
         Timer.periodic(const Duration(seconds: 30), (_) => _resyncTimer());
 
     // Immediate sync to get accurate server time
     _resyncTimer();
 
-    // Load existing reports to populate _reportedHours
-    _loadExistingReports();
+    // Load existing reports, then trigger hour-0 report (เริ่มปฏิบัติงาน)
+    _loadExistingReports().then((_) {
+      if (!mounted) return;
+      // Auto-show initial report (hour 0 = เริ่มปฏิบัติงาน) immediately
+      if (!_reportedHours.contains(0) &&
+          !_dismissedHours.contains(0) &&
+          !_isReportDialogOpen) {
+        _showProgressReportDialog(0, autoPopup: true);
+      }
+      _reportsLoaded = true;
+      _checkHourBoundary();
+    });
   }
 
   Future<void> _connectAssignmentWs(String requestId) async {
@@ -149,12 +200,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       _statusTimer = null;
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_remaining > 0 && !_isPendingCompletion) {
-          setState(() => _remaining--);
-        } else if (_remaining <= 0 && !_isPendingCompletion) {
-          _timer?.cancel();
-          _showCompleteDialog();
-        }
+        if (!_isPendingCompletion) _recalcFromStartedAt();
       });
       _resyncTimer();
       final isThai = LanguageProvider.of(context).isThai;
@@ -197,15 +243,10 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       _statusTimer?.cancel();
       _statusTimer = null;
 
-      // Restart countdown timer if it was cancelled
+      // Restart timer — recalculates from started_at each tick
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_remaining > 0 && !_isPendingCompletion) {
-          setState(() => _remaining--);
-        } else if (_remaining <= 0 && !_isPendingCompletion) {
-          _timer?.cancel();
-          _showCompleteDialog();
-        }
+        if (!_isPendingCompletion) _recalcFromStartedAt();
       });
 
       final isThai = LanguageProvider.of(context).isThai;
@@ -243,13 +284,10 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       _completionRequestedAt = (data['completion_requested_at'] as String?) ?? _completionRequestedAt;
     });
 
-    // Prefer started_at-based calculation for consistency with customer screen
+    // Sync remaining from started_at (uses speed multiplier in debug mode)
     final serverStartedAt = data['started_at'] as String?;
     if (serverStartedAt != null) {
-      final startTime = DateTime.parse(serverStartedAt);
-      final elapsed = DateTime.now().toUtc().difference(startTime).inSeconds;
-      final total = widget.bookedHours * 3600;
-      setState(() => _remaining = (total - elapsed).clamp(0, total));
+      setState(() => _remaining = _calcRemainingFromStartedAt(serverStartedAt));
       return;
     }
 
@@ -283,18 +321,11 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       _statusTimer?.cancel();
       _statusTimer = null;
 
-      // Restart countdown timer if it was cancelled (e.g. time ran out)
+      // Restart timer — recalculates from started_at each tick
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_remaining > 0 && !_isPendingCompletion) {
-          setState(() => _remaining--);
-        } else if (_remaining <= 0 && !_isPendingCompletion) {
-          _timer?.cancel();
-          _showCompleteDialog();
-        }
+        if (!_isPendingCompletion) _recalcFromStartedAt();
       });
-
-      // Immediate resync to get accurate remaining time
       _resyncTimer();
 
       final isThai = LanguageProvider.of(context).isThai;
@@ -366,6 +397,45 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       );
       if (mounted) setState(() => _isCompleting = false);
     }
+  }
+
+  /// When time is up: show final hour report popup first, then complete dialog.
+  void _handleTimeUp() {
+    final lastHour = widget.bookedHours;
+    if (!_reportedHours.contains(lastHour) &&
+        !_missedHours.contains(lastHour) &&
+        !_isReportDialogOpen) {
+      // Show final hour report — complete dialog after it closes
+      _showFinalHourReport(lastHour);
+    } else {
+      _showCompleteDialog();
+    }
+  }
+
+  void _showFinalHourReport(int hourNumber) {
+    _isReportDialogOpen = true;
+    _openDialogHour = hourNumber;
+    final isThai = LanguageProvider.of(context).isThai;
+    final strings = ProgressReportStrings(isThai: isThai);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ProgressReportSheet(
+        hourNumber: hourNumber,
+        assignmentId: widget.assignmentId,
+        strings: strings,
+        isThai: isThai,
+      ),
+    ).then((_) {
+      if (!mounted) return;
+      _isReportDialogOpen = false;
+      _openDialogHour = null;
+      _loadExistingReports();
+      // Now show the complete dialog
+      _showCompleteDialog();
+    });
   }
 
   void _showCompleteDialog() {
@@ -492,15 +562,52 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
   // =========================================================================
 
   void _checkHourBoundary() {
+    if (!_reportsLoaded) return;
+
     final total = widget.bookedHours * 3600;
     final elapsed = total - _remaining;
-    final currentHour = elapsed ~/ 3600; // 0→1→2→3...
+    // period = which 1-hour period we're in (0 = first hour, 1 = second, ...)
+    final period = elapsed ~/ 3600;
 
-    if (currentHour > _lastCheckedHour && currentHour <= widget.bookedHours) {
-      _lastCheckedHour = currentHour;
-      if (!_reportedHours.contains(currentHour) && !_isReportDialogOpen) {
-        _showProgressReportDialog(currentHour);
+    if (period > _lastCheckedHour) {
+      // Mark unreported hours whose deadline just passed as missed.
+      // period 0→1: hour 0 (เริ่มปฏิบัติงาน) deadline passed at minute 60
+      // period 1→2: hour 1 (ชั่วโมงที่ 1) deadline passed at minute 120
+      for (int p = _lastCheckedHour; p < period; p++) {
+        // Don't mark the final hour — _handleTimeUp gives it a chance
+        if (p < widget.bookedHours && !_reportedHours.contains(p)) {
+          _missedHours.add(p);
+        }
       }
+
+      _lastCheckedHour = period;
+
+      // If a dialog is open for a now-missed hour, close it first.
+      if (_isReportDialogOpen &&
+          _openDialogHour != null &&
+          _missedHours.contains(_openDialogHour)) {
+        Navigator.of(context, rootNavigator: true).pop();
+        return;
+      }
+
+      _openNextHourPopupIfNeeded();
+    }
+  }
+
+  /// Open popup for the current period's hour if eligible.
+  /// period 1 → popup hour 1, period 2 → popup hour 2, etc.
+  void _openNextHourPopupIfNeeded() {
+    if (!mounted) return;
+    final total = widget.bookedHours * 3600;
+    final elapsed = total - _remaining;
+    final period = elapsed ~/ 3600;
+    // At period N, popup for hour N (0-indexed report numbers)
+    if (period < widget.bookedHours &&
+        !_reportedHours.contains(period) &&
+        !_dismissedHours.contains(period) &&
+        !_missedHours.contains(period) &&
+        !_isReportDialogOpen) {
+      _showProgressReportDialog(period, autoPopup: true);
     }
   }
 
@@ -514,7 +621,10 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       setState(() {
         for (final r in reports) {
           final h = r['hour_number'] as int?;
-          if (h != null) _reportedHours.add(h);
+          if (h != null) {
+            _reportedHours.add(h);
+            _reportData[h] = r;
+          }
         }
         // Set _lastCheckedHour so we don't re-trigger for past hours
         final total = widget.bookedHours * 3600;
@@ -524,8 +634,388 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     } catch (_) {}
   }
 
-  void _showProgressReportDialog(int hourNumber) {
+  /// Build a section showing each booked hour with report status.
+  /// Unreported past hours get a button to submit retroactively.
+  Widget _buildProgressReportsSection(bool isThai) {
+    // Total report slots: 0 (เริ่มปฏิบัติงาน) + 1..bookedHours
+    final totalSlots = widget.bookedHours + 1; // e.g. 4 hrs → 5 reports (0-4)
+    int maxSlot;
+    if (_isPendingCompletion || _remaining <= 0) {
+      maxSlot = widget.bookedHours; // show all including final
+    } else {
+      final total = widget.bookedHours * 3600;
+      final elapsed = total - _remaining;
+      final period = elapsed ~/ 3600;
+      maxSlot = period.clamp(0, widget.bookedHours);
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F7FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.blue.withValues(alpha: 0.15)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.assignment_rounded,
+                  size: 18, color: Colors.blue.shade700),
+              const SizedBox(width: 6),
+              Text(
+                isThai ? 'รายงานความคืบหน้า' : 'Progress Reports',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade700,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${_reportedHours.length}/$totalSlots',
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          for (int h = 0; h <= maxSlot; h++) ...[
+            if (h > 0) const Divider(height: 1),
+            _buildHourReportRow(h, isThai),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Label for each report slot
+  String _reportLabel(int hourNumber, bool isThai) {
+    if (hourNumber == 0) return isThai ? 'เริ่มงาน' : 'Start';
+    if (hourNumber == widget.bookedHours) {
+      return isThai ? 'ชม. $hourNumber' : 'Hr $hourNumber';
+    }
+    return isThai ? 'ชม. $hourNumber' : 'Hr $hourNumber';
+  }
+
+  Widget _buildHourReportRow(int hourNumber, bool isThai) {
+    final reported = _reportedHours.contains(hourNumber);
+    final missed = _missedHours.contains(hourNumber);
+
+    Color badgeColor;
+    Color badgeTextColor;
+    if (reported) {
+      badgeColor = AppColors.primary.withValues(alpha: 0.1);
+      badgeTextColor = AppColors.primary;
+    } else if (missed) {
+      badgeColor = Colors.red.withValues(alpha: 0.1);
+      badgeTextColor = Colors.red.shade700;
+    } else {
+      badgeColor = Colors.orange.withValues(alpha: 0.1);
+      badgeTextColor = Colors.orange.shade700;
+    }
+
+    final label = _reportLabel(hourNumber, isThai);
+
+    return InkWell(
+      onTap: reported ? () => _showReportDetail(hourNumber, isThai) : null,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: badgeColor,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: badgeTextColor,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                reported
+                    ? (isThai ? 'ส่งรายงานแล้ว' : 'Reported')
+                    : missed
+                        ? (isThai ? 'ไม่ได้รายงาน' : 'Missed')
+                        : (isThai ? 'ยังไม่ได้ส่งรายงาน' : 'Not reported'),
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: reported
+                      ? AppColors.primary
+                      : missed
+                          ? Colors.red.shade700
+                          : AppColors.textSecondary,
+                ),
+              ),
+            ),
+            if (reported) ...[
+              Icon(Icons.check_circle_rounded,
+                  size: 20, color: AppColors.primary),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right_rounded,
+                  size: 18, color: AppColors.primary.withValues(alpha: 0.5)),
+            ] else if (missed)
+              Icon(Icons.warning_rounded,
+                  size: 20, color: Colors.red.shade600)
+            else
+              SizedBox(
+                height: 30,
+                child: TextButton(
+                  onPressed: () => _showProgressReportDialog(hourNumber),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(
+                    isThai ? 'ส่งรายงาน' : 'Submit',
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showReportDetail(int hourNumber, bool isThai) {
+    final report = _reportData[hourNumber];
+    if (report == null) return;
+
+    final message = report['message'] as String?;
+    final createdAt = report['created_at'] as String?;
+    final mediaList = report['media'] as List? ?? [];
+    final photoUrl = report['photo_url'] as String?;
+
+    // Format timestamp
+    String? formattedTime;
+    if (createdAt != null) {
+      try {
+        final dt = DateTime.parse(createdAt).toLocal();
+        final day = dt.day.toString().padLeft(2, '0');
+        final month = dt.month.toString().padLeft(2, '0');
+        final year = dt.year;
+        final hour = dt.hour.toString().padLeft(2, '0');
+        final min = dt.minute.toString().padLeft(2, '0');
+        formattedTime = '$day/$month/$year $hour:$min';
+      } catch (_) {}
+    }
+
+    // Build media URLs list: prefer media array, fallback to photo_url
+    final List<Map<String, dynamic>> mediaItems = [];
+    for (final m in mediaList) {
+      if (m is Map<String, dynamic>) mediaItems.add(m);
+    }
+    if (mediaItems.isEmpty && photoUrl != null) {
+      mediaItems.add({'url': photoUrl, 'mime_type': 'image/jpeg'});
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // Title + timestamp
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.assignment_turned_in_rounded,
+                          color: AppColors.primary, size: 22),
+                      const SizedBox(width: 8),
+                      Text(
+                        isThai
+                            ? 'รายงานชั่วโมงที่ $hourNumber'
+                            : 'Hour $hourNumber Report',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                ],
+              ),
+              if (formattedTime != null) ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(Icons.schedule_rounded,
+                        size: 14, color: AppColors.textSecondary),
+                    const SizedBox(width: 5),
+                    Text(
+                      '${isThai ? 'รายงานเมื่อ' : 'Reported at'} $formattedTime',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+                ],
+              ),
+            ),
+            const Divider(height: 24),
+            // Content
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Media thumbnails
+                    if (mediaItems.isNotEmpty) ...[
+                      SizedBox(
+                        height: 180,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: mediaItems.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 8),
+                          itemBuilder: (_, idx) {
+                            final item = mediaItems[idx];
+                            final url = item['url'] as String? ?? '';
+                            final mime =
+                                item['mime_type'] as String? ?? 'image/jpeg';
+                            final isVideo = mime.startsWith('video/');
+
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Stack(
+                                children: [
+                                  if (isVideo)
+                                    Container(
+                                      width: 180,
+                                      height: 180,
+                                      color: Colors.black87,
+                                      child: const Center(
+                                        child: Icon(
+                                          Icons.play_circle_fill_rounded,
+                                          color: Colors.white,
+                                          size: 48,
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    Image.network(
+                                      url,
+                                      width: 180,
+                                      height: 180,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) => Container(
+                                        width: 180,
+                                        height: 180,
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(
+                                          Icons.broken_image_rounded,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    // Message
+                    if (message != null && message.isNotEmpty) ...[
+                      Text(
+                        isThai ? 'ข้อความ' : 'Message',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Text(
+                          message,
+                          style: GoogleFonts.inter(fontSize: 14),
+                        ),
+                      ),
+                    ],
+                    if (message == null || message.isEmpty)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          child: Text(
+                            isThai
+                                ? 'ไม่มีข้อความประกอบ'
+                                : 'No message attached',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showProgressReportDialog(int hourNumber, {bool autoPopup = false}) {
+    // Don't allow opening dialog for missed hours
+    if (_missedHours.contains(hourNumber)) return;
+
     _isReportDialogOpen = true;
+    _openDialogHour = hourNumber;
     final isThai = LanguageProvider.of(context).isThai;
     final strings = ProgressReportStrings(isThai: isThai);
 
@@ -540,9 +1030,15 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
         isThai: isThai,
       ),
     ).then((_) {
+      if (!mounted) return;
       _isReportDialogOpen = false;
-      // Mark hour as handled (whether submitted or skipped)
-      setState(() => _reportedHours.add(hourNumber));
+      _openDialogHour = null;
+      // For auto-popup: mark as dismissed so it doesn't re-trigger
+      if (autoPopup) _dismissedHours.add(hourNumber);
+      // Reload reports from server to update reported status
+      _loadExistingReports();
+      // If this popup was closed by hour boundary, open next hour's popup
+      _openNextHourPopupIfNeeded();
     });
   }
 
@@ -673,12 +1169,12 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
                               Text(
                                 timeStr,
                                 style: GoogleFonts.inter(
-                                  fontSize: 40,
+                                  fontSize: 32,
                                   fontWeight: FontWeight.bold,
                                   color: isTimeUp
                                       ? AppColors.danger
                                       : AppColors.textPrimary,
-                                  letterSpacing: 2,
+                                  letterSpacing: 1,
                                 ),
                               ),
                               const SizedBox(height: 4),
@@ -737,6 +1233,11 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
 
                   // Check-in timeline
                   _buildCheckinTimeline(isThai),
+
+                  const SizedBox(height: 12),
+
+                  // Progress reports section (submit for any past hour)
+                  _buildProgressReportsSection(isThai),
 
                   const SizedBox(height: 16),
 
@@ -1108,9 +1609,11 @@ class _ProgressReportSheet extends StatefulWidget {
 }
 
 class _ProgressReportSheetState extends State<_ProgressReportSheet> {
+  static const _maxFiles = 5;
   final _messageController = TextEditingController();
-  File? _photo;
+  final List<File> _files = [];
   bool _isSubmitting = false;
+  bool _isCompressing = false;
 
   @override
   void dispose() {
@@ -1118,21 +1621,128 @@ class _ProgressReportSheetState extends State<_ProgressReportSheet> {
     super.dispose();
   }
 
-  Future<void> _pickPhoto(ImageSource source) async {
+  bool _isVideo(File file) {
+    final ext = file.path.split('.').last.toLowerCase();
+    return ext == 'mp4' || ext == 'mov';
+  }
+
+  Future<File> _compressImage(File file) async {
     try {
-      final picked = await ImagePicker().pickImage(
-        source: source,
-        maxWidth: 1920,
-        maxHeight: 1920,
-        imageQuality: 85,
+      final bytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+
+      // Calculate target size — max 800px on longest side
+      const maxDim = 800;
+      int targetW = image.width;
+      int targetH = image.height;
+      if (targetW > maxDim || targetH > maxDim) {
+        if (targetW >= targetH) {
+          targetH = (targetH * maxDim / targetW).round();
+          targetW = maxDim;
+        } else {
+          targetW = (targetW * maxDim / targetH).round();
+          targetH = maxDim;
+        }
+      }
+
+      // Resize
+      final resizedCodec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: targetW,
+        targetHeight: targetH,
+      );
+      final resizedFrame = await resizedCodec.getNextFrame();
+      final byteData =
+          await resizedFrame.image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      resizedFrame.image.dispose();
+
+      if (byteData != null) {
+        final pngBytes = byteData.buffer.asUint8List();
+        final outPath =
+            '${file.parent.path}/resized_${DateTime.now().millisecondsSinceEpoch}.png';
+        final outFile = File(outPath);
+        await outFile.writeAsBytes(pngBytes);
+        debugPrint(
+            'Compressed: ${bytes.length} → ${pngBytes.length} bytes (${targetW}x$targetH)');
+        return outFile;
+      }
+    } catch (e) {
+      debugPrint('Image compress error: $e');
+    }
+    return file;
+  }
+
+  Future<void> _pickImages() async {
+    if (_files.length >= _maxFiles) return;
+    final picker = ImagePicker();
+    List<XFile> picked;
+    try {
+      picked = await picker.pickMultiImage();
+    } catch (e) {
+      debugPrint('pickMultiImage error: $e');
+      return;
+    }
+    if (picked.isEmpty || !mounted) return;
+    final remaining = _maxFiles - _files.length;
+    final toAdd = picked.take(remaining).toList();
+    setState(() => _isCompressing = true);
+    try {
+      final result = <File>[];
+      for (final xFile in toAdd) {
+        final original = File(xFile.path);
+        result.add(await _compressImage(original));
+      }
+      if (!mounted) return;
+      setState(() => _files.addAll(result));
+    } catch (e) {
+      debugPrint('Image pick/compress error: $e');
+    } finally {
+      if (mounted) setState(() => _isCompressing = false);
+    }
+  }
+
+  Future<void> _pickFromCamera() async {
+    if (_files.length >= _maxFiles) return;
+    final picker = ImagePicker();
+    XFile? picked;
+    try {
+      picked = await picker.pickImage(source: ImageSource.camera);
+    } catch (e) {
+      debugPrint('pickImage camera error: $e');
+      return;
+    }
+    if (picked == null || !mounted) return;
+    setState(() => _isCompressing = true);
+    final compressed = await _compressImage(File(picked.path));
+    if (!mounted) return;
+    setState(() {
+      _files.add(compressed);
+      _isCompressing = false;
+    });
+  }
+
+  Future<void> _pickVideo() async {
+    if (_files.length >= _maxFiles) return;
+    try {
+      final picked = await ImagePicker().pickVideo(
+        source: ImageSource.gallery,
+        maxDuration: const Duration(seconds: 30),
       );
       if (picked != null && mounted) {
-        setState(() => _photo = File(picked.path));
+        setState(() => _files.add(File(picked.path)));
       }
     } catch (_) {}
   }
 
+  void _removeFile(int index) {
+    setState(() => _files.removeAt(index));
+  }
+
   Future<void> _submit() async {
+    debugPrint('[ProgressReport] submit hour=${widget.hourNumber} files=${_files.length}');
     setState(() => _isSubmitting = true);
     try {
       await context.read<BookingProvider>().submitProgressReport(
@@ -1141,25 +1751,34 @@ class _ProgressReportSheetState extends State<_ProgressReportSheet> {
             message: _messageController.text.trim().isEmpty
                 ? null
                 : _messageController.text.trim(),
-            photo: _photo,
+            files: _files,
           );
+      debugPrint('[ProgressReport] submit success');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(widget.strings.submitSuccess),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: AppColors.primary,
-        ),
-      );
       Navigator.pop(context);
     } catch (e) {
+      debugPrint('[ProgressReport] submit error: $e');
       if (!mounted) return;
       setState(() => _isSubmitting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${widget.strings.submitError}: $e'),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: AppColors.danger,
+      // Show error as dialog (visible over bottom sheet)
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: Text(
+            widget.isThai ? 'เกิดข้อผิดพลาด' : 'Error',
+            style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+          ),
+          content: Text(
+            '$e',
+            style: GoogleFonts.inter(fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(widget.isThai ? 'ตกลง' : 'OK'),
+            ),
+          ],
         ),
       );
     }
@@ -1235,50 +1854,137 @@ class _ProgressReportSheetState extends State<_ProgressReportSheet> {
             ),
             const SizedBox(height: 20),
 
-            // Photo section
-            if (_photo != null) ...[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.file(
-                  _photo!,
-                  height: 180,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
+            // Files preview (thumbnails grid)
+            if (_files.isNotEmpty) ...[
+              SizedBox(
+                height: 100,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _files.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    final file = _files[index];
+                    final isVid = _isVideo(file);
+                    return Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: isVid
+                              ? Container(
+                                  width: 100,
+                                  height: 100,
+                                  color: Colors.black87,
+                                  child: const Center(
+                                    child: Icon(Icons.videocam_rounded,
+                                        color: Colors.white, size: 36),
+                                  ),
+                                )
+                              : Image.file(file,
+                                  width: 100, height: 100, fit: BoxFit.cover),
+                        ),
+                        Positioned(
+                          top: 2,
+                          right: 2,
+                          child: GestureDetector(
+                            onTap: () => _removeFile(index),
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close,
+                                  color: Colors.white, size: 16),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: 8),
               Center(
-                child: TextButton.icon(
-                  onPressed: () => setState(() => _photo = null),
-                  icon: const Icon(Icons.close_rounded, size: 18),
-                  label: Text(
-                    widget.isThai ? 'ลบรูป' : 'Remove Photo',
-                    style: GoogleFonts.inter(fontSize: 13),
-                  ),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.danger,
+                child: Text(
+                  '${_files.length}/$_maxFiles ${s.filesSelected}',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
                   ),
                 ),
               ),
-            ] else ...[
+              const SizedBox(height: 8),
+            ],
+
+            // Compressing indicator
+            if (_isCompressing) ...[
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        s.compressing,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
+            // Pick buttons (camera / gallery / video)
+            if (_files.length < _maxFiles && !_isCompressing) ...[
               Row(
                 children: [
                   Expanded(
                     child: _buildPhotoButton(
                       Icons.camera_alt_rounded,
                       s.takePhoto,
-                      () => _pickPhoto(ImageSource.camera),
+                      _pickFromCamera,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: _buildPhotoButton(
                       Icons.photo_library_rounded,
                       s.chooseGallery,
-                      () => _pickPhoto(ImageSource.gallery),
+                      _pickImages,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildPhotoButton(
+                      Icons.videocam_rounded,
+                      s.recordVideo,
+                      _pickVideo,
                     ),
                   ),
                 ],
+              ),
+            ] else if (_files.length >= _maxFiles) ...[
+              Center(
+                child: Text(
+                  s.maxFilesReached,
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: AppColors.warning,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
             ],
             const SizedBox(height: 16),
@@ -1316,7 +2022,7 @@ class _ProgressReportSheetState extends State<_ProgressReportSheet> {
               width: double.infinity,
               height: 50,
               child: ElevatedButton.icon(
-                onPressed: _isSubmitting ? null : _submit,
+                onPressed: (_isSubmitting || _isCompressing) ? null : _submit,
                 icon: _isSubmitting
                     ? const SizedBox(
                         width: 20,

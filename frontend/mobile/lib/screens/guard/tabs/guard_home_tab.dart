@@ -27,12 +27,16 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<BookingProvider>().fetchDashboard();
+      context.read<BookingProvider>().fetchActiveJob();
       context.read<NotificationProvider>().fetchUnreadCount(role: 'guard');
     });
   }
 
   Future<void> _onRefresh() async {
-    await context.read<BookingProvider>().fetchDashboard();
+    await Future.wait([
+      context.read<BookingProvider>().fetchDashboard(),
+      context.read<BookingProvider>().fetchActiveJob(),
+    ]);
   }
 
   @override
@@ -319,9 +323,14 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
               address: result['address'] as String?,
               bookedHours: bookedHours,
               remainingSeconds: remaining,
+              startedAt: result['started_at'] as String?,
             ),
           ),
-        );
+        ).then((_) {
+          if (!mounted) return;
+          context.read<BookingProvider>().fetchDashboard();
+          context.read<BookingProvider>().fetchActiveJob();
+        });
       },
       child: Container(
         padding: const EdgeInsets.all(16),

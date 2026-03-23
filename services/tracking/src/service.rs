@@ -10,6 +10,36 @@ use crate::models::{
 };
 
 // =============================================================================
+// Authorization helpers
+// =============================================================================
+
+/// Check if a customer has an active (non-cancelled, non-declined) booking with a guard.
+pub async fn has_active_booking(
+    db: &PgPool,
+    customer_id: Uuid,
+    guard_id: Uuid,
+) -> Result<bool, AppError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM booking.assignments a
+            INNER JOIN booking.guard_requests r ON r.id = a.request_id
+            WHERE r.customer_id = $1
+              AND a.guard_id = $2
+              AND a.status NOT IN ('cancelled', 'declined')
+        )
+        "#,
+    )
+    .bind(customer_id)
+    .bind(guard_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(exists)
+}
+
+// =============================================================================
 // Upsert Guard Location (latest position)
 // =============================================================================
 
@@ -20,8 +50,8 @@ pub async fn upsert_location(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        INSERT INTO tracking.guard_locations (guard_id, lat, lng, accuracy, heading, speed, recorded_at)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        INSERT INTO tracking.guard_locations (guard_id, lat, lng, accuracy, heading, speed, recorded_at, is_online)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), true)
         ON CONFLICT (guard_id)
         DO UPDATE SET
             lat = EXCLUDED.lat,
@@ -29,7 +59,8 @@ pub async fn upsert_location(
             accuracy = EXCLUDED.accuracy,
             heading = EXCLUDED.heading,
             speed = EXCLUDED.speed,
-            recorded_at = NOW()
+            recorded_at = NOW(),
+            is_online = true
         "#,
     )
     .bind(guard_id)
@@ -41,6 +72,35 @@ pub async fn upsert_location(
     .execute(db)
     .await?;
 
+    Ok(())
+}
+
+/// Mark guard as online when WebSocket connects.
+/// Uses UPSERT so a guard connecting for the first time (no prior GPS row) gets a default row.
+/// lat/lng default to 0 — will be overwritten by the first real GPS update.
+pub async fn set_online(db: &PgPool, guard_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        INSERT INTO tracking.guard_locations (guard_id, lat, lng, recorded_at, is_online)
+        VALUES ($1, 0, 0, NOW(), true)
+        ON CONFLICT (guard_id)
+        DO UPDATE SET is_online = true, recorded_at = NOW()
+        "#,
+    )
+    .bind(guard_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Mark guard as offline when WebSocket disconnects.
+pub async fn set_offline(db: &PgPool, guard_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE tracking.guard_locations SET is_online = false WHERE guard_id = $1",
+    )
+    .bind(guard_id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -58,14 +118,18 @@ pub async fn append_history(
 ) -> Result<(), AppError> {
     sqlx::query(
         r#"
-        INSERT INTO tracking.location_history (guard_id, assignment_id, lat, lng, recorded_at)
-        VALUES ($1, $2, $3, $4, NOW())
+        INSERT INTO tracking.location_history
+            (guard_id, assignment_id, lat, lng, accuracy, heading, speed, recorded_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
         "#,
     )
     .bind(guard_id)
     .bind(update.assignment_id)
     .bind(update.lat)
     .bind(update.lng)
+    .bind(update.accuracy)
+    .bind(update.heading)
+    .bind(update.speed)
     .execute(db)
     .await?;
 
@@ -175,19 +239,38 @@ pub async fn get_location_history(
 
 pub async fn get_all_locations(
     db: &PgPool,
+    online_only: bool,
 ) -> Result<Vec<GuardLocationWithName>, AppError> {
-    let rows = sqlx::query_as::<_, GuardLocationWithNameRow>(
-        r#"
-        SELECT gl.guard_id, u.full_name,
-               gl.lat, gl.lng, gl.accuracy, gl.heading, gl.speed, gl.recorded_at
-        FROM tracking.guard_locations gl
-        INNER JOIN auth.users u ON u.id = gl.guard_id
-        WHERE u.role = 'guard' AND u.is_active = true AND u.approval_status = 'approved'
-        ORDER BY gl.recorded_at DESC
-        "#,
-    )
-    .fetch_all(db)
-    .await?;
+    let rows = if online_only {
+        sqlx::query_as::<_, GuardLocationWithNameRow>(
+            r#"
+            SELECT gl.guard_id, u.full_name,
+                   gl.lat, gl.lng, gl.accuracy, gl.heading, gl.speed,
+                   gl.recorded_at, gl.is_online
+            FROM tracking.guard_locations gl
+            INNER JOIN auth.users u ON u.id = gl.guard_id
+            WHERE u.role = 'guard' AND u.is_active = true AND u.approval_status = 'approved'
+              AND gl.is_online = true
+            ORDER BY gl.recorded_at DESC
+            "#,
+        )
+        .fetch_all(db)
+        .await?
+    } else {
+        sqlx::query_as::<_, GuardLocationWithNameRow>(
+            r#"
+            SELECT gl.guard_id, u.full_name,
+                   gl.lat, gl.lng, gl.accuracy, gl.heading, gl.speed,
+                   gl.recorded_at, gl.is_online
+            FROM tracking.guard_locations gl
+            INNER JOIN auth.users u ON u.id = gl.guard_id
+            WHERE u.role = 'guard' AND u.is_active = true AND u.approval_status = 'approved'
+            ORDER BY gl.recorded_at DESC
+            "#,
+        )
+        .fetch_all(db)
+        .await?
+    };
 
     Ok(rows.into_iter().map(GuardLocationWithName::from).collect())
 }

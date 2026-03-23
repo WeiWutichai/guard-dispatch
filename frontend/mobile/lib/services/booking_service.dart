@@ -363,22 +363,23 @@ class BookingService {
     String assignmentId, {
     required int hourNumber,
     String? message,
-    File? photo,
+    List<File> files = const [],
   }) async {
-    final formMap = <String, dynamic>{
-      'hour_number': hourNumber.toString(),
-    };
+    final formData = FormData();
+    formData.fields.add(MapEntry('hour_number', hourNumber.toString()));
     if (message != null && message.isNotEmpty) {
-      formMap['message'] = message;
+      formData.fields.add(MapEntry('message', message));
     }
-    if (photo != null) {
-      formMap['photo'] = await MultipartFile.fromFile(
-        photo.path,
-        filename: photo.path.split('/').last,
-      );
+    for (final file in files) {
+      formData.files.add(MapEntry(
+        'files',
+        await MultipartFile.fromFile(
+          file.path,
+          filename: file.path.split('/').last,
+        ),
+      ));
     }
 
-    final formData = FormData.fromMap(formMap);
     final response = await _apiClient.dio.post(
       '/booking/assignments/$assignmentId/progress-reports',
       data: formData,

@@ -237,6 +237,9 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
         icon = Icons.access_time_rounded;
       } else if (lower.startsWith('จำนวน') || lower.startsWith('guards:')) {
         icon = Icons.people_rounded;
+      } else if (lower.startsWith('ประเภทงาน:') ||
+          lower.startsWith('job type:')) {
+        icon = Icons.work_rounded;
       } else if (lower.startsWith('บริการเพิ่มเติม:') || lower.startsWith('additional:')) {
         icon = Icons.add_circle_outline_rounded;
       } else if (lower.startsWith('อุปกรณ์:') || lower.startsWith('equipment:')) {
@@ -445,7 +448,8 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
           ],
 
           // Action button for active bookings (status-aware using assignment status)
-          if (status == 'assigned' || status == 'in_progress') ...[
+          // Hide when assignment is completed (customer already reviewed)
+          if ((status == 'assigned' || status == 'in_progress') && displayStatus != 'completed') ...[
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
@@ -530,6 +534,12 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
     };
   }
 
+  void _refreshRequests() {
+    if (mounted) {
+      context.read<BookingProvider>().fetchMyRequests();
+    }
+  }
+
   Future<void> _trackGuard(Map<String, dynamic> req, bool isThai) async {
     final requestId = req['id'] as String;
     final customerLat = (req['location_lat'] as num?)?.toDouble();
@@ -606,7 +616,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
               customerLng: customerLng,
             ),
           ),
-        );
+        ).then((_) => _refreshRequests());
         return;
       }
 
@@ -633,7 +643,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
               startedAt: startedAt,
             ),
           ),
-        );
+        ).then((_) => _refreshRequests());
       } else {
         Navigator.push(
           context,
@@ -646,7 +656,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
               customerLng: customerLng,
             ),
           ),
-        );
+        ).then((_) => _refreshRequests());
       }
     } catch (e) {
       if (!mounted) return;

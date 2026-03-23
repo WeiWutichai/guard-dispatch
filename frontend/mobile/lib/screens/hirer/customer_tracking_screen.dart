@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -43,6 +45,19 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
   double? _enRouteLat;
   double? _enRouteLng;
   String? _enRoutePlace;
+
+  // Route line
+  List<LatLng> _routePoints = [];
+  double? _routeDistanceKm;
+  int? _routeEtaMinutes;
+  bool _isFetchingRoute = false;
+  LatLng? _lastRouteGuardPos; // avoid re-fetching if guard hasn't moved much
+
+  static final Dio _osrmDio = Dio(BaseOptions(
+    baseUrl: 'https://router.project-osrm.org',
+    connectTimeout: const Duration(seconds: 5),
+    receiveTimeout: const Duration(seconds: 5),
+  ));
 
   @override
   void initState() {
@@ -92,6 +107,9 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
           _waitingForLocation = false;
         });
 
+        // Fetch route after position update
+        _fetchRoute();
+
         // Auto-fit bounds on first location
         if (!_initialFitDone) {
           _initialFitDone = true;
@@ -106,6 +124,65 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
           );
         }
       }
+    }
+  }
+
+  /// Fetch driving route from OSRM between guard and customer.
+  /// Only re-fetches if guard moved > 50m since last fetch.
+  Future<void> _fetchRoute() async {
+    if (_guardPosition == null || _isFetchingRoute) return;
+
+    // Skip if guard hasn't moved significantly (> 50m)
+    if (_lastRouteGuardPos != null) {
+      const threshold = 0.0005; // ~50m in degrees
+      final dLat = (_guardPosition!.latitude - _lastRouteGuardPos!.latitude).abs();
+      final dLng = (_guardPosition!.longitude - _lastRouteGuardPos!.longitude).abs();
+      if (dLat < threshold && dLng < threshold) return;
+    }
+
+    _isFetchingRoute = true;
+    try {
+      final gLng = _guardPosition!.longitude;
+      final gLat = _guardPosition!.latitude;
+      final cLng = widget.customerLng;
+      final cLat = widget.customerLat;
+
+      final response = await _osrmDio.get(
+        '/route/v1/driving/$gLng,$gLat;$cLng,$cLat',
+        queryParameters: {
+          'overview': 'full',
+          'geometries': 'geojson',
+        },
+      );
+
+      if (!mounted) return;
+
+      final data = response.data is String
+          ? jsonDecode(response.data as String)
+          : response.data;
+
+      if (data['code'] == 'Ok' && (data['routes'] as List).isNotEmpty) {
+        final route = data['routes'][0];
+        final coords = route['geometry']['coordinates'] as List;
+        final distance = (route['distance'] as num).toDouble();
+        final duration = (route['duration'] as num).toDouble();
+
+        setState(() {
+          _routePoints = coords
+              .map((c) => LatLng(
+                    (c[1] as num).toDouble(),
+                    (c[0] as num).toDouble(),
+                  ))
+              .toList();
+          _routeDistanceKm = distance / 1000;
+          _routeEtaMinutes = (duration / 60).ceil();
+          _lastRouteGuardPos = _guardPosition;
+        });
+      }
+    } catch (e) {
+      debugPrint('OSRM route error: $e');
+    } finally {
+      _isFetchingRoute = false;
     }
   }
 
@@ -412,6 +489,17 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                           'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'com.secureguard.app',
                     ),
+                    // Route polyline (draw before markers so it's behind)
+                    if (_routePoints.isNotEmpty)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: _routePoints,
+                            strokeWidth: 5,
+                            color: AppColors.primary.withValues(alpha: 0.7),
+                          ),
+                        ],
+                      ),
                     MarkerLayer(
                       markers: [
                         // Customer location (red pin)
@@ -425,12 +513,12 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                             size: 40,
                           ),
                         ),
-                        // Guard position (green dot)
+                        // Guard position (green dot with pulse)
                         if (_guardPosition != null)
                           Marker(
                             point: _guardPosition!,
-                            width: 24,
-                            height: 24,
+                            width: 32,
+                            height: 32,
                             child: Container(
                               decoration: BoxDecoration(
                                 color: AppColors.primary,
@@ -445,12 +533,96 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                                   ),
                                 ],
                               ),
+                              child: const Icon(
+                                Icons.navigation_rounded,
+                                color: Colors.white,
+                                size: 16,
+                              ),
                             ),
                           ),
                       ],
                     ),
                   ],
                 ),
+
+                // ETA + distance badge
+                if (_routeEtaMinutes != null && _routeDistanceKm != null)
+                  Positioned(
+                    top: 16,
+                    left: 16,
+                    right: 16,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 10,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.directions_car_rounded,
+                                color: AppColors.primary, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isThai
+                                      ? 'ถึงในอีก ~$_routeEtaMinutes นาที'
+                                      : 'Arrives in ~$_routeEtaMinutes min',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                Text(
+                                  isThai
+                                      ? 'ระยะทาง ${_routeDistanceKm!.toStringAsFixed(1)} กม.'
+                                      : '${_routeDistanceKm!.toStringAsFixed(1)} km away',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '${_routeDistanceKm!.toStringAsFixed(1)} km',
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
 
                 // Zoom controls
                 Positioned(
@@ -556,12 +728,26 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                               color: AppColors.textPrimary,
                             ),
                           ),
-                          Text(
-                            strings.guardEnRoute,
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              color: AppColors.primary,
-                            ),
+                          Row(
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: AppColors.primary,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                strings.guardEnRoute,
+                                style: GoogleFonts.inter(
+                                  fontSize: 13,
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

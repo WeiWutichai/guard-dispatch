@@ -42,12 +42,28 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
   IOWebSocketChannel? _wsChannel;
   StreamSubscription<dynamic>? _wsSub;
 
+  // Progress reports
+  List<Map<String, dynamic>> _progressReports = [];
+
   @override
   void initState() {
     super.initState();
     _job = Map<String, dynamic>.from(widget.job);
     _startPaymentPollingIfNeeded();
     _connectAssignmentWs();
+    _fetchProgressReports();
+  }
+
+  Future<void> _fetchProgressReports() async {
+    final assignmentId = _job['assignment_id'] as String?;
+    if (assignmentId == null) return;
+    try {
+      await context.read<BookingProvider>().fetchProgressReports(assignmentId);
+      if (!mounted) return;
+      setState(() {
+        _progressReports = context.read<BookingProvider>().progressReports;
+      });
+    } catch (_) {}
   }
 
   @override
@@ -483,6 +499,14 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                   // Check-in timeline
                   _buildCheckinTimeline(_job, isThai),
 
+                  // Progress reports (show for started/pending_completion/completed jobs)
+                  if (assignmentStatus == 'started' ||
+                      assignmentStatus == 'pending_completion' ||
+                      assignmentStatus == 'completed') ...[
+                    const SizedBox(height: 16),
+                    _buildProgressReportsSection(isThai),
+                  ],
+
                   // Action button area
                   if (assignmentStatus == 'pending_acceptance') ...[
                     const SizedBox(height: 24),
@@ -842,6 +866,9 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
         icon = Icons.access_time_rounded;
       } else if (lower.startsWith('จำนวน') || lower.startsWith('guards:')) {
         icon = Icons.people_rounded;
+      } else if (lower.startsWith('ประเภทงาน:') ||
+          lower.startsWith('job type:')) {
+        icon = Icons.work_rounded;
       } else if (lower.startsWith('บริการเพิ่มเติม:') ||
           lower.startsWith('additional:')) {
         icon = Icons.add_circle_outline_rounded;
@@ -857,6 +884,288 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
       result.add(_DetailLine(icon: icon, text: line.trim()));
     }
     return result;
+  }
+
+  // =========================================================================
+  // Progress Reports Section
+  // =========================================================================
+
+  Widget _buildProgressReportsSection(bool isThai) {
+    final bookedHours = (_job['booked_hours'] as num?)?.toInt() ?? 0;
+    if (bookedHours < 1) return const SizedBox.shrink();
+    final totalSlots = bookedHours + 1; // 0 (เริ่มงาน) + 1..bookedHours
+
+    // Build map of reported hours
+    final reportMap = <int, Map<String, dynamic>>{};
+    for (final r in _progressReports) {
+      final h = r['hour_number'] as int?;
+      if (h != null) reportMap[h] = r;
+    }
+
+    final missedCount = List.generate(totalSlots, (i) => i)
+        .where((h) => !reportMap.containsKey(h))
+        .length;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F7FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.blue.withValues(alpha: 0.15)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.assignment_rounded,
+                  size: 18, color: Colors.blue.shade700),
+              const SizedBox(width: 6),
+              Text(
+                isThai ? 'รายงานความคืบหน้า' : 'Progress Reports',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade700,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${_progressReports.length}/$totalSlots',
+                  style: GoogleFonts.inter(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (missedCount > 0) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.warning_rounded,
+                      size: 14, color: Colors.red.shade600),
+                  const SizedBox(width: 4),
+                  Text(
+                    isThai
+                        ? 'ไม่ได้รายงาน $missedCount รอบ'
+                        : '$missedCount missed report${missedCount > 1 ? 's' : ''}',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          for (int h = 0; h <= bookedHours; h++) ...[
+            if (h > 1) const Divider(height: 1),
+            _buildHourRow(h, reportMap[h], isThai),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHourRow(int hourNumber, Map<String, dynamic>? report, bool isThai) {
+    final reported = report != null;
+
+    Color badgeColor;
+    Color badgeTextColor;
+    if (reported) {
+      badgeColor = AppColors.primary.withValues(alpha: 0.1);
+      badgeTextColor = AppColors.primary;
+    } else {
+      badgeColor = Colors.red.withValues(alpha: 0.1);
+      badgeTextColor = Colors.red.shade700;
+    }
+
+    String? timeDisplay;
+    if (reported) {
+      final createdAt = report['created_at'] as String?;
+      if (createdAt != null) {
+        try {
+          final dt = DateTime.parse(createdAt).toLocal();
+          timeDisplay =
+              '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+        } catch (_) {}
+      }
+    }
+
+    final message = reported ? report['message'] as String? : null;
+    final mediaList = reported ? (report['media'] as List?) ?? [] : [];
+
+    return InkWell(
+      onTap: reported ? () => _showReportDialog(report, isThai) : null,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: badgeColor,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                hourNumber == 0
+                    ? (isThai ? 'เริ่มงาน' : 'Start')
+                    : '${isThai ? 'ชม.' : 'Hr'} $hourNumber',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: badgeTextColor,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    reported
+                        ? (message ?? (isThai ? 'ส่งรายงานแล้ว' : 'Reported'))
+                        : (isThai ? 'ไม่ได้รายงาน' : 'Missed'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: reported ? AppColors.textPrimary : Colors.red.shade700,
+                    ),
+                  ),
+                  if (timeDisplay != null)
+                    Text(
+                      timeDisplay,
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (reported) ...[
+              if (mediaList.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Icon(Icons.image_rounded,
+                      size: 16, color: AppColors.primary.withValues(alpha: 0.6)),
+                ),
+              Icon(Icons.check_circle_rounded,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right_rounded,
+                  size: 16, color: AppColors.primary.withValues(alpha: 0.5)),
+            ] else
+              Icon(Icons.warning_rounded,
+                  size: 18, color: Colors.red.shade600),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showReportDialog(Map<String, dynamic> report, bool isThai) {
+    final hourNumber = report['hour_number'] as int? ?? 0;
+    final message = report['message'] as String?;
+    final createdAt = report['created_at'] as String?;
+    final mediaList = (report['media'] as List?) ?? [];
+    final photoUrl = report['photo_url'] as String?;
+
+    String timeDisplay = '';
+    if (createdAt != null) {
+      try {
+        final dt = DateTime.parse(createdAt).toLocal();
+        timeDisplay =
+            '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      } catch (_) {}
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.check_circle_rounded,
+                      size: 20, color: AppColors.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${isThai ? 'ชั่วโมงที่' : 'Hour'} $hourNumber',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (timeDisplay.isNotEmpty)
+                    Text(
+                      timeDisplay,
+                      style: GoogleFonts.inter(
+                          fontSize: 12, color: AppColors.textSecondary),
+                    ),
+                ],
+              ),
+              if (message != null && message.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(message, style: GoogleFonts.inter(fontSize: 14)),
+              ],
+              if (mediaList.isNotEmpty || photoUrl != null) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    mediaList.isNotEmpty
+                        ? (mediaList.first['url'] as String? ?? '')
+                        : (photoUrl ?? ''),
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (c, e, s) => const SizedBox.shrink(),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text(isThai ? 'ปิด' : 'Close',
+                      style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // =========================================================================
@@ -879,6 +1188,8 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
         return isThai ? 'ถึงจุดหมาย' : 'Arrived';
       case 'started':
         return isThai ? 'กำลังดำเนินงาน' : 'In Progress';
+      case 'pending_completion':
+        return isThai ? 'รอลูกค้าตรวจสอบ' : 'Pending Review';
       case 'completed':
         return isThai ? 'เสร็จสิ้น' : 'Completed';
       default:
@@ -901,6 +1212,8 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
         return AppColors.success;
       case 'started':
         return AppColors.primary;
+      case 'pending_completion':
+        return Colors.orange;
       case 'completed':
         return AppColors.textSecondary;
       default:
@@ -1269,6 +1582,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                       bookedHours:
                           (_job['booked_hours'] as num?)?.toInt() ?? 6,
                       remainingSeconds: remaining,
+                      startedAt: activeJob['started_at'] as String?,
                     ),
                   ),
                 );
@@ -1311,6 +1625,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                         (result['remaining_seconds'] as num?)?.toInt() ??
                             (((_job['booked_hours'] as num?)?.toInt() ?? 6) *
                                 3600),
+                    startedAt: result['started_at'] as String?,
                   ),
                 ),
               );
@@ -1346,7 +1661,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                 .updateAssignmentStatus(assignmentId, 'en_route', lat: gpsLat, lng: gpsLng);
             if (!context.mounted) return;
             if (customerLat != null && customerLng != null) {
-              Navigator.push(
+              final result = await Navigator.push<String>(
                 context,
                 MaterialPageRoute(
                   builder: (_) => GuardNavigationScreen(
@@ -1359,6 +1674,9 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                   ),
                 ),
               );
+              if (result == 'arrived' && mounted) {
+                setState(() => _job['assignment_status'] = 'arrived');
+              }
             } else {
               Navigator.pop(context);
             }
@@ -1367,7 +1685,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
             final customerLat = (_job['location_lat'] as num?)?.toDouble();
             final customerLng = (_job['location_lng'] as num?)?.toDouble();
             if (customerLat != null && customerLng != null) {
-              Navigator.push(
+              final result = await Navigator.push<String>(
                 context,
                 MaterialPageRoute(
                   builder: (_) => GuardNavigationScreen(
@@ -1380,6 +1698,9 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                   ),
                 ),
               );
+              if (result == 'arrived' && mounted) {
+                setState(() => _job['assignment_status'] = 'arrived');
+              }
             }
           }
         },
