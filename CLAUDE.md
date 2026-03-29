@@ -711,17 +711,15 @@ CustomerRegistrationScreen(phone, profileToken)
       ★ ถ้า error → role ยังเป็น null (ไม่มี partial state)
       ★ customer_profiles.approval_status = 'pending' → ต้องรอ admin อนุมัติ
   ▼
-RegistrationPendingScreen
+RegistrationPendingScreen({role})
+  ├─ Constructor: `role` parameter (required) — determines which profile data + UI to show
+  ├─ _loadProfile(): uses `widget.role` → `getPendingProfileForRole(role)` → fallback `getPendingProfile()`
+  ├─ _buildProfileCard(): `widget.role ?? _pendingRole ?? profile['role']` → guard or customer UI
   ├─ "ตรวจสอบสถานะ" button → _checkApprovalStatus():
-  │     ├─ GET /auth/me (check approval_status via AuthService.getStoredPhone())
-  │     ├─ phone fallback: _profile?['phone'] (for users registered before storePhone())
-  │     ├─ If approved: loginWithPhone(phone, pinHash) → Dashboard
+  │     ├─ loginWithPhone(phone, pinHash) → if approved → Dashboard
   │     └─ If still pending: show "กำลังรอการอนุมัติ" message
-  ├─ "Back to Login" → RoleSelectionScreen
-  └─ "แก้ข้อมูล" → GuardRegistrationScreen(phone, initialProfile, dashboard)
-      ├─ Pre-fills: full_name, gender, date_of_birth, experience, workplace, bank_name, account_name
-      ├─ Empty: account_number (security — masked locally), documents (re-upload or skip — backend COALESCE preserves)
-      └─ Back button: canPop() ? pop : pushAndRemoveUntil(RegistrationPendingScreen)
+  ├─ Back button → `pushReplacement` RoleSelectionScreen(phone: auth.phone ?? getStoredPhone())
+  └─ "แก้ข้อมูล" button removed — submitted profile cannot be edited
 ```
 
 > **Design decision:** Registration returns **202 Accepted with no tokens**. The user cannot
@@ -752,12 +750,14 @@ RegistrationPendingScreen
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
 - `POST /otp/verify` → `handlers::verify_otp` (public, no JWT)
 - `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`. Password param = SHA-256 hash of user's PIN.
-- `POST /login/phone` → `handlers::login_with_phone` (public) — login with `{phone, password}` (PIN hash). Returns `{access_token, refresh_token, role}`. Used by mobile after admin approval.
+- `POST /login/phone` → `handlers::login_with_phone` (public) — login with `{phone, password}` (PIN hash). Returns `{access_token, refresh_token, role}`. Used by mobile after admin approval. Generic 401 for all non-approved states (no user enumeration).
+- `POST /check-status` → `handlers::check_status` (public, no JWT) — check user state by `{phone, password}`. Returns `{exists, role, approval_status, has_guard_profile, has_customer_profile, customer_approval_status}`. Constant-time: dummy Argon2 for non-existent users. Used by `checkAuthStatus()` as DB source of truth instead of SharedPreferences.
 - `POST /profile/role` → `handlers::update_role` (public, no JWT) — guard: verify user + issue `profile_token` (**ไม่ set role**); customer: verify user + issue `profile_token` (**ไม่ set role**). Returns `profile_token` for both.
 - `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for pending user. Accepts optional `role` param to determine purpose (`"guard_profile"` / `"customer_profile"`)
 - `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth, purpose=`"guard_profile"` — single-use)
 - `POST /profile/customer` → `handlers::submit_customer_profile` (profile_token auth, purpose=`"customer_profile"` — single-use) — UPSERT `auth.customer_profiles`, SET role='customer' if role IS NULL
-- `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT)
+- `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT) — returns guard profile with document signed URLs + expiry dates (`id_card_expiry`, `security_license_expiry`, `training_cert_expiry`, `criminal_check_expiry`, `driver_license_expiry`)
+- `PUT /admin/guard-profile/:user_id` → `handlers::admin_update_guard_profile` (admin JWT) — admin edits guard profile fields (personal info, bank, document expiry dates). Uses COALESCE to merge with existing values.
 - `GET /admin/customer-profile/:user_id` → `handlers::get_customer_profile` (admin JWT) — JOIN users + customer_profiles
 - `GET /admin/customer-applicants` → `handlers::list_customer_applicants` (admin JWT) — queries `customer_profiles` JOIN `auth.users`, filters by `customer_profiles.approval_status`. Returns `PaginatedUsers` with `role` forced to `"customer"`.
 - `PATCH /admin/customer-profile/:user_id/approval` → `handlers::update_customer_approval` (admin JWT) — updates `customer_profiles.approval_status` + `invalidate_user_cache()`
@@ -865,17 +865,20 @@ RegistrationPendingScreen
   - `loginWithPhone(phone, pinHash)` calls `POST /auth/login/phone` → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval.
   - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_email`, `_approvalStatus`, `_createdAt`, `_avatarUrl`, `_gender`, `_dateOfBirth`, `_yearsOfExperience`, `_previousWorkplace`, `_customerApprovalStatus`, `_customerFullName`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
   - `fetchGuardDocs()` calls `GET /auth/guards/{userId}/profile` → populates `_guardDocUrls` map (id_card, security_license, training_cert, criminal_check, driver_license). Called from `ProfileSettingsScreen.initState()`.
-  - `checkAuthStatus()`: checks stored access token **first** (tokens take priority over stale pending flag) → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout/backend down should not log out user) → else checks `isPendingApproval()` → **auto-login with stored phone + PIN hash** (`loginWithPhone`) → if approved: `authenticated` (no OTP needed) → if still pending: `pendingApproval` screen (no OTP needed) → else unauthenticated. Only falls back to unauthenticated when tokens are actually cleared by interceptor (401 + refresh failure).
-  - **Auto-login on pending restart:** When `isPendingApproval = true` + no token, reads phone from `AuthService.getStoredPhone()` + PIN hash from `FlutterSecureStorage('pin_hash')` → calls `loginWithPhone(phone, pinHash)`. If admin approved → authenticated → dashboard. If still pending → shows pending screen. Avoids requiring user to re-enter OTP after app restart.
+  - `checkAuthStatus()`: checks stored access token **first** → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout ≠ invalid tokens) → else no token: calls `POST /auth/check-status` (DB source of truth) with stored phone + PIN hash → if approved: `loginWithPhone()` → authenticated → if pending: syncs local pending state from DB (`setPendingApproval` per profile) → `pendingApproval` → if network error: fallback to local SharedPreferences → else unauthenticated. Has `_isCheckingAuth` guard against concurrent calls.
+  - **check-status API flow:** Single API call on startup → returns `{exists, role, approval_status, has_guard_profile, has_customer_profile, customer_approval_status}`. If approved → login to get tokens. If pending → sync local state from DB truth. Timing-safe: dummy Argon2 verify for non-existent users.
+  - **Phone resolution order (RoleSelectionScreen):** `widget.phone` → `auth.phone` → `getStoredPhone()` → `getPhoneVerifiedData()` → if all null → PhoneInputScreen. Resolved **before** any role checks to prevent null crashes.
   - Profile fields: `fullName`, `phone`, `email`, `approvalStatus`, `createdAt`, `avatarUrl`, `gender`, `dateOfBirth`, `yearsOfExperience`, `previousWorkplace`, `guardDocUrls`, `customerApprovalStatus`, `customerFullName` (getters) — used by dashboard/profile screens instead of hardcoded mock data
   - `customerFullName`: `String?` — customer display name from `customer_profiles.full_name` (separate from guard `fullName`). Hirer screens use `customerFullName ?? fullName` for display.
   - `customerApprovalStatus`: `String?` — `'pending'` | `'approved'` | `'rejected'` | `null` (no customer profile). Parsed from `GET /auth/me` response `customer_approval_status` field. Used by `RoleSelectionScreen` and `HirerDashboardScreen` for routing.
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
-- `AuthService`: `storeTokens()`, `storePhone()`, `getStoredPhone()`, `storeRole()`, `getRole()`, `clearRole()`, `markRegistered()`, `setPendingApproval()`, `isPendingApproval()`, `getPendingRole()`, `clearPendingApproval()`
+- `AuthService`: `storeTokens()`, `storePhone()`, `getStoredPhone()`, `storeRole()`, `getRole()`, `clearRole()`, `markRegistered()`, `setPendingApproval({role})`, `isPendingApproval()`, `getPendingRole()`, `hasSubmittedRole(role)`, `clearPendingApproval()`, `savePendingProfile(data)`, `getPendingProfileForRole(role)`
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
-  - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only; also stores `phone` and `date_of_birth` (ISO format) for edit flow
-  - `getPendingProfile()` retrieves stored profile for pre-filling edit form
-- `ApiClient`: auto-detects platform for default base URL — iOS → `http://localhost:80`, Android → `http://10.0.2.2:80` (override via `--dart-define=API_URL=...`). Skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/profile/customer`, `/auth/login/phone`
+  - **Pending role set:** `setPendingApproval(role)` appends role to comma-separated set (e.g. `"guard,customer"`) — supports dual registration. `hasSubmittedRole(role)` checks specific role. `getPendingRole()` returns first role.
+  - **Pending profile per-role:** `savePendingProfile(data)` stores per-role key (`pending_profile_guard` / `pending_profile_customer`) based on `data['role']`. Data map **MUST** include `'role'` key. `getPendingProfileForRole(role)` retrieves correct profile.
+  - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only
+  - `clearPendingApproval()` removes all pending flags + all profile caches
+- `ApiClient`: auto-detects platform for default base URL — iOS → `http://localhost:80`, Android → `http://10.0.2.2:80` (override via `--dart-define=API_URL=...`). Skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/profile/customer`, `/auth/login/phone`, `/auth/check-status`
 - `main.dart` `home`: `Consumer<AuthProvider>` — shows loading spinner when `status == unknown` (async auth check in progress), routes to `RegistrationPendingScreen` when `status == pendingApproval`, `PinLockScreen` when authenticated + PIN set, else `PhoneInputScreen`
 - `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed). **Returning approved user handling:** if `registerWithOtp` returns "Please log in instead" (Conflict), auto-tries `loginWithPhone(phone, pinHash)` with the PIN just entered — if success → RoleSelectionScreen (authenticated → dashboard); if fail → `PinLoginScreen(phone)` for retry with original PIN.
 - `PinLoginScreen`: simple PIN entry screen for returning approved users whose tokens were cleared. Calls `loginWithPhone(phone, hashPin(pin))` → success → RoleSelectionScreen (authenticated → dashboard). Shows "บัญชีได้รับอนุมัติแล้ว" badge. i18n via `PinLoginStrings`.
@@ -1314,7 +1317,12 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม navigate ไปหน้า dashboard หรือ PinSetupScreen หลัง registration — ต้องไป `RegistrationPendingScreen` เสมอ (ยกเว้น authenticated user ที่เพิ่ม profile ใหม่ → กลับ dashboard)
 - ❌ ห้ามเรียก `setPendingApproval()` สำหรับ authenticated user — ต้องตรวจ `authProvider.isAuthenticated` ก่อน; ถ้า authenticated แล้วห้าม override auth state ด้วย pending flag (จะทำให้ tokens หาย + app แสดง PhoneInputScreen หลัง restart)
 - ❌ ห้าม `checkAuthStatus()` เช็ค `isPendingApproval()` ก่อน access token — ต้องเช็ค token ก่อนเสมอ เพราะ pending flag อาจเป็น stale จากการเพิ่ม profile ใหม่ของ authenticated user
-- ❌ ห้ามบังคับให้ user กรอก OTP ใหม่เมื่อ restart app ขณะรอ approve — `checkAuthStatus()` ต้อง auto-login ด้วย stored phone + PIN hash (`loginWithPhone`) เมื่อเจอ `isPendingApproval = true` + ไม่มี token
+- ❌ ห้ามบังคับให้ user กรอก OTP ใหม่เมื่อ restart app ขณะรอ approve — `checkAuthStatus()` ต้องใช้ `POST /auth/check-status` (DB source of truth) + auto-login ถ้า approved
+- ❌ ห้าม trust SharedPreferences `pending_role` เป็น source of truth — ต้อง sync จาก `/auth/check-status` API ทุกครั้งที่ startup (fallback to local เมื่อ network error เท่านั้น)
+- ❌ ห้าม `RegistrationPendingScreen` ไม่มี `role` parameter — ทุกจุดที่ navigate ต้องส่ง role ชัดเจน (`'guard'` / `'customer'`) เพื่อแสดง UI + ข้อมูลถูก role
+- ❌ ห้าม `savePendingProfile()` ไม่มี `'role'` key ใน data map — ต้องมีเสมอเพื่อให้ per-role storage ทำงาน (`pending_profile_guard` / `pending_profile_customer`)
+- ❌ ห้าม resolve phone หลัง role check ใน `RoleSelectionScreen._onRoleTap()` — ต้อง resolve phone **ก่อน** เสมอ (widget.phone → auth.phone → getStoredPhone → getPhoneVerifiedData) เพื่อป้องกัน null crash
+- ❌ ห้าม fire-and-forget `fetchProfile()` ใน `PinLockScreen._navigateToApp()` สำหรับ authenticated users — ต้อง `await` (with timeout 5s) เพื่อให้ `customerApprovalStatus` พร้อมก่อน routing
 - ❌ ห้ามใช้ `AuthService.isRegistered('guard')` เพื่อตรวจสอบว่าควรแสดง Dashboard — ใช้ `context.watch<AuthProvider>().isAuthenticated` แทน (SharedPreferences key อาจไม่ถูก set ในทุก flow)
 - ❌ ห้ามใช้ hardcoded mock data ใน Dashboard screens (ชื่อ, avatar, รหัส) — ใช้ `AuthProvider.fullName`, `AuthProvider.phone`, `AuthProvider.avatarUrl` จาก `GET /auth/me`
 - ❌ ห้าม login ด้วย email-based endpoint จาก mobile — ใช้ `POST /auth/login/phone` (phone + PIN hash) เท่านั้น
