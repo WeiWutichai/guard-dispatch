@@ -20,7 +20,7 @@ Customer (Hirer)
 
 ### Header (primary color, rounded bottom)
 - Back icon button
-- Shield icon + "SecureGuard" branding
+- Shield icon + "PGuard" branding
 - Greeting text: "Hello! Choose the security service you need"
 - Notification bell icon (→ NotificationScreen)
 - Person profile icon

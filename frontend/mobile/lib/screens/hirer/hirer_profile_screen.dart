@@ -24,7 +24,7 @@ class HirerProfileScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // SecureGuard green header
+            // PGuard green header
             Container(
               padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
               decoration: const BoxDecoration(
@@ -49,7 +49,7 @@ class HirerProfileScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'SecureGuard',
+                          'PGuard',
                           style: GoogleFonts.inter(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,

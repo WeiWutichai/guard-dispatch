@@ -145,7 +145,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                   _buildLogo(),
                   const SizedBox(height: 12),
                   Text(
-                    'SecureGuard',
+                    'PGuard',
                     style: GoogleFonts.inter(
                       fontSize: 24,
                       fontWeight: FontWeight.w700,
@@ -245,7 +245,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                   ),
                   const SizedBox(height: 20),
                   Text(
-                    'SECUREGUARD MOBILE',
+                    'PGUARD MOBILE',
                     style: GoogleFonts.inter(
                       fontSize: 10,
                       fontWeight: FontWeight.w500,

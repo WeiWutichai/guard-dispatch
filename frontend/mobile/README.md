@@ -1,4 +1,4 @@
-# secureguard_mobile
+# pguard_mobile
 
 A new Flutter project.
 

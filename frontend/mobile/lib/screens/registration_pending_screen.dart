@@ -9,12 +9,14 @@ import '../services/auth_service.dart';
 import '../services/pin_storage_service.dart';
 import '../l10n/app_strings.dart';
 import 'guard_registration_screen.dart';
+import 'role_selection_screen.dart';
 import 'customer_registration_screen.dart';
 import 'guard/guard_dashboard_screen.dart';
 import 'hirer/hirer_dashboard_screen.dart';
 
 class RegistrationPendingScreen extends StatefulWidget {
-  const RegistrationPendingScreen({super.key});
+  final String? role; // which role's pending screen to show
+  const RegistrationPendingScreen({super.key, this.role});
 
   @override
   State<RegistrationPendingScreen> createState() =>
@@ -120,7 +122,8 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    final role = _pendingRole ?? _profile?['role'] as String?;
+    // Use widget.role as primary, then _pendingRole, then profile data
+    final role = widget.role ?? _pendingRole ?? _profile?['role'] as String?;
     final Widget editScreen = role == 'customer'
         ? CustomerRegistrationScreen(phone: phone)
         : GuardRegistrationScreen(
@@ -136,13 +139,25 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
   }
 
   Future<void> _loadProfile() async {
-    final results = await Future.wait([
-      AuthService.getPendingProfile(),
-      AuthService.getPendingRole(),
-    ]);
+    // Use explicit role param, fallback to auth provider, then stored
+    String? role = widget.role;
+    if (role == null) {
+      try {
+        role = context.read<AuthProvider>().role;
+      } catch (_) {}
+    }
+    role ??= await AuthService.getPendingRole();
     if (!mounted) return;
-    final data = results[0] as Map<String, dynamic>?;
-    final role = results[1] as String?;
+
+    // Load profile data for that specific role
+    Map<String, dynamic>? data;
+    if (role != null) {
+      data = await AuthService.getPendingProfileForRole(role);
+    }
+    // Fallback to legacy single profile
+    data ??= await AuthService.getPendingProfile();
+    if (!mounted) return;
+
     setState(() {
       _profile = data;
       _pendingRole = role;
@@ -187,12 +202,41 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 28),
               child: Column(
                 children: [
+                  // Back button → RoleSelectionScreen
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: GestureDetector(
+                        onTap: () async {
+                          final authPhone = context.read<AuthProvider>().phone;
+                          final phone = authPhone ?? await AuthService.getStoredPhone();
+                          if (!mounted) return;
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => RoleSelectionScreen(phone: phone),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.arrow_back_ios_new_rounded,
+                              color: AppColors.primary, size: 20),
+                        ),
+                      ),
+                    ),
+                  ),
                   Expanded(
                     child: SingleChildScrollView(
                       physics: const BouncingScrollPhysics(),
                       child: Column(
                         children: [
-                          const SizedBox(height: 32),
+                          const SizedBox(height: 16),
                           // Hourglass icon
                           Container(
                             width: 88,
@@ -301,29 +345,7 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
                             ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  // Edit profile button — navigate to guard form with pre-filled data
-                  GestureDetector(
-                    onTap: () => _navigateToEdit(strings),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: AppColors.border, width: 1.5),
-                      ),
-                      child: Text(
-                        strings.editButton,
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.inter(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ),
-                  ),
+                  // Edit button removed — once submitted, profile cannot be edited
                   const SizedBox(height: 32),
                 ],
               ),
@@ -341,7 +363,7 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
       return (v != null && v.isNotEmpty) ? v : null;
     }
 
-    final role = _pendingRole ?? p['role'] as String?;
+    final role = widget.role ?? _pendingRole ?? p['role'] as String?;
     if (role == 'customer') {
       return _buildCustomerProfileCard(strings, s);
     }

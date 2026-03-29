@@ -103,21 +103,36 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyPendingApproval, true);
     if (role != null) {
-      await prefs.setString(_keyPendingRole, role);
-    } else {
-      await prefs.remove(_keyPendingRole);
+      // Append role to set (supports both guard + customer pending)
+      final existing = prefs.getString(_keyPendingRole) ?? '';
+      final roles = existing.split(',').where((r) => r.isNotEmpty).toSet();
+      roles.add(role);
+      await prefs.setString(_keyPendingRole, roles.join(','));
     }
   }
 
+  /// Returns the first pending role, or null.
   static Future<String?> getPendingRole() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyPendingRole);
+    final raw = prefs.getString(_keyPendingRole);
+    if (raw == null || raw.isEmpty) return null;
+    return raw.split(',').first;
+  }
+
+  /// Check if a specific role has been submitted.
+  static Future<bool> hasSubmittedRole(String role) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_keyPendingRole) ?? '';
+    return raw.split(',').contains(role);
   }
 
   static Future<void> clearPendingApproval() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyPendingApproval);
     await prefs.remove(_keyPendingRole);
+    await prefs.remove(_keyPendingProfileJson);
+    await prefs.remove(_keyPendingProfileGuard);
+    await prefs.remove(_keyPendingProfileCustomer);
   }
 
   /// Store phone + phoneVerifiedToken after OTP verification.
@@ -148,15 +163,33 @@ class AuthService {
   // ---------------------------------------------------------------------------
 
   static const _keyPendingProfileJson = 'pending_profile_json';
+  static const _keyPendingProfileGuard = 'pending_profile_guard';
+  static const _keyPendingProfileCustomer = 'pending_profile_customer';
 
-  /// Save submitted guard profile fields locally so they can be displayed
-  /// on [RegistrationPendingScreen] without an authenticated API call.
+  /// Save submitted profile fields locally, keyed by role.
   static Future<void> savePendingProfile(Map<String, String?> data) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyPendingProfileJson, jsonEncode(data));
+    final role = data['role'] ?? '';
+    final json = jsonEncode(data);
+    // Save role-specific + legacy key for backward compat
+    await prefs.setString(_keyPendingProfileJson, json);
+    if (role == 'guard') {
+      await prefs.setString(_keyPendingProfileGuard, json);
+    } else if (role == 'customer') {
+      await prefs.setString(_keyPendingProfileCustomer, json);
+    }
   }
 
-  /// Retrieve locally saved profile summary. Returns null if not set.
+  /// Retrieve profile for a specific role.
+  static Future<Map<String, dynamic>?> getPendingProfileForRole(String role) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = role == 'guard' ? _keyPendingProfileGuard : _keyPendingProfileCustomer;
+    final raw = prefs.getString(key);
+    if (raw == null) return null;
+    return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+  }
+
+  /// Retrieve locally saved profile summary (legacy — returns last saved).
   static Future<Map<String, dynamic>?> getPendingProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_keyPendingProfileJson);

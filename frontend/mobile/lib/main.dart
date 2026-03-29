@@ -12,7 +12,7 @@ import 'services/notification_service.dart';
 import 'services/tracking_service.dart';
 import 'screens/phone_input_screen.dart';
 import 'screens/pin_lock_screen.dart';
-import 'screens/registration_pending_screen.dart';
+import 'screens/role_selection_screen.dart';
 import 'services/pin_storage_service.dart';
 import 'services/language_service.dart';
 import 'theme/colors.dart';
@@ -67,7 +67,7 @@ class MyApp extends StatelessWidget {
       child: LanguageProvider(
         notifier: langNotifier,
         child: MaterialApp(
-          title: 'SecureGuard Mobile',
+          title: 'PGuard Mobile',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
@@ -82,20 +82,26 @@ class MyApp extends StatelessWidget {
           ),
           home: Consumer<AuthProvider>(
             builder: (context, auth, _) {
+              debugPrint('[MAIN] status=${auth.status} role=${auth.role} isPinSet=${pinService.isPinSet}');
               // Show loading while checking stored auth state.
               if (auth.status == AuthStatus.unknown) {
                 return const Scaffold(
                   body: Center(child: CircularProgressIndicator()),
                 );
               }
-              if (auth.status == AuthStatus.pendingApproval) {
-                return const RegistrationPendingScreen();
-              }
-              // PinLockScreen only for users who are fully authenticated.
-              // iOS Keychain persists across reinstalls so isPinSet can be true
-              // even on a fresh install — only gate authenticated sessions.
-              if (auth.status == AuthStatus.authenticated && pinService.isPinSet) {
+              // PIN gate: any registered user (pending or authenticated) must enter PIN first
+              if ((auth.status == AuthStatus.pendingApproval ||
+                   auth.status == AuthStatus.authenticated) &&
+                  pinService.isPinSet) {
                 return PinLockScreen(pinService: pinService);
+              }
+              // Pending → always go to RoleSelectionScreen.
+              // RoleSelectionScreen handles all sub-routing internally:
+              // - no role yet → show role picker
+              // - has role but pending → RegistrationPendingScreen
+              // - approved → dashboard
+              if (auth.status == AuthStatus.pendingApproval) {
+                return RoleSelectionScreen(phone: auth.phone);
               }
               return const PhoneInputScreen();
             },

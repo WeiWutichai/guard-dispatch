@@ -134,7 +134,7 @@ class _BookingScreenState extends State<BookingScreen> {
     baseUrl: 'https://nominatim.openstreetmap.org',
     connectTimeout: const Duration(seconds: 5),
     receiveTimeout: const Duration(seconds: 5),
-    headers: {'User-Agent': 'SecureGuardMobile/1.0'},
+    headers: {'User-Agent': 'PGuardMobile/1.0'},
   ));
 
   Future<String?> _reverseGeocode(double lat, double lng) async {
@@ -1544,7 +1544,7 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
     baseUrl: 'https://nominatim.openstreetmap.org',
     connectTimeout: const Duration(seconds: 5),
     receiveTimeout: const Duration(seconds: 5),
-    headers: {'User-Agent': 'SecureGuardMobile/1.0'},
+    headers: {'User-Agent': 'PGuardMobile/1.0'},
   ));
 
   @override
@@ -1836,7 +1836,7 @@ class _MapPickerSheetState extends State<_MapPickerSheet> {
                     TileLayer(
                       urlTemplate:
                           'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.secureguard.mobile',
+                      userAgentPackageName: 'com.pguard.mobile',
                     ),
                     MarkerLayer(
                       markers: [

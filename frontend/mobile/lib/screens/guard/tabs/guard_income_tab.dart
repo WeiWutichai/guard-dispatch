@@ -59,7 +59,7 @@ class _GuardIncomeTabState extends State<GuardIncomeTab> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'SecureGuard',
+                            'PGuard',
                             style: GoogleFonts.inter(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,

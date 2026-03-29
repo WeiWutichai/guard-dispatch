@@ -52,7 +52,7 @@ class _AuthInterceptor extends Interceptor {
   ) async {
     // Skip auth header for public endpoints and profile-token endpoints
     // (profile/guard and profile/customer use their own Bearer profile_token)
-    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role', '/auth/profile/guard', '/auth/profile/customer'];
+    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/check-status', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role', '/auth/profile/guard', '/auth/profile/customer'];
     final isPublic = publicPaths.any((p) => options.path.contains(p));
 
     if (!isPublic) {

@@ -865,7 +865,8 @@ RegistrationPendingScreen
   - `loginWithPhone(phone, pinHash)` calls `POST /auth/login/phone` → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval.
   - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_email`, `_approvalStatus`, `_createdAt`, `_avatarUrl`, `_gender`, `_dateOfBirth`, `_yearsOfExperience`, `_previousWorkplace`, `_customerApprovalStatus`, `_customerFullName`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
   - `fetchGuardDocs()` calls `GET /auth/guards/{userId}/profile` → populates `_guardDocUrls` map (id_card, security_license, training_cert, criminal_check, driver_license). Called from `ProfileSettingsScreen.initState()`.
-  - `checkAuthStatus()`: checks stored access token **first** (tokens take priority over stale pending flag) → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout/backend down should not log out user) → else checks `isPendingApproval()` → else unauthenticated. Only falls back to unauthenticated when tokens are actually cleared by interceptor (401 + refresh failure).
+  - `checkAuthStatus()`: checks stored access token **first** (tokens take priority over stale pending flag) → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout/backend down should not log out user) → else checks `isPendingApproval()` → **auto-login with stored phone + PIN hash** (`loginWithPhone`) → if approved: `authenticated` (no OTP needed) → if still pending: `pendingApproval` screen (no OTP needed) → else unauthenticated. Only falls back to unauthenticated when tokens are actually cleared by interceptor (401 + refresh failure).
+  - **Auto-login on pending restart:** When `isPendingApproval = true` + no token, reads phone from `AuthService.getStoredPhone()` + PIN hash from `FlutterSecureStorage('pin_hash')` → calls `loginWithPhone(phone, pinHash)`. If admin approved → authenticated → dashboard. If still pending → shows pending screen. Avoids requiring user to re-enter OTP after app restart.
   - Profile fields: `fullName`, `phone`, `email`, `approvalStatus`, `createdAt`, `avatarUrl`, `gender`, `dateOfBirth`, `yearsOfExperience`, `previousWorkplace`, `guardDocUrls`, `customerApprovalStatus`, `customerFullName` (getters) — used by dashboard/profile screens instead of hardcoded mock data
   - `customerFullName`: `String?` — customer display name from `customer_profiles.full_name` (separate from guard `fullName`). Hirer screens use `customerFullName ?? fullName` for display.
   - `customerApprovalStatus`: `String?` — `'pending'` | `'approved'` | `'rejected'` | `null` (no customer profile). Parsed from `GET /auth/me` response `customer_approval_status` field. Used by `RoleSelectionScreen` and `HirerDashboardScreen` for routing.
@@ -1002,10 +1003,10 @@ RegistrationPendingScreen
 - **main.dart**: `ChangeNotifierProvider(create: (_) => TrackingProvider(TrackingService()))` registered in `MultiProvider`
 - **GuardHomeTab**: `context.watch<TrackingProvider>()` replaces local `_isReady` state; shows GPS accuracy when online
 
-**Unified SecureGuard Header Pattern (Flutter Mobile):**
+**Unified PGuard Header Pattern (Flutter Mobile):**
 - All guard-side screens (4 tabs + 4 detail screens) and hirer profile settings use the same green header design:
   - `Container` with `AppColors.primary` background, `BorderRadius.vertical(bottom: Radius.circular(32))`, `EdgeInsets.fromLTRB(12, 60, 24, 30)` padding
-  - Top row: back button (where applicable) + shield icon (white alpha 0.2 bg, rounded 12) + "SecureGuard" title (bold 20 white) + subtitle (13 white alpha 0.9) + optional action icons
+  - Top row: back button (where applicable) + shield icon (white alpha 0.2 bg, rounded 12) + "PGuard" title (bold 20 white) + subtitle (13 white alpha 0.9) + optional action icons
   - Screens with tabs (jobs, income, work history): embed `TabBar`/sub-tab navigation inside the green header using `Colors.white.withValues(alpha: 0.15)` pill container, white selected indicator, `AppColors.primary` selected text color
   - Manual top padding (60px) instead of `SafeArea` — provides status bar clearance on all devices
   - Guard home tab header: back arrow → `RoleSelectionScreen(phone)`, greeting text with `authProvider.fullName`, notification bell
@@ -1313,13 +1314,14 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม navigate ไปหน้า dashboard หรือ PinSetupScreen หลัง registration — ต้องไป `RegistrationPendingScreen` เสมอ (ยกเว้น authenticated user ที่เพิ่ม profile ใหม่ → กลับ dashboard)
 - ❌ ห้ามเรียก `setPendingApproval()` สำหรับ authenticated user — ต้องตรวจ `authProvider.isAuthenticated` ก่อน; ถ้า authenticated แล้วห้าม override auth state ด้วย pending flag (จะทำให้ tokens หาย + app แสดง PhoneInputScreen หลัง restart)
 - ❌ ห้าม `checkAuthStatus()` เช็ค `isPendingApproval()` ก่อน access token — ต้องเช็ค token ก่อนเสมอ เพราะ pending flag อาจเป็น stale จากการเพิ่ม profile ใหม่ของ authenticated user
+- ❌ ห้ามบังคับให้ user กรอก OTP ใหม่เมื่อ restart app ขณะรอ approve — `checkAuthStatus()` ต้อง auto-login ด้วย stored phone + PIN hash (`loginWithPhone`) เมื่อเจอ `isPendingApproval = true` + ไม่มี token
 - ❌ ห้ามใช้ `AuthService.isRegistered('guard')` เพื่อตรวจสอบว่าควรแสดง Dashboard — ใช้ `context.watch<AuthProvider>().isAuthenticated` แทน (SharedPreferences key อาจไม่ถูก set ในทุก flow)
 - ❌ ห้ามใช้ hardcoded mock data ใน Dashboard screens (ชื่อ, avatar, รหัส) — ใช้ `AuthProvider.fullName`, `AuthProvider.phone`, `AuthProvider.avatarUrl` จาก `GET /auth/me`
 - ❌ ห้าม login ด้วย email-based endpoint จาก mobile — ใช้ `POST /auth/login/phone` (phone + PIN hash) เท่านั้น
 - ❌ ห้าม start GPS stream ก่อน WebSocket connected — `_startGpsStream()` เรียกเฉพาะเมื่อ `_isConnected == true`
 - ❌ ห้ามสร้าง WS listener ใหม่โดยไม่ cancel อันเก่า — `_connectWebSocket()` ต้อง `await _wsSub?.cancel()` ก่อนเสมอ (ป้องกัน orphaned subscriptions)
 - ❌ ห้ามใช้ local state (`_isReady`) สำหรับ guard online toggle — ใช้ `context.watch<TrackingProvider>().isOnline` เท่านั้น
-- ❌ ห้ามใช้ `AppBar` widget หรือ `AppColors.deepBlue` ใน guard/hirer screens — ใช้ custom `Container` header ด้วย `AppColors.primary` + `BorderRadius.vertical(bottom: Radius.circular(32))` เท่านั้น (unified SecureGuard header pattern)
+- ❌ ห้ามใช้ `AppBar` widget หรือ `AppColors.deepBlue` ใน guard/hirer screens — ใช้ custom `Container` header ด้วย `AppColors.primary` + `BorderRadius.vertical(bottom: Radius.circular(32))` เท่านั้น (unified PGuard header pattern)
 - ❌ ห้ามใช้ `SafeArea` ใน screens ที่มี green header — ใช้ manual top padding (`EdgeInsets.fromLTRB(12, 60, 24, 30)`) แทน
 - ❌ ห้ามใช้ shared `_isLoadingGuards` flag ร่วมกับ `_isLoading` หรือ `_isLoadingRates` — ต้องแยก flag สำหรับ available guards loading
 - ❌ ห้ามให้ non-owner customer assign guard ไปยัง request ของคนอื่น — backend `assign_guard` ตรวจ `request.customer_id == user.user_id` สำหรับ non-admin

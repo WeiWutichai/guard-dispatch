@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/auth_service.dart';
 import '../services/api_client.dart';
 
@@ -36,6 +37,7 @@ enum AuthStatus {
 /// ```
 class AuthProvider extends ChangeNotifier {
   AuthStatus _status = AuthStatus.unknown;
+  bool _isCheckingAuth = false;
   String? _userId;
   String? _role;
   String? _fullName;
@@ -91,6 +93,16 @@ class AuthProvider extends ChangeNotifier {
   /// If valid tokens exist they take priority (user is already approved).
   /// Only fall back to pendingApproval when there are no tokens.
   Future<void> checkAuthStatus() async {
+    if (_isCheckingAuth) return;
+    _isCheckingAuth = true;
+    try {
+      await _checkAuthStatusImpl();
+    } finally {
+      _isCheckingAuth = false;
+    }
+  }
+
+  Future<void> _checkAuthStatusImpl() async {
     final token = await AuthService.getAccessToken();
     if (token != null) {
       // User has tokens — they are authenticated regardless of any stale
@@ -119,11 +131,89 @@ class AuthProvider extends ChangeNotifier {
       return;
     }
 
+    // No token — check if user has pending registration via backend API.
+    // This is the source of truth (not SharedPreferences which can be stale).
+    final phone = await AuthService.getStoredPhone();
+    if (phone != null) {
+      try {
+        const secureStorage = FlutterSecureStorage(
+          aOptions: AndroidOptions(encryptedSharedPreferences: true),
+          iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+        );
+        final pinHash = await secureStorage.read(key: 'pin_hash');
+        debugPrint('[AuthProvider] checkAuth: phone=$phone, hasPinHash=${pinHash != null}');
+
+        if (pinHash != null) {
+          // Single API call: check-status first, then login only if approved.
+          // This avoids 2 round-trips (login fail + check-status).
+          try {
+            final response = await _apiClient.dio.post(
+              '/auth/check-status',
+              data: {'phone': phone, 'password': pinHash},
+            );
+            final data = response.data['data'];
+            if (data != null && data['exists'] == true) {
+              final dbRole = data['role'] as String?;
+              final hasGuardProfile = data['has_guard_profile'] == true;
+              final hasCustomerProfile = data['has_customer_profile'] == true;
+              debugPrint('[AuthProvider] check-status: role=$dbRole guard=$hasGuardProfile customer=$hasCustomerProfile');
+
+              final approvalStatus = data['approval_status'] as String?;
+
+              // If approved → login to get tokens
+              if (approvalStatus == 'approved') {
+                try {
+                  await loginWithPhone(phone, pinHash);
+                  await AuthService.clearPendingApproval();
+                  return; // authenticated
+                } catch (_) {
+                  // Login failed despite approved status — treat as pending
+                }
+              }
+
+              // Sync local pending state with DB truth
+              if (hasGuardProfile) {
+                await AuthService.setPendingApproval(role: 'guard');
+              }
+              if (hasCustomerProfile) {
+                await AuthService.setPendingApproval(role: 'customer');
+              }
+
+              _status = AuthStatus.pendingApproval;
+              _role = dbRole;
+              _phone = phone;
+              notifyListeners();
+              return;
+            }
+          } catch (e) {
+            debugPrint('[AuthProvider] check-status error: $e');
+          }
+
+          // check-status failed (network) — fallback to local state
+          if (await AuthService.isPendingApproval()) {
+            _status = AuthStatus.pendingApproval;
+            _role = await AuthService.getPendingRole();
+            _phone = phone;
+            notifyListeners();
+            return;
+          }
+        }
+      } catch (e) {
+        debugPrint('[AuthProvider] checkAuth error: $e');
+        // Fallback to local pending state
+        if (await AuthService.isPendingApproval()) {
+          _status = AuthStatus.pendingApproval;
+          _role = await AuthService.getPendingRole();
+          _phone = phone;
+          notifyListeners();
+          return;
+        }
+      }
+    }
+
+    // No phone or no pending state → truly unauthenticated
     if (await AuthService.isPendingApproval()) {
-      _status = AuthStatus.pendingApproval;
-      _role = await AuthService.getPendingRole();
-      notifyListeners();
-      return;
+      await AuthService.clearPendingApproval();
     }
 
     _status = AuthStatus.unauthenticated;
@@ -280,12 +370,12 @@ class AuthProvider extends ChangeNotifier {
       data: {'phone': phone, 'role': role},
     );
 
-    // Update local pending state with the chosen role
-    await AuthService.setPendingApproval(role: role);
+    // DON'T set pending_role here — wait until profile is actually submitted.
+    // If we set it now and user abandons the form, they'll be stuck on pending screen.
     _role = role;
     notifyListeners();
 
-    // Return profile_token for guard (null for customer)
+    // Return profile_token
     final raw = response.data['data']?['profile_token'];
     return raw is String ? raw : null;
   }

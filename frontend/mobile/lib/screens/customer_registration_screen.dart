@@ -59,13 +59,11 @@ class _CustomerRegistrationScreenState
       final authProvider = context.read<AuthProvider>();
       final isAlreadyAuthenticated = authProvider.isAuthenticated;
 
-      // Get profile token (use existing or reissue)
-      final profileToken = widget.profileToken ??
+      // Always get a fresh profile token to avoid expired/used token errors
+      final profileToken =
           await authProvider.reissueProfileToken(widget.phone, role: 'customer');
 
       // Only save pending state for users who are NOT already authenticated.
-      // Authenticated users (e.g. approved guard adding customer profile)
-      // must NOT have their auth state overridden.
       if (!isAlreadyAuthenticated) {
         await Future.wait([
           AuthService.savePendingProfile({
@@ -126,7 +124,7 @@ class _CustomerRegistrationScreenState
       // Navigate to pending screen — customer profile needs admin approval
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+        MaterialPageRoute(builder: (_) => const RegistrationPendingScreen(role: 'customer')),
         (route) => false,
       );
     } on DioException catch (e) {
@@ -154,33 +152,66 @@ class _CustomerRegistrationScreenState
       canPop: false,
       child: Scaffold(
         backgroundColor: AppColors.surface,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                color: AppColors.textPrimary, size: 20),
-            onPressed: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => RoleSelectionScreen(phone: widget.phone),
-                ),
-              );
-            },
-          ),
-        title: Text(
-          strings.appBarTitle,
-          style: GoogleFonts.inter(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ),
-      body: SafeArea(
-        child: Column(
+        body: Column(
           children: [
+            // PGuard green header
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
+              decoration: const BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(32)),
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: () {
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => RoleSelectionScreen(phone: widget.phone),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white, size: 20),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(Icons.shield_rounded,
+                        color: Colors.white, size: 24),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'PGuard',
+                          style: GoogleFonts.inter(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          strings.appBarTitle,
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: Colors.white.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Form content
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
@@ -229,17 +260,23 @@ class _CustomerRegistrationScreenState
                         const SizedBox(height: 16),
                       ],
 
-                      // Full name (optional)
+                      // Full name (required)
                       _buildLabel(strings.fullName),
                       const SizedBox(height: 8),
                       TextFormField(
                         controller: _fullNameController,
                         decoration: _inputDecoration(strings.fullNameHint),
                         textCapitalization: TextCapitalization.words,
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return isThai ? 'กรุณากรอกชื่อ-นามสกุล' : 'Full name is required';
+                          }
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 20),
 
-                      // Contact phone (optional)
+                      // Contact phone (required)
                       _buildLabel(strings.contactPhone),
                       const SizedBox(height: 8),
                       TextFormField(
@@ -253,7 +290,9 @@ class _CustomerRegistrationScreenState
                             .copyWith(counterText: ''),
                         validator: (value) {
                           final v = value?.trim() ?? '';
-                          if (v.isEmpty) return null;
+                          if (v.isEmpty) {
+                            return isThai ? 'กรุณากรอกเบอร์ติดต่อ' : 'Contact phone is required';
+                          }
                           if (v.length != 10 || !v.startsWith('0')) {
                             return strings.contactPhoneInvalid;
                           }
@@ -280,12 +319,18 @@ class _CustomerRegistrationScreenState
                       ),
                       const SizedBox(height: 20),
 
-                      // Company name (optional)
+                      // Company name (required)
                       _buildLabel(strings.companyName),
                       const SizedBox(height: 8),
                       TextFormField(
                         controller: _companyController,
                         decoration: _inputDecoration(strings.companyHint),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return isThai ? 'กรุณากรอกชื่อบริษัท' : 'Company name is required';
+                          }
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 20),
 
@@ -296,11 +341,6 @@ class _CustomerRegistrationScreenState
                         controller: _addressController,
                         maxLines: 3,
                         decoration: _inputDecoration(strings.addressHint),
-                        validator: (value) {
-                          final v = value?.trim() ?? '';
-                          if (v.length < 10) return strings.addressRequired;
-                          return null;
-                        },
                       ),
                     ],
                   ),
@@ -357,14 +397,13 @@ class _CustomerRegistrationScreenState
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      ),
-    );
+                ), // ElevatedButton
+              ), // SizedBox
+            ), // Padding
+          ], // outer Column children
+        ), // outer Column (body)
+      ), // Scaffold
+    ); // PopScope
   }
 
   Widget _buildLabel(String text) {

@@ -59,6 +59,11 @@ export interface GuardProfile {
   account_number: string | null;
   account_name: string | null;
   passbook_photo_url: string | null;
+  id_card_expiry: string | null;
+  security_license_expiry: string | null;
+  training_cert_expiry: string | null;
+  criminal_check_expiry: string | null;
+  driver_license_expiry: string | null;
 }
 
 // Customer profile submitted during mobile registration
@@ -409,6 +414,10 @@ export const authApi = {
   /** Fetch a guard applicant's profile (experience, documents, bank info). Admin only. */
   getGuardProfile: (userId: string): Promise<GuardProfile> =>
     apiFetch<GuardProfile>(`/auth/admin/guard-profile/${userId}`),
+
+  /** Admin: update guard profile fields. */
+  updateGuardProfile: (userId: string, data: Record<string, unknown>): Promise<void> =>
+    apiFetch<void>(`/auth/admin/guard-profile/${userId}`, { method: "PUT", body: JSON.stringify(data) }),
 
   /** Fetch a customer's profile (company, address). Admin only. */
   getCustomerProfile: (userId: string): Promise<CustomerProfile> =>

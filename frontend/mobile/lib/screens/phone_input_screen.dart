@@ -63,7 +63,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
     if (auth.isPendingApproval) {
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+        MaterialPageRoute(builder: (_) => RegistrationPendingScreen(role: auth.role)),
         (route) => false,
       );
       return;

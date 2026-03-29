@@ -16,13 +16,13 @@ Both (Guard and Customer)
 - To: PhoneInputScreen (on successful validation)
 
 ## UI Elements
-- SecureGuard logo and branding (app icon with shadow)
+- PGuard logo and branding (app icon with shadow)
 - "Enter your PIN" title and subtitle
 - PinDotsIndicator widget (6 dots with error state animation)
 - PinKeypad widget (numeric keypad, optional biometric button)
 - Error text with animated opacity on wrong PIN
 - Biometric success snackbar (green check icon)
-- "SECUREGUARD MOBILE" footer text
+- "PGUARD MOBILE" footer text
 - Background decorative blobs
 
 ## Data / API Calls

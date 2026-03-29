@@ -5,9 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:secureguard_mobile/providers/auth_provider.dart';
-import 'package:secureguard_mobile/screens/guard/guard_registration_screen.dart';
-import 'package:secureguard_mobile/services/language_service.dart';
+import 'package:pguard_mobile/providers/auth_provider.dart';
+import 'package:pguard_mobile/screens/guard/guard_registration_screen.dart';
+import 'package:pguard_mobile/services/language_service.dart';
 
 // ─── Fake AuthProvider ───────────────────────────────────────────────────────
 class _FakeAuthProvider extends AuthProvider {

@@ -16,7 +16,7 @@ Both (Guard and Customer -- used as a tab in both dashboards)
 - To: ChatScreen (on conversation tap, passing userName and userRole)
 
 ## UI Elements
-- Header bar (primary color, rounded bottom, SecureGuard branding)
+- Header bar (primary color, rounded bottom, PGuard branding)
 - Notification icon and profile icon in header
 - Section title with subtitle
 - Chat list items with:

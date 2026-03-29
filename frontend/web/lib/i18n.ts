@@ -151,6 +151,11 @@ export const translations = {
           docCriminalCheck: "ใบรับรองไม่มีประวัติอาชญากรรม",
           docDriverLicense: "ใบขับขี่",
           passbookPhoto: "รูปสมุดบัญชี",
+          expiryDate: "หมดอายุ",
+          noExpiry: "ไม่ระบุวันหมดอายุ",
+          save: "บันทึก",
+          saving: "กำลังบันทึก...",
+          saveSuccess: "บันทึกสำเร็จ",
         },
         customerProfile: {
           companyInfo: "ข้อมูลบริษัท/ลูกค้า",
@@ -584,6 +589,11 @@ export const translations = {
           docCriminalCheck: "Criminal Record Check",
           docDriverLicense: "Driver's License",
           passbookPhoto: "Passbook Photo",
+          expiryDate: "Expires",
+          noExpiry: "No expiry date",
+          save: "Save",
+          saving: "Saving...",
+          saveSuccess: "Saved successfully",
         },
         customerProfile: {
           companyInfo: "Company / Customer Info",

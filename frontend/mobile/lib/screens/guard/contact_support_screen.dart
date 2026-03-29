@@ -77,7 +77,7 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'SecureGuard',
+                      'PGuard',
                       style: GoogleFonts.inter(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,

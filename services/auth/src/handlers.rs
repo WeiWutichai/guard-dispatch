@@ -13,7 +13,9 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AuthResponse, CustomerProfileResponse, GuardProfileFormData, GuardProfileResponse, PublicGuardProfileResponse,
+    AdminUpdateGuardProfileRequest,
+    AuthResponse, CheckStatusRequest, CheckStatusResponse,
+    CustomerProfileResponse, GuardProfileFormData, GuardProfileResponse, PublicGuardProfileResponse,
     ListUsersQuery, LoginRequest, PaginatedUsers, PhoneLoginRequest, RefreshRequest,
     RegisterRequest, RegisterWithOtpRequest, RegisterWithOtpResponse,
     ReissueProfileTokenRequest, ReissueProfileTokenResponse, RequestOtpRequest,
@@ -112,6 +114,25 @@ pub async fn login(
 
     let cookie_headers = auth_cookie_headers(&auth);
     Ok((cookie_headers, Json(ApiResponse::success(auth))))
+}
+
+/// Check user status by phone + password without issuing tokens.
+/// Returns role, approval_status, profile existence — mobile uses this to route correctly.
+#[utoipa::path(
+    post,
+    path = "/check-status",
+    tag = "Auth",
+    request_body = CheckStatusRequest,
+    responses(
+        (status = 200, description = "User status", body = CheckStatusResponse),
+    ),
+)]
+pub async fn check_status(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CheckStatusRequest>,
+) -> Result<Json<ApiResponse<CheckStatusResponse>>, AppError> {
+    let result = crate::service::check_status(&state.db, req).await?;
+    Ok(Json(ApiResponse::success(result)))
 }
 
 #[utoipa::path(
@@ -640,6 +661,40 @@ pub async fn get_public_guard_profile(
 
     let public_profile: PublicGuardProfileResponse = full_profile.into();
     Ok(Json(shared::models::ApiResponse::success(public_profile)))
+}
+
+/// Admin: update guard profile fields (personal info, bank, document expiry dates).
+#[utoipa::path(
+    put,
+    path = "/admin/guard-profile/{user_id}",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(("user_id" = Uuid, Path, description = "Guard user ID")),
+    request_body = AdminUpdateGuardProfileRequest,
+    responses(
+        (status = 200, description = "Profile updated"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
+pub async fn admin_update_guard_profile(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(user_id): Path<Uuid>,
+    Json(req): Json<crate::models::AdminUpdateGuardProfileRequest>,
+) -> Result<Json<shared::models::ApiResponse<()>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin only".to_string()));
+    }
+
+    crate::service::admin_update_guard_profile(
+        &state.db,
+        &state.redis,
+        user_id,
+        req,
+    ).await?;
+
+    Ok(Json(shared::models::ApiResponse::success(())))
 }
 
 // =============================================================================

@@ -45,7 +45,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
       backgroundColor: Colors.white,
       body: Column(
         children: [
-          // SecureGuard green header
+          // PGuard green header
           Container(
             padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
             decoration: const BoxDecoration(
@@ -70,7 +70,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'SecureGuard',
+                        'PGuard',
                         style: GoogleFonts.inter(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,

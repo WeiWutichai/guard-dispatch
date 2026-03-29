@@ -41,6 +41,8 @@ use crate::state::AppState;
         handlers::list_users,
         handlers::update_approval_status,
         handlers::get_guard_profile,
+        handlers::check_status,
+        handlers::admin_update_guard_profile,
         handlers::submit_customer_profile,
         handlers::get_customer_profile,
         handlers::list_customer_applicants,
@@ -53,6 +55,8 @@ use crate::state::AppState;
         models::RegisterRequest,
         models::LoginRequest,
         models::PhoneLoginRequest,
+        models::CheckStatusRequest,
+        models::CheckStatusResponse,
         models::RefreshRequest,
         models::UpdateProfileRequest,
         models::AuthResponse,
@@ -73,6 +77,7 @@ use crate::state::AppState;
         shared::models::UserRole,
         shared::models::ApprovalStatus,
         models::GuardProfileResponse,
+        models::AdminUpdateGuardProfileRequest,
         models::PublicGuardProfileResponse,
         models::SubmitCustomerProfileRequest,
         models::CustomerProfileResponse,
@@ -182,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/register", post(handlers::register))
         .route("/login", post(handlers::login))
         .route("/login/phone", post(handlers::phone_login))
+        .route("/check-status", post(handlers::check_status))
         .route("/otp/request", post(handlers::request_otp))
         .route("/otp/verify", post(handlers::verify_otp))
         .route("/register/otp", post(handlers::register_with_otp))
@@ -202,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/profile/role", post(handlers::update_role))
         .route("/profile/customer", post(handlers::submit_customer_profile))
         .route("/guards/{user_id}/profile", get(handlers::get_public_guard_profile))
-        .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile))
+        .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile).put(handlers::admin_update_guard_profile))
         .route("/admin/customer-profile/{user_id}", get(handlers::get_customer_profile))
         .route("/admin/customer-applicants", get(handlers::list_customer_applicants))
         .route("/admin/customer-profile/{user_id}/approval", patch(handlers::update_customer_approval))

@@ -44,7 +44,7 @@ async fn reverse_geocode(http: &reqwest::Client, lat: f64, lng: f64) -> Option<S
             ("zoom", "16".to_string()),
             ("accept-language", "th,en".to_string()),
         ])
-        .header("User-Agent", "SecureGuardApp/1.0")
+        .header("User-Agent", "PGuardApp/1.0")
         .send()
         .await
         .ok()?;

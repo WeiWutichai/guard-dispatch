@@ -151,7 +151,7 @@ class _WaitingForGuardScreenState extends State<WaitingForGuardScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'SecureGuard',
+                        'PGuard',
                         style: GoogleFonts.inter(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,

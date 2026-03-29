@@ -261,6 +261,68 @@ pub async fn login(
 // Login (Phone-based — for mobile app)
 // =============================================================================
 
+/// Check user status without issuing tokens.
+/// Verifies password to prevent enumeration, then returns actual DB state.
+pub async fn check_status(
+    db: &PgPool,
+    req: crate::models::CheckStatusRequest,
+) -> Result<crate::models::CheckStatusResponse, AppError> {
+    let user = sqlx::query_as::<_, UserRow>(
+        r#"SELECT id, email, phone, password_hash, full_name, role, avatar_url,
+                  is_active, approval_status, created_at, updated_at
+           FROM auth.users WHERE phone = $1"#,
+    )
+    .bind(&req.phone)
+    .fetch_optional(db)
+    .await?;
+
+    // Always run password verification to prevent timing attacks.
+    // If user not found, verify against a dummy hash (constant time).
+    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let (found_user, valid) = match user {
+        Some(u) => {
+            let v = verify_password(&req.password, &u.password_hash).await?;
+            (Some(u), v)
+        }
+        None => {
+            // Dummy verify to match timing of real verification
+            let _ = verify_password(&req.password, dummy_hash).await;
+            (None, false)
+        }
+    };
+
+    if !valid || found_user.is_none() {
+        return Ok(crate::models::CheckStatusResponse {
+            exists: false,
+            role: None,
+            approval_status: None,
+            has_guard_profile: false,
+            has_customer_profile: false,
+            customer_approval_status: None,
+        });
+    }
+
+    let user = found_user.unwrap(); // safe — we checked above
+
+    // Check profiles
+    let has_guard = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM auth.guard_profiles WHERE user_id = $1)"
+    ).bind(user.id).fetch_one(db).await.unwrap_or(false);
+
+    let customer_row = sqlx::query_scalar::<_, String>(
+        "SELECT approval_status::text FROM auth.customer_profiles WHERE user_id = $1"
+    ).bind(user.id).fetch_optional(db).await.ok().flatten();
+
+    Ok(crate::models::CheckStatusResponse {
+        exists: true,
+        role: user.role.map(|r| r.to_string()),
+        approval_status: Some(user.approval_status.to_string()),
+        has_guard_profile: has_guard,
+        has_customer_profile: customer_row.is_some(),
+        customer_approval_status: customer_row,
+    })
+}
+
 pub async fn login_with_phone(
     db: &PgPool,
     redis: &redis::aio::MultiplexedConnection,
@@ -282,8 +344,13 @@ pub async fn login_with_phone(
     .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
 
     let valid = verify_password(&req.password, &user.password_hash).await?;
-    if !valid || !user.is_active || user.approval_status != ApprovalStatus::Approved {
-        // Combine inactive, pending/rejected, and wrong-password into same error to prevent user enumeration
+    if !valid || !user.is_active {
+        return Err(AppError::Unauthorized("Invalid phone or password".to_string()));
+    }
+    // Return generic 401 for ALL non-approved states (pending, rejected)
+    // to prevent user enumeration via status codes.
+    // Mobile uses locally stored pending flag (SharedPreferences) to show pending UI.
+    if user.approval_status != ApprovalStatus::Approved {
         return Err(AppError::Unauthorized("Invalid phone or password".to_string()));
     }
 
@@ -1370,7 +1437,9 @@ pub async fn get_guard_profile(
         r#"
         SELECT user_id, gender, date_of_birth, years_of_experience, previous_workplace,
                id_card_key, security_license_key, training_cert_key, criminal_check_key,
-               driver_license_key, bank_name, account_number, account_name, passbook_photo_key
+               driver_license_key, bank_name, account_number, account_name, passbook_photo_key,
+               id_card_expiry, security_license_expiry, training_cert_expiry,
+               criminal_check_expiry, driver_license_expiry
         FROM auth.guard_profiles
         WHERE user_id = $1
         "#,
@@ -1425,7 +1494,64 @@ pub async fn get_guard_profile(
         account_number: row.account_number,
         account_name: row.account_name,
         passbook_photo_url: rewrite(passbook_photo_url),
+        id_card_expiry: row.id_card_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
+        security_license_expiry: row.security_license_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
+        training_cert_expiry: row.training_cert_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
+        criminal_check_expiry: row.criminal_check_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
+        driver_license_expiry: row.driver_license_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
     })
+}
+
+// =============================================================================
+// Admin Update Guard Profile
+// =============================================================================
+
+pub async fn admin_update_guard_profile(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+    user_id: Uuid,
+    req: crate::models::AdminUpdateGuardProfileRequest,
+) -> Result<(), AppError> {
+    fn parse_date(s: &Option<String>) -> Option<chrono::NaiveDate> {
+        s.as_ref().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE auth.guard_profiles SET
+            gender = COALESCE($2, gender),
+            date_of_birth = COALESCE($3, date_of_birth),
+            years_of_experience = COALESCE($4, years_of_experience),
+            previous_workplace = COALESCE($5, previous_workplace),
+            bank_name = COALESCE($6, bank_name),
+            account_number = COALESCE($7, account_number),
+            account_name = COALESCE($8, account_name),
+            id_card_expiry = COALESCE($9, id_card_expiry),
+            security_license_expiry = COALESCE($10, security_license_expiry),
+            training_cert_expiry = COALESCE($11, training_cert_expiry),
+            criminal_check_expiry = COALESCE($12, criminal_check_expiry),
+            driver_license_expiry = COALESCE($13, driver_license_expiry)
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .bind(&req.gender)
+    .bind(parse_date(&req.date_of_birth))
+    .bind(req.years_of_experience)
+    .bind(&req.previous_workplace)
+    .bind(&req.bank_name)
+    .bind(&req.account_number)
+    .bind(&req.account_name)
+    .bind(parse_date(&req.id_card_expiry))
+    .bind(parse_date(&req.security_license_expiry))
+    .bind(parse_date(&req.training_cert_expiry))
+    .bind(parse_date(&req.criminal_check_expiry))
+    .bind(parse_date(&req.driver_license_expiry))
+    .execute(db)
+    .await?;
+
+    invalidate_user_cache(redis, &user_id).await?;
+    Ok(())
 }
 
 // =============================================================================

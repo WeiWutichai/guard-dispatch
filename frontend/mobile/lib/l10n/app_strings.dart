@@ -77,7 +77,7 @@ class RoleSelectionStrings {
     : roleTitle = isThai ? 'เลือกบทบาทของคุณ' : 'Choose Your Role',
       roleSubtitle = isThai
           ? 'Choose Your Role'
-          : 'Select how you want to use SecureGuard',
+          : 'Select how you want to use PGuard',
       hireTitle = isThai ? 'ฉันต้องการจ้าง รปภ.' : 'I Want to Hire a Guard',
       hireDesc = isThai
           ? 'จ้างเจ้าหน้าที่รักษาความปลอดภัยระดับมืออาชีพ'
@@ -174,7 +174,7 @@ class RegistrationRoleStrings {
     : title = isThai ? 'เลือกบทบาทของคุณ' : 'Choose Your Role',
       subtitle = isThai
           ? 'คุณต้องการใช้งานในบทบาทใด?'
-          : 'How would you like to use SecureGuard?',
+          : 'How would you like to use PGuard?',
       customerTitle = isThai ? 'ผู้เรียกใช้บริการ' : 'Hire a Guard',
       customerDesc = isThai
           ? 'จ้างเจ้าหน้าที่รักษาความปลอดภัยมืออาชีพ'
@@ -523,6 +523,8 @@ class GuardRegistrationStrings {
   final String driverLicense;
   final String notAttached;
   final String uploadFile;
+  final String expiryDate;
+  final String selectExpiryDate;
 
   // Step 3 - Bank Account
   final String bankDetails;
@@ -591,6 +593,8 @@ class GuardRegistrationStrings {
       driverLicense = isThai ? 'ใบขับขี่ *' : "Driver's License *",
       notAttached = isThai ? 'ยังไม่แนบ' : 'Not attached',
       uploadFile = isThai ? 'อัพโหลดไฟล์' : 'Upload File',
+      expiryDate = isThai ? 'หมดอายุ' : 'Expires',
+      selectExpiryDate = isThai ? 'เลือกวันหมดอายุเอกสาร' : 'Select document expiry date',
 
       // Step 3 - Bank Account
       bankDetails = isThai ? 'ข้อมูลบัญชีธนาคาร' : 'Bank Account Details',
@@ -665,9 +669,9 @@ class CustomerRegistrationStrings {
   CustomerRegistrationStrings({required bool isThai})
     : appBarTitle = isThai ? 'สมัครเพื่อเริ่มใช้บริการ' : 'Register as Customer',
       fillInfo = isThai ? 'กรุณากรอกข้อมูลของคุณ' : 'Please fill in your information',
-      fullName = isThai ? 'ชื่อ-นามสกุล (ไม่บังคับ)' : 'Full Name (optional)',
+      fullName = isThai ? 'ชื่อ-นามสกุล *' : 'Full Name *',
       fullNameHint = isThai ? 'กรอกชื่อ-นามสกุล' : 'Enter your full name',
-      contactPhone = isThai ? 'เบอร์ติดต่อ (ไม่บังคับ)' : 'Contact Phone (optional)',
+      contactPhone = isThai ? 'เบอร์ติดต่อ *' : 'Contact Phone *',
       contactPhoneHint = isThai
           ? 'เบอร์ติดต่อ (ไม่ใช่เบอร์ login)'
           : 'Contact number (not login number)',
@@ -677,9 +681,9 @@ class CustomerRegistrationStrings {
       email = isThai ? 'อีเมล (ไม่บังคับ)' : 'Email (optional)',
       emailHint = 'example@mail.com',
       emailInvalid = isThai ? 'รูปแบบอีเมลไม่ถูกต้อง' : 'Invalid email format',
-      companyName = isThai ? 'ชื่อบริษัท (ไม่บังคับ)' : 'Company Name (optional)',
+      companyName = isThai ? 'ชื่อบริษัท *' : 'Company Name *',
       companyHint = isThai ? 'กรอกชื่อบริษัท (ถ้ามี)' : 'Enter company name (if any)',
-      address = isThai ? 'ที่อยู่ *' : 'Address *',
+      address = isThai ? 'ที่อยู่ (ไม่บังคับ)' : 'Address (optional)',
       addressHint = isThai
           ? 'กรอกที่อยู่ เช่น บ้านเลขที่ ถนน แขวง เขต จังหวัด'
           : 'Enter your full address',
@@ -1298,12 +1302,12 @@ class ContactSupportStrings {
           ? 'เปิดให้บริการ จ.-ศ. 08:00-20:00'
           : 'Available Mon-Fri 08:00-20:00',
       lineChat = isThai ? 'แชท LINE' : 'LINE Chat',
-      lineChatId = '@secureguard',
+      lineChatId = '@pguard',
       lineChatDesc = isThai
           ? 'ตอบกลับภายใน 30 นาที ในเวลาทำการ'
           : 'Replies within 30 min during business hours',
       emailSupport = isThai ? 'อีเมล' : 'Email',
-      emailAddress = 'support@secureguard.co.th',
+      emailAddress = 'support@pguard.co.th',
       emailDesc = isThai
           ? 'ตอบกลับภายใน 24 ชั่วโมง'
           : 'Response within 24 hours',
@@ -1477,7 +1481,7 @@ class HirerProfileStrings {
       memberSince = isThai ? 'เดือน' : 'Months',
       contactInfo = isThai ? 'ข้อมูลติดต่อ' : 'Contact Info',
       samplePhone = '081-234-5678',
-      sampleEmail = 'mana@secureguard.co.th',
+      sampleEmail = 'mana@pguard.co.th',
       menuTitle = isThai ? 'เมนู' : 'Menu',
       sampleHirerCode = isThai ? 'รหัส: HR005678' : 'ID: HR005678',
       verified = isThai ? 'ยืนยันแล้ว' : 'Verified';
@@ -1736,6 +1740,7 @@ class ProgressReportStrings {
   final String messagePlaceholder;
   final String takePhoto;
   final String chooseGallery;
+  final String recordVideo;
   final String submit;
   final String skip;
   final String submitSuccess;
@@ -1743,6 +1748,10 @@ class ProgressReportStrings {
   final String progressReports;
   final String noReports;
   final String submitting;
+  final String maxFilesReached;
+  final String filesSelected;
+  final String compressing;
+  final String removeFile;
 
   ProgressReportStrings({
     required bool isThai,
@@ -1751,11 +1760,16 @@ class ProgressReportStrings {
         messagePlaceholder = isThai ? 'พิมพ์ข้อความรายงาน (ไม่บังคับ)' : 'Type report message (optional)',
         takePhoto = isThai ? 'ถ่ายรูป' : 'Take Photo',
         chooseGallery = isThai ? 'เลือกจากแกลเลอรี' : 'Choose from Gallery',
+        recordVideo = isThai ? 'วิดีโอ' : 'Video',
         submit = isThai ? 'ส่งรายงาน' : 'Submit Report',
         skip = isThai ? 'ข้ามไปก่อน' : 'Skip for Now',
         submitSuccess = isThai ? 'ส่งรายงานสำเร็จ' : 'Report submitted',
         submitError = isThai ? 'ส่งรายงานไม่สำเร็จ' : 'Failed to submit report',
         progressReports = isThai ? 'รายงานความคืบหน้า' : 'Progress Reports',
         noReports = isThai ? 'ยังไม่มีรายงาน' : 'No reports yet',
-        submitting = isThai ? 'กำลังส่ง...' : 'Submitting...';
+        submitting = isThai ? 'กำลังส่ง...' : 'Submitting...',
+        maxFilesReached = isThai ? 'ไฟล์ครบจำนวนสูงสุด' : 'Maximum files reached',
+        filesSelected = isThai ? 'ไฟล์ที่เลือก' : 'files selected',
+        compressing = isThai ? 'กำลังบีบอัดรูป...' : 'Compressing...',
+        removeFile = isThai ? 'ลบไฟล์' : 'Remove file';
 }

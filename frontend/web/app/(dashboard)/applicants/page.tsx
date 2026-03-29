@@ -21,6 +21,7 @@ import {
   ExternalLink,
   FileText,
   Landmark,
+  Save,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
@@ -84,6 +85,11 @@ export default function ApplicantsPage() {
   // Document preview lightbox
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  // Editable guard profile state (for pending applicants)
+  const [editedProfile, setEditedProfile] = useState<Record<string, unknown>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
   // Fetch applicants from API
   const fetchApplicants = useCallback(async () => {
     setIsLoading(true);
@@ -122,13 +128,32 @@ export default function ApplicantsPage() {
   useEffect(() => {
     if (isApplicantModalOpen && selectedApplicant?.role === "guard") {
       setGuardProfile(null);
+      setEditedProfile({});
+      setSaveSuccess(false);
       setIsGuardProfileLoading(true);
       authApi.getGuardProfile(selectedApplicant.id)
-        .then(setGuardProfile)
+        .then((profile) => {
+          setGuardProfile(profile);
+          setEditedProfile({
+            gender: profile.gender ?? "",
+            date_of_birth: profile.date_of_birth ?? "",
+            years_of_experience: profile.years_of_experience ?? "",
+            previous_workplace: profile.previous_workplace ?? "",
+            bank_name: profile.bank_name ?? "",
+            account_number: profile.account_number ?? "",
+            account_name: profile.account_name ?? "",
+            id_card_expiry: profile.id_card_expiry ?? "",
+            security_license_expiry: profile.security_license_expiry ?? "",
+            training_cert_expiry: profile.training_cert_expiry ?? "",
+            criminal_check_expiry: profile.criminal_check_expiry ?? "",
+            driver_license_expiry: profile.driver_license_expiry ?? "",
+          });
+        })
         .catch(() => setGuardProfile(null))
         .finally(() => setIsGuardProfileLoading(false));
     } else {
       setGuardProfile(null);
+      setEditedProfile({});
     }
   }, [isApplicantModalOpen, selectedApplicant?.id, selectedApplicant?.role]);
 
@@ -160,6 +185,8 @@ export default function ApplicantsPage() {
     setGuardProfile(null);
     setCustomerProfile(null);
     setPreviewUrl(null);
+    setEditedProfile({});
+    setSaveSuccess(false);
   };
 
   const handleApprove = async (userId: string) => {
@@ -194,6 +221,52 @@ export default function ApplicantsPage() {
     } finally {
       setIsActionLoading(false);
     }
+  };
+
+  const handleSaveProfile = async (userId: string) => {
+    setIsSaving(true);
+    setSaveSuccess(false);
+    try {
+      // Build payload: only send non-empty values, convert types
+      const payload: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(editedProfile)) {
+        if (key === "years_of_experience") {
+          payload[key] = value === "" ? null : Number(value);
+        } else {
+          payload[key] = value === "" ? null : value;
+        }
+      }
+      await authApi.updateGuardProfile(userId, payload);
+      // Reload profile after save
+      const updated = await authApi.getGuardProfile(userId);
+      setGuardProfile(updated);
+      setEditedProfile({
+        gender: updated.gender ?? "",
+        date_of_birth: updated.date_of_birth ?? "",
+        years_of_experience: updated.years_of_experience ?? "",
+        previous_workplace: updated.previous_workplace ?? "",
+        bank_name: updated.bank_name ?? "",
+        account_number: updated.account_number ?? "",
+        account_name: updated.account_name ?? "",
+        id_card_expiry: updated.id_card_expiry ?? "",
+        security_license_expiry: updated.security_license_expiry ?? "",
+        training_cert_expiry: updated.training_cert_expiry ?? "",
+        criminal_check_expiry: updated.criminal_check_expiry ?? "",
+        driver_license_expiry: updated.driver_license_expiry ?? "",
+      });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch {
+      // Keep modal open on error
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const isPending = selectedApplicant?.approval_status === "pending";
+
+  const updateEditField = (field: string, value: unknown) => {
+    setEditedProfile((prev) => ({ ...prev, [field]: value }));
   };
 
   const tabs: { key: TabType; label: string; icon: React.ReactNode }[] = [
@@ -658,28 +731,65 @@ export default function ApplicantsPage() {
                           {t.applicants.modal.guardProfile.personalInfo}
                         </h4>
                         <div className="grid grid-cols-2 gap-3">
-                          {guardProfile.gender && (
+                          {(isPending || guardProfile.gender) && (
                             <div className="p-3 bg-slate-50 rounded-xl">
                               <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.guardProfile.gender}</p>
-                              <p className="text-sm font-medium text-slate-800">{guardProfile.gender}</p>
+                              {isPending ? (
+                                <input
+                                  type="text"
+                                  value={String(editedProfile.gender ?? "")}
+                                  onChange={(e) => updateEditField("gender", e.target.value)}
+                                  className="w-full text-sm font-medium text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                />
+                              ) : (
+                                <p className="text-sm font-medium text-slate-800">{guardProfile.gender}</p>
+                              )}
                             </div>
                           )}
-                          {guardProfile.date_of_birth && (
+                          {(isPending || guardProfile.date_of_birth) && (
                             <div className="p-3 bg-slate-50 rounded-xl">
                               <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.guardProfile.dateOfBirth}</p>
-                              <p className="text-sm font-medium text-slate-800">{guardProfile.date_of_birth}</p>
+                              {isPending ? (
+                                <input
+                                  type="date"
+                                  value={String(editedProfile.date_of_birth ?? "")}
+                                  onChange={(e) => updateEditField("date_of_birth", e.target.value)}
+                                  className="w-full text-sm font-medium text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                />
+                              ) : (
+                                <p className="text-sm font-medium text-slate-800">{guardProfile.date_of_birth}</p>
+                              )}
                             </div>
                           )}
-                          {guardProfile.years_of_experience !== null && guardProfile.years_of_experience !== undefined && (
+                          {(isPending || (guardProfile.years_of_experience !== null && guardProfile.years_of_experience !== undefined)) && (
                             <div className="p-3 bg-slate-50 rounded-xl">
                               <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.guardProfile.yearsExp}</p>
-                              <p className="text-sm font-medium text-slate-800">{guardProfile.years_of_experience}</p>
+                              {isPending ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={String(editedProfile.years_of_experience ?? "")}
+                                  onChange={(e) => updateEditField("years_of_experience", e.target.value)}
+                                  className="w-full text-sm font-medium text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                />
+                              ) : (
+                                <p className="text-sm font-medium text-slate-800">{guardProfile.years_of_experience}</p>
+                              )}
                             </div>
                           )}
-                          {guardProfile.previous_workplace && (
+                          {(isPending || guardProfile.previous_workplace) && (
                             <div className="p-3 bg-slate-50 rounded-xl">
                               <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.guardProfile.workplace}</p>
-                              <p className="text-sm font-medium text-slate-800">{guardProfile.previous_workplace}</p>
+                              {isPending ? (
+                                <input
+                                  type="text"
+                                  value={String(editedProfile.previous_workplace ?? "")}
+                                  onChange={(e) => updateEditField("previous_workplace", e.target.value)}
+                                  className="w-full text-sm font-medium text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                />
+                              ) : (
+                                <p className="text-sm font-medium text-slate-800">{guardProfile.previous_workplace}</p>
+                              )}
                             </div>
                           )}
                         </div>
@@ -693,27 +803,50 @@ export default function ApplicantsPage() {
                         </h4>
                         <div className="space-y-2">
                           {([
-                            ["id_card_url", t.applicants.modal.guardProfile.docIdCard],
-                            ["security_license_url", t.applicants.modal.guardProfile.docSecurityLicense],
-                            ["training_cert_url", t.applicants.modal.guardProfile.docTrainingCert],
-                            ["criminal_check_url", t.applicants.modal.guardProfile.docCriminalCheck],
-                            ["driver_license_url", t.applicants.modal.guardProfile.docDriverLicense],
-                            ["passbook_photo_url", t.applicants.modal.guardProfile.passbookPhoto],
-                          ] as [keyof GuardProfile, string][]).map(([field, label]) => {
+                            ["id_card_url", t.applicants.modal.guardProfile.docIdCard, "id_card_expiry"],
+                            ["security_license_url", t.applicants.modal.guardProfile.docSecurityLicense, "security_license_expiry"],
+                            ["training_cert_url", t.applicants.modal.guardProfile.docTrainingCert, "training_cert_expiry"],
+                            ["criminal_check_url", t.applicants.modal.guardProfile.docCriminalCheck, "criminal_check_expiry"],
+                            ["driver_license_url", t.applicants.modal.guardProfile.docDriverLicense, "driver_license_expiry"],
+                            ["passbook_photo_url", t.applicants.modal.guardProfile.passbookPhoto, null],
+                          ] as [keyof GuardProfile, string, string | null][]).map(([field, label, expiryField]) => {
                             const url = guardProfile[field] as string | null;
+                            const expiryValue = expiryField ? (editedProfile[expiryField] as string ?? "") : "";
+                            const storedExpiry = expiryField ? (guardProfile[expiryField as keyof GuardProfile] as string | null) : null;
                             return (
-                              <div key={field} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                                <span className="text-sm text-slate-700">{label}</span>
-                                {url ? (
-                                  <button
-                                    onClick={() => setPreviewUrl(url)}
-                                    className="flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 transition-colors"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    {t.applicants.modal.guardProfile.viewDocument}
-                                  </button>
-                                ) : (
-                                  <span className="text-xs text-slate-400">{t.applicants.modal.guardProfile.notUploaded}</span>
+                              <div key={field} className="p-3 bg-slate-50 rounded-xl">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-sm text-slate-700">{label}</span>
+                                  {url ? (
+                                    <button
+                                      onClick={() => setPreviewUrl(url)}
+                                      className="flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 transition-colors"
+                                    >
+                                      <Eye className="h-3.5 w-3.5" />
+                                      {t.applicants.modal.guardProfile.viewDocument}
+                                    </button>
+                                  ) : (
+                                    <span className="text-xs text-slate-400">{t.applicants.modal.guardProfile.notUploaded}</span>
+                                  )}
+                                </div>
+                                {expiryField && url && (
+                                  <div className="mt-2 flex items-center gap-2">
+                                    <span className="text-xs text-slate-400">{t.applicants.modal.guardProfile.expiryDate}:</span>
+                                    {isPending ? (
+                                      <input
+                                        type="date"
+                                        value={expiryValue}
+                                        onChange={(e) => updateEditField(expiryField, e.target.value)}
+                                        className="text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                      />
+                                    ) : (
+                                      <span className="text-xs text-slate-600">
+                                        {storedExpiry
+                                          ? new Date(storedExpiry).toLocaleDateString(locale === "th" ? "th-TH" : "en-US", { day: "2-digit", month: "2-digit", year: "numeric" })
+                                          : t.applicants.modal.guardProfile.noExpiry}
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             );
@@ -722,31 +855,58 @@ export default function ApplicantsPage() {
                       </div>
 
                       {/* Bank Account */}
-                      {(guardProfile.bank_name || guardProfile.account_number || guardProfile.account_name) && (
+                      {(isPending || guardProfile.bank_name || guardProfile.account_number || guardProfile.account_name) && (
                         <div>
                           <h4 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
                             <Landmark className="h-4 w-4" />
                             {t.applicants.modal.guardProfile.bankSection}
                           </h4>
                           <div className="grid grid-cols-2 gap-3">
-                            {guardProfile.bank_name && (
+                            {(isPending || guardProfile.bank_name) && (
                               <div className="p-3 bg-slate-50 rounded-xl">
                                 <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.guardProfile.bankName}</p>
-                                <p className="text-sm font-medium text-slate-800">{guardProfile.bank_name}</p>
+                                {isPending ? (
+                                  <input
+                                    type="text"
+                                    value={String(editedProfile.bank_name ?? "")}
+                                    onChange={(e) => updateEditField("bank_name", e.target.value)}
+                                    className="w-full text-sm font-medium text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                  />
+                                ) : (
+                                  <p className="text-sm font-medium text-slate-800">{guardProfile.bank_name}</p>
+                                )}
                               </div>
                             )}
-                            {guardProfile.account_number && (
+                            {(isPending || guardProfile.account_number) && (
                               <div className="p-3 bg-slate-50 rounded-xl">
                                 <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.guardProfile.accountNumber}</p>
-                                <p className="text-sm font-medium text-slate-800 font-mono">
-                                  {"•".repeat(Math.max(0, guardProfile.account_number.length - 4)) + guardProfile.account_number.slice(-4)}
-                                </p>
+                                {isPending ? (
+                                  <input
+                                    type="text"
+                                    value={String(editedProfile.account_number ?? "")}
+                                    onChange={(e) => updateEditField("account_number", e.target.value)}
+                                    className="w-full text-sm font-medium text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none font-mono"
+                                  />
+                                ) : (
+                                  <p className="text-sm font-medium text-slate-800 font-mono">
+                                    {"•".repeat(Math.max(0, (guardProfile.account_number ?? "").length - 4)) + (guardProfile.account_number ?? "").slice(-4)}
+                                  </p>
+                                )}
                               </div>
                             )}
-                            {guardProfile.account_name && (
+                            {(isPending || guardProfile.account_name) && (
                               <div className="p-3 bg-slate-50 rounded-xl col-span-2">
                                 <p className="text-xs text-slate-400 mb-0.5">{t.applicants.modal.guardProfile.accountName}</p>
-                                <p className="text-sm font-medium text-slate-800">{guardProfile.account_name}</p>
+                                {isPending ? (
+                                  <input
+                                    type="text"
+                                    value={String(editedProfile.account_name ?? "")}
+                                    onChange={(e) => updateEditField("account_name", e.target.value)}
+                                    className="w-full text-sm font-medium text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                  />
+                                ) : (
+                                  <p className="text-sm font-medium text-slate-800">{guardProfile.account_name}</p>
+                                )}
                               </div>
                             )}
                           </div>
@@ -821,31 +981,54 @@ export default function ApplicantsPage() {
             {/* Action Buttons */}
             {selectedApplicant.approval_status === "pending" &&
             (selectedApplicant.role === "guard" || selectedApplicant.role === "customer") ? (
-              <div className="p-6 bg-slate-50 border-t border-slate-100 flex gap-4">
-                <button
-                  onClick={() => handleReject(selectedApplicant.id)}
-                  disabled={isActionLoading}
-                  className="flex-1 py-3 px-4 bg-white border-2 border-red-200 text-red-600 rounded-xl text-sm font-bold hover:bg-red-50 hover:border-red-300 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isActionLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Ban className="h-4 w-4" />
+              <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-3">
+                {/* Save success message */}
+                {saveSuccess && (
+                  <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                    <Check className="h-4 w-4 text-emerald-600" />
+                    <span className="text-sm text-emerald-700 font-medium">{t.applicants.modal.guardProfile.saveSuccess}</span>
+                  </div>
+                )}
+                <div className="flex gap-4">
+                  <button
+                    onClick={() => handleReject(selectedApplicant.id)}
+                    disabled={isActionLoading || isSaving}
+                    className="flex-1 py-3 px-4 bg-white border-2 border-red-200 text-red-600 rounded-xl text-sm font-bold hover:bg-red-50 hover:border-red-300 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isActionLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Ban className="h-4 w-4" />
+                    )}
+                    {t.applicants.modal.reject}
+                  </button>
+                  {selectedApplicant.role === "guard" && guardProfile && (
+                    <button
+                      onClick={() => handleSaveProfile(selectedApplicant.id)}
+                      disabled={isActionLoading || isSaving}
+                      className="flex-1 py-3 px-4 bg-white border-2 border-blue-200 text-blue-600 rounded-xl text-sm font-bold hover:bg-blue-50 hover:border-blue-300 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSaving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4" />
+                      )}
+                      {isSaving ? t.applicants.modal.guardProfile.saving : t.applicants.modal.guardProfile.save}
+                    </button>
                   )}
-                  {t.applicants.modal.reject}
-                </button>
-                <button
-                  onClick={() => handleApprove(selectedApplicant.id)}
-                  disabled={isActionLoading}
-                  className="flex-1 py-3 px-4 bg-primary text-white rounded-xl text-sm font-bold hover:bg-emerald-600 transition-all shadow-lg shadow-primary/20 flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isActionLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Check className="h-4 w-4" />
-                  )}
-                  {t.applicants.modal.approve}
-                </button>
+                  <button
+                    onClick={() => handleApprove(selectedApplicant.id)}
+                    disabled={isActionLoading || isSaving}
+                    className="flex-1 py-3 px-4 bg-primary text-white rounded-xl text-sm font-bold hover:bg-emerald-600 transition-all shadow-lg shadow-primary/20 flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isActionLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Check className="h-4 w-4" />
+                    )}
+                    {t.applicants.modal.approve}
+                  </button>
+                </div>
               </div>
             ) : selectedApplicant.approval_status === "pending" ? (
               <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-3">

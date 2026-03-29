@@ -1345,7 +1345,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                       TileLayer(
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.secureguard.app',
+                        userAgentPackageName: 'com.pguard.app',
                       ),
                       MarkerLayer(
                         markers: [
@@ -1784,7 +1784,7 @@ class _FullscreenMapScreenState extends State<_FullscreenMapScreen> {
               TileLayer(
                 urlTemplate:
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.secureguard.app',
+                userAgentPackageName: 'com.pguard.app',
               ),
               MarkerLayer(
                 markers: [

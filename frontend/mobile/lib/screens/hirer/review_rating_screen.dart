@@ -54,8 +54,15 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
     super.dispose();
   }
 
+  bool get _allRatingsFilled =>
+      _overallRating > 0 &&
+      _punctuality > 0 &&
+      _professionalism > 0 &&
+      _communication > 0 &&
+      _appearance > 0;
+
   Future<void> _submitReview() async {
-    if (_overallRating == 0) return;
+    if (!_allRatingsFilled) return;
 
     setState(() => _isSubmitting = true);
 
@@ -152,20 +159,14 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
     );
   }
 
-  void _skip() {
-    if (widget.popToHome) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
-    } else {
-      Navigator.pop(context);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final isThai = LanguageProvider.of(context).isThai;
     final strings = ReviewRatingStrings(isThai: isThai);
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
       backgroundColor: Colors.white,
       body: Column(
         children: [
@@ -276,29 +277,33 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
 
                   const SizedBox(height: 20),
 
-                  // Category ratings (optional) — auto-updates overall average
+                  // Category ratings (required) — auto-updates overall average
                   _buildRatingSection(
                     strings.punctuality,
                     _punctuality,
                     (val) => _updateCategoryAndRecalc(() => _punctuality = val),
+                    isRequired: true,
                   ),
                   const SizedBox(height: 14),
                   _buildRatingSection(
                     strings.professionalism,
                     _professionalism,
                     (val) => _updateCategoryAndRecalc(() => _professionalism = val),
+                    isRequired: true,
                   ),
                   const SizedBox(height: 14),
                   _buildRatingSection(
                     strings.communication,
                     _communication,
                     (val) => _updateCategoryAndRecalc(() => _communication = val),
+                    isRequired: true,
                   ),
                   const SizedBox(height: 14),
                   _buildRatingSection(
                     strings.appearance,
                     _appearance,
                     (val) => _updateCategoryAndRecalc(() => _appearance = val),
+                    isRequired: true,
                   ),
 
                   const SizedBox(height: 24),
@@ -339,7 +344,7 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
                     height: 54,
                     child: ElevatedButton(
                       onPressed:
-                          _overallRating > 0 && !_isSubmitting
+                          _allRatingsFilled && !_isSubmitting
                               ? _submitReview
                               : null,
                       style: ElevatedButton.styleFrom(
@@ -366,27 +371,13 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
                   ),
 
                   const SizedBox(height: 12),
-
-                  // Skip button
-                  Center(
-                    child: TextButton(
-                      onPressed: _isSubmitting ? null : _skip,
-                      child: Text(
-                        strings.skip,
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
           ),
         ],
       ),
+    ),
     );
   }
 

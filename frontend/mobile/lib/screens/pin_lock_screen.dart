@@ -91,14 +91,22 @@ class _PinLockScreenState extends State<PinLockScreen> {
 
   Future<void> _navigateToApp() async {
     final auth = context.read<AuthProvider>();
-    // Use provider phone first, fallback to stored phone
     final phone = auth.phone ?? await AuthService.getStoredPhone();
     if (!mounted) return;
-    // Fire-and-forget: retry fetchProfile in background — don't block navigation
-    // (startup may have failed due to timeout; RoleSelectionScreen will also retry)
-    if (auth.fullName == null) {
-      auth.fetchProfile();
+
+    // For authenticated users: await fetchProfile so customerApprovalStatus
+    // is available before RoleSelectionScreen checks it.
+    if (auth.status == AuthStatus.authenticated && auth.fullName == null) {
+      await auth.fetchProfile().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => false,
+      );
+      if (!mounted) return;
     }
+
+    // Always go to RoleSelectionScreen — it handles all routing:
+    // authenticated → dashboard, pending no role → registration,
+    // pending with role → pending screen
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => RoleSelectionScreen(phone: phone)),
@@ -151,7 +159,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
                   _buildLogo(),
                   const SizedBox(height: 12),
                   Text(
-                    'SecureGuard',
+                    'PGuard',
                     style: GoogleFonts.inter(
                       fontSize: 24,
                       fontWeight: FontWeight.w700,
@@ -217,7 +225,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
                   const SizedBox(height: 20),
                   // Footer
                   Text(
-                    'SECUREGUARD MOBILE',
+                    'PGUARD MOBILE',
                     style: GoogleFonts.inter(
                       fontSize: 10,
                       fontWeight: FontWeight.w500,

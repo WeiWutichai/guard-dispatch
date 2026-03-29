@@ -34,6 +34,24 @@ pub struct PhoneLoginRequest {
     pub password: String,
 }
 
+/// Check user status by phone + password (no token issued).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CheckStatusRequest {
+    pub phone: String,
+    pub password: String,
+}
+
+/// User status response — tells mobile what screen to show.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CheckStatusResponse {
+    pub exists: bool,
+    pub role: Option<String>,
+    pub approval_status: Option<String>,
+    pub has_guard_profile: bool,
+    pub has_customer_profile: bool,
+    pub customer_approval_status: Option<String>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RefreshRequest {
     #[serde(default)]
@@ -317,6 +335,11 @@ pub struct GuardProfileRow {
     pub account_number: Option<String>,
     pub account_name: Option<String>,
     pub passbook_photo_key: Option<String>,
+    pub id_card_expiry: Option<chrono::NaiveDate>,
+    pub security_license_expiry: Option<chrono::NaiveDate>,
+    pub training_cert_expiry: Option<chrono::NaiveDate>,
+    pub criminal_check_expiry: Option<chrono::NaiveDate>,
+    pub driver_license_expiry: Option<chrono::NaiveDate>,
 }
 
 /// Guard profile response returned to the admin (document keys replaced with signed URLs).
@@ -336,6 +359,33 @@ pub struct GuardProfileResponse {
     pub account_number: Option<String>,
     pub account_name: Option<String>,
     pub passbook_photo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_card_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_license_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub training_cert_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub criminal_check_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver_license_expiry: Option<String>,
+}
+
+/// Admin request to update guard profile fields.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AdminUpdateGuardProfileRequest {
+    pub gender: Option<String>,
+    pub date_of_birth: Option<String>,
+    pub years_of_experience: Option<i32>,
+    pub previous_workplace: Option<String>,
+    pub bank_name: Option<String>,
+    pub account_number: Option<String>,
+    pub account_name: Option<String>,
+    pub id_card_expiry: Option<String>,
+    pub security_license_expiry: Option<String>,
+    pub training_cert_expiry: Option<String>,
+    pub criminal_check_expiry: Option<String>,
+    pub driver_license_expiry: Option<String>,
 }
 
 /// Public guard profile — documents only, no bank/sensitive info.

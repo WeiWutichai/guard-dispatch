@@ -339,7 +339,7 @@ class _GuardNavigationScreenState extends State<GuardNavigationScreen> {
                   children: [
                     TileLayer(
                       urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.secureguard.app',
+                      userAgentPackageName: 'com.pguard.app',
                     ),
                     // Remaining route to customer (green)
                     if (_routePoints.isNotEmpty)

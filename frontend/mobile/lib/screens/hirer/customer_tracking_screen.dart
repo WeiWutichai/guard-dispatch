@@ -487,7 +487,7 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                     TileLayer(
                       urlTemplate:
                           'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.secureguard.app',
+                      userAgentPackageName: 'com.pguard.app',
                     ),
                     // Route polyline (draw before markers so it's behind)
                     if (_routePoints.isNotEmpty)

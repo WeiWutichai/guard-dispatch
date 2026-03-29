@@ -54,6 +54,13 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     'criminalCheck': null,
     'driverLicense': null,
   };
+  final Map<String, DateTime?> _documentExpiry = {
+    'idCard': null,
+    'securityLicense': null,
+    'trainingCert': null,
+    'criminalCheck': null,
+    'driverLicense': null,
+  };
 
   // Step 3 — Bank account
   String? _selectedBank;
@@ -104,6 +111,30 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
 
   Future<void> _nextStep() async {
     if (!(_formKeys[_currentStep].currentState?.validate() ?? false)) return;
+
+    // Step 1 (documents): validate expiry dates for uploaded docs
+    if (_currentStep == 1) {
+      final isThai = LanguageProvider.of(context).isThai;
+      final missing = <String>[];
+      for (final entry in _documents.entries) {
+        if (entry.value != null && _documentExpiry[entry.key] == null) {
+          missing.add(entry.key);
+        }
+      }
+      if (missing.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isThai
+                ? 'กรุณากรอกวันหมดอายุของเอกสารที่อัพโหลดทั้งหมด'
+                : 'Please set expiry date for all uploaded documents'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.orange.shade700,
+          ),
+        );
+        return;
+      }
+    }
+
     setState(() => _currentStep++);
   }
 
@@ -117,6 +148,31 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     if (acc.length <= 4) return acc.replaceAll(RegExp(r'.'), '•');
     return '•••• ${acc.substring(acc.length - 4)}';
   }
+
+  Future<void> _pickExpiryDate(String key) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _documentExpiry[key] ?? now.add(const Duration(days: 365)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 20)),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primary,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: AppColors.textPrimary,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _documentExpiry[key] = picked);
+  }
+
+  String _fmtExpiry(DateTime dt) =>
+      '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
 
   Future<void> _pickFile(String key, ImageSource source) async {
     try {
@@ -164,6 +220,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
             '${_dateOfBirth!.day.toString().padLeft(2, '0')}';
       }
       await AuthService.savePendingProfile({
+        'role': 'guard',
         'phone': widget.phone,
         'full_name': _fullNameController.text.trim(),
         'gender': _selectedGender,
@@ -247,12 +304,15 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
         ),
       );
 
+      // Mark pending with role so app restart goes to pending screen (not registration form)
+      await AuthService.setPendingApproval(role: 'guard');
+
       // Navigate to pending screen — guard must wait for admin approval.
       Future.delayed(const Duration(milliseconds: 400), () {
         if (!mounted) return;
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+          MaterialPageRoute(builder: (_) => const RegistrationPendingScreen(role: 'guard')),
           (route) => false,
         );
       });
@@ -398,7 +458,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
                 Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const RegistrationPendingScreen(),
+                    builder: (_) => const RegistrationPendingScreen(role: 'guard'),
                   ),
                   (route) => false,
                 );
@@ -612,7 +672,8 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          ...docItems.map((item) => _buildDocumentTile(
+          ...docItems.map((item) =>
+            _buildDocumentTile(
                 key: item.$1,
                 label: item.$2,
                 icon: item.$3,
@@ -620,7 +681,9 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
                 uploadLabel: s.uploadFile,
                 notAttachedLabel: s.notAttached,
                 previewFile: _documents[item.$1],
-              )),
+                showExpiry: _documents[item.$1] != null,
+              ),
+          ),
         ],
       ),
     );
@@ -1032,6 +1095,58 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     );
   }
 
+  Widget _buildExpiryButton(String key) {
+    final expiry = _documentExpiry[key];
+    final isThai = LanguageProvider.of(context).isThai;
+    return Padding(
+      padding: const EdgeInsets.only(left: 52, bottom: 12),
+      child: GestureDetector(
+        onTap: () => _pickExpiryDate(key),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: expiry != null
+                ? AppColors.primary.withValues(alpha: 0.06)
+                : Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: expiry != null ? AppColors.primary : Colors.orange.shade300,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                expiry != null ? Icons.event_available_rounded : Icons.event_rounded,
+                size: 16,
+                color: expiry != null ? AppColors.primary : Colors.orange.shade700,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                expiry != null
+                    ? '${isThai ? "หมดอายุ" : "Exp"}: ${_fmtExpiry(expiry)}'
+                    : isThai ? 'กรอกวันหมดอายุ' : 'Set expiry date',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: expiry != null ? AppColors.primary : Colors.orange.shade700,
+                ),
+              ),
+              const SizedBox(width: 4),
+              if (expiry != null)
+                GestureDetector(
+                  onTap: () => setState(() => _documentExpiry[key] = null),
+                  child: Icon(Icons.close, size: 14, color: AppColors.textSecondary),
+                )
+              else
+                Icon(Icons.arrow_drop_down, size: 18, color: Colors.orange.shade500),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDocumentTile({
     required String key,
     required String label,
@@ -1040,6 +1155,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     required String uploadLabel,
     required String notAttachedLabel,
     File? previewFile,
+    bool showExpiry = false,
   }) {
     final isAttached = fileName != null;
 
@@ -1171,6 +1287,48 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
               ),
             ],
           ),
+          // Expiry date inside card
+          if (showExpiry) ...[
+            const Divider(height: 20),
+            _buildInlineExpiry(key),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInlineExpiry(String key) {
+    final expiry = _documentExpiry[key];
+    final isThai = LanguageProvider.of(context).isThai;
+    return GestureDetector(
+      onTap: () => _pickExpiryDate(key),
+      child: Row(
+        children: [
+          Icon(
+            expiry != null ? Icons.event_available_rounded : Icons.event_rounded,
+            size: 18,
+            color: expiry != null ? AppColors.primary : Colors.orange.shade700,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              expiry != null
+                  ? '${isThai ? "หมดอายุ" : "Exp"}: ${_fmtExpiry(expiry)}'
+                  : isThai ? 'กรอกวันหมดอายุ *' : 'Set expiry date *',
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: expiry != null ? AppColors.primary : Colors.orange.shade700,
+              ),
+            ),
+          ),
+          if (expiry != null)
+            GestureDetector(
+              onTap: () => setState(() => _documentExpiry[key] = null),
+              child: const Icon(Icons.close, size: 16, color: AppColors.textSecondary),
+            )
+          else
+            Icon(Icons.edit_calendar_rounded, size: 18, color: Colors.orange.shade500),
         ],
       ),
     );

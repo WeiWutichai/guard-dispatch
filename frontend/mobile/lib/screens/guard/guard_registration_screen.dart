@@ -47,6 +47,14 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     'criminal_check': null,
     'driver_license': null,
   };
+  // Document expiry dates
+  final Map<String, DateTime?> _documentExpiry = {
+    'id_card': null,
+    'security_license': null,
+    'training_cert': null,
+    'criminal_check': null,
+    'driver_license': null,
+  };
   // Step 3 passbook photo
   File? _passbookPhoto;
 
@@ -130,6 +138,31 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
       }
     });
   }
+
+  Future<void> _pickExpiryDate(String key) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _documentExpiry[key] ?? now.add(const Duration(days: 365)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 20)),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primary,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: AppColors.textPrimary,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) {
+      setState(() => _documentExpiry[key] = picked);
+    }
+  }
+
 
   Future<void> _submitApplication() async {
     if (_isSubmitting) return;
@@ -430,9 +463,11 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
           ),
         ),
         const SizedBox(height: 24),
-        ...docItems.map(
-          (item) =>
-              _buildDocumentUploadItem(item['label']!, item['key']!, strings),
+        ...docItems.expand(
+          (item) => [
+            _buildDocumentUploadItem(item['label']!, item['key']!, strings),
+            _buildExpiryField(item['key']!, strings),
+          ],
         ),
       ],
     );
@@ -521,7 +556,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
             ],
           ),
           if (isUploaded) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: Image.file(file, height: 120, width: double.infinity, fit: BoxFit.cover),
@@ -555,6 +590,57 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildExpiryField(String key, GuardRegistrationStrings strings) {
+    final expiry = _documentExpiry[key];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: GestureDetector(
+        onTap: () => _pickExpiryDate(key),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: expiry != null ? AppColors.primary.withValues(alpha: 0.06) : Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: expiry != null ? AppColors.primary : Colors.orange.shade300,
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                expiry != null ? Icons.event_available_rounded : Icons.calendar_month_rounded,
+                size: 24,
+                color: expiry != null ? AppColors.primary : Colors.orange.shade700,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  expiry != null
+                      ? '${strings.expiryDate}: ${_formatDate(expiry)}'
+                      : '📅 ${strings.selectExpiryDate}',
+                  style: GoogleFonts.inter(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: expiry != null ? AppColors.primary : Colors.orange.shade800,
+                  ),
+                ),
+              ),
+              if (expiry != null)
+                GestureDetector(
+                  onTap: () => setState(() => _documentExpiry[key] = null),
+                  child: const Icon(Icons.close_rounded, size: 20, color: AppColors.textSecondary),
+                )
+              else
+                Icon(Icons.arrow_drop_down_rounded, size: 28, color: Colors.orange.shade600),
+            ],
+          ),
+        ),
       ),
     );
   }

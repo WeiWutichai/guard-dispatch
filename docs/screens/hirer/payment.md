@@ -20,7 +20,7 @@ Customer (Hirer)
 ## UI Elements
 
 ### Header (primary color, rounded bottom)
-- SecureGuard branding, notification bell, person icon
+- PGuard branding, notification bell, person icon
 
 ### Back + Title Row
 - Back button, "Payment" title

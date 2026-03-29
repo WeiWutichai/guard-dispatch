@@ -30,8 +30,19 @@ class RoleSelectionScreen extends StatefulWidget {
 
 class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   Future<void> _onRoleTap(String role, Widget dashboard) async {
-    // If user is already authenticated (approved), go directly to dashboard.
     final auth = context.read<AuthProvider>();
+
+    // Resolve phone FIRST — needed for all subsequent operations.
+    String? phone = widget.phone;
+    phone ??= auth.phone;
+    phone ??= await AuthService.getStoredPhone();
+    if (phone == null) {
+      final verified = await AuthService.getPhoneVerifiedData();
+      phone = verified.$1;
+    }
+    if (!mounted) return;
+
+    // If user is already authenticated (approved), go directly to dashboard.
     if (auth.status == AuthStatus.authenticated) {
       // Retry fetchProfile if never succeeded (e.g. startup timed out).
       // /auth/me always returns phone — null means no successful fetch yet.
@@ -53,7 +64,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
         } else if (cas == 'pending') {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
+            MaterialPageRoute(builder: (_) => const RegistrationPendingScreen(role: 'customer')),
           );
         } else {
           // No customer profile yet → show registration form
@@ -77,44 +88,28 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     }
 
     // Check if already registered (approved) → go to dashboard directly.
-    final results = await Future.wait([
-      AuthService.isPendingApproval(),
-      AuthService.isRegistered(role),
-    ]);
+    final isRegistered = await AuthService.isRegistered(role);
     if (!mounted) return;
-
-    final isPending = results[0];
-    final isRegistered = results[1];
 
     if (isRegistered) {
       Navigator.push(context, MaterialPageRoute(builder: (_) => dashboard));
       return;
     }
 
-    // If already pending with a role assigned → go straight to pending screen.
-    // Must check BEFORE phone resolution so we never ask for phone twice.
-    if (isPending) {
-      final pendingRole = await AuthService.getPendingRole();
-      if (!mounted) return;
-      if (pendingRole != null) {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const RegistrationPendingScreen()),
-          (route) => false,
-        );
-        return;
-      }
+    // If pending AND this specific role's profile was already submitted → pending screen.
+    final hasSubmitted = await AuthService.hasSubmittedRole(role);
+    if (!mounted) return;
+    if (hasSubmitted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => RegistrationPendingScreen(role: role)),
+        (route) => false,
+      );
+      return;
     }
 
-    // Resolve phone from widget props or storage fallback.
-    String? phone = widget.phone;
+    // Phone already resolved above — redirect to OTP if still null
     if (phone == null) {
-      final stored = await AuthService.getPhoneVerifiedData();
-      if (!mounted) return;
-      phone = stored.$1;
-    }
-    if (phone == null) {
-      // No phone at all — go through full OTP flow
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
@@ -122,10 +117,12 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       return;
     }
 
+    // Read pending role for reissue logic
+    final pendingRole = await AuthService.getPendingRole();
+
     if (role == 'guard') {
       // Step 2: Set role via API → get profile_token for guard form
       String? profileToken;
-      final pendingRole = await AuthService.getPendingRole();
       if (!mounted) return;
 
       try {
@@ -162,7 +159,6 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
 
     // Customer path: set role → get profile_token → customer registration form
     String? profileToken;
-    final pendingRole = await AuthService.getPendingRole();
     if (!mounted) return;
 
     try {
@@ -343,7 +339,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     return Column(
       children: [
         Text(
-          'SecureGuard',
+          'PGuard',
           style: GoogleFonts.inter(
             fontSize: 24,
             fontWeight: FontWeight.w700,
