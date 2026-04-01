@@ -63,9 +63,7 @@ impl IntoResponse for AppError {
         };
 
         let message = match &self {
-            AppError::Database(_) | AppError::Redis(_) => {
-                "An internal error occurred".to_string()
-            }
+            AppError::Database(_) | AppError::Redis(_) => "An internal error occurred".to_string(),
             other => other.to_string(),
         };
 

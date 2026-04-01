@@ -7,8 +7,8 @@ use shared::error::AppError;
 use crate::models::{
     AttachmentResponse, AttachmentRow, ConversationResponse, ConversationRow,
     CreateConversationRequest, EnrichedConversationResponse, EnrichedConversationRow,
-    IncomingChatMessage, ListMessagesQuery, MessageResponse, MessageRow,
-    MessageType, MessageWithAttachmentRow, OutgoingChatMessage,
+    IncomingChatMessage, ListMessagesQuery, MessageResponse, MessageRow, MessageType,
+    MessageWithAttachmentRow, OutgoingChatMessage,
 };
 
 // =============================================================================
@@ -122,7 +122,10 @@ pub async fn list_conversations(
     .fetch_all(db)
     .await?;
 
-    Ok(rows.into_iter().map(EnrichedConversationResponse::from).collect())
+    Ok(rows
+        .into_iter()
+        .map(EnrichedConversationResponse::from)
+        .collect())
 }
 
 // =============================================================================
@@ -353,10 +356,7 @@ pub async fn is_conversation_participant_by_conversation(
 // Get Attachment (for signed URL generation)
 // =============================================================================
 
-pub async fn get_attachment(
-    db: &PgPool,
-    attachment_id: Uuid,
-) -> Result<AttachmentRow, AppError> {
+pub async fn get_attachment(db: &PgPool, attachment_id: Uuid) -> Result<AttachmentRow, AppError> {
     sqlx::query_as::<_, AttachmentRow>(
         r#"
         SELECT id, message_id, uploader_id, file_key, file_url, file_size, mime_type, created_at

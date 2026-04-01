@@ -95,12 +95,10 @@ pub async fn set_online(db: &PgPool, guard_id: Uuid) -> Result<(), AppError> {
 
 /// Mark guard as offline when WebSocket disconnects.
 pub async fn set_offline(db: &PgPool, guard_id: Uuid) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE tracking.guard_locations SET is_online = false WHERE guard_id = $1",
-    )
-    .bind(guard_id)
-    .execute(db)
-    .await?;
+    sqlx::query("UPDATE tracking.guard_locations SET is_online = false WHERE guard_id = $1")
+        .bind(guard_id)
+        .execute(db)
+        .await?;
     Ok(())
 }
 
@@ -230,7 +228,10 @@ pub async fn get_location_history(
         }
     };
 
-    Ok(rows.into_iter().map(LocationHistoryResponse::from).collect())
+    Ok(rows
+        .into_iter()
+        .map(LocationHistoryResponse::from)
+        .collect())
 }
 
 // =============================================================================

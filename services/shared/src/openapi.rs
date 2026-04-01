@@ -1,5 +1,5 @@
-use utoipa::Modify;
 use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+use utoipa::Modify;
 
 /// Modifier that adds JWT Bearer authentication to the OpenAPI spec.
 /// Reused by all services via `modifiers(&SecurityAddon)`.
@@ -33,9 +33,7 @@ pub struct ServerPrefixAddon;
 impl Modify for ServerPrefixAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         if let Ok(prefix) = std::env::var("SWAGGER_PATH_PREFIX") {
-            openapi.servers = Some(vec![
-                utoipa::openapi::Server::new(prefix),
-            ]);
+            openapi.servers = Some(vec![utoipa::openapi::Server::new(prefix)]);
         }
     }
 }

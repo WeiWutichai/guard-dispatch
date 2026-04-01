@@ -20,16 +20,19 @@ impl SmsConfig {
             .map_err(|_| AppError::Internal("Missing env var: INET_SMS_USERNAME".to_string()))?;
         let password = std::env::var("INET_SMS_PASSWORD")
             .map_err(|_| AppError::Internal("Missing env var: INET_SMS_PASSWORD".to_string()))?;
-        let sender = std::env::var("INET_SMS_SENDER")
-            .unwrap_or_else(|_| "GuardApp".to_string());
+        let sender = std::env::var("INET_SMS_SENDER").unwrap_or_else(|_| "GuardApp".to_string());
         let url = std::env::var("INET_SMS_URL")
             .unwrap_or_else(|_| "https://bulksms.cheesemobile.com/v2/".to_string());
 
         if username.is_empty() {
-            return Err(AppError::Internal("INET_SMS_USERNAME must not be empty".to_string()));
+            return Err(AppError::Internal(
+                "INET_SMS_USERNAME must not be empty".to_string(),
+            ));
         }
         if password.is_empty() {
-            return Err(AppError::Internal("INET_SMS_PASSWORD must not be empty".to_string()));
+            return Err(AppError::Internal(
+                "INET_SMS_PASSWORD must not be empty".to_string(),
+            ));
         }
 
         Ok(Self {
@@ -82,9 +85,7 @@ fn text_to_sms_url(text: &str) -> String {
             // ASCII: prepend 0x00 to form correct UCS-2 pair in SMS PDU
             bytes.push(0x00);
             bytes.push(cp as u8);
-        } else if (0x0E01..=0x0E3A).contains(&cp)
-            || cp == 0x0E3F
-            || (0x0E40..=0x0E5B).contains(&cp)
+        } else if (0x0E01..=0x0E3A).contains(&cp) || cp == 0x0E3F || (0x0E40..=0x0E5B).contains(&cp)
         {
             // Thai: TIS-620 single byte (gateway correctly expands to 2-byte UCS-2)
             bytes.push((cp - 0x0D60) as u8);
@@ -142,7 +143,9 @@ pub async fn send_sms(
 
     if !status_code.is_success() {
         tracing::error!("SMS gateway HTTP error: status={status_code}, body={body}");
-        return Err(AppError::Internal("SMS gateway returned an error".to_string()));
+        return Err(AppError::Internal(
+            "SMS gateway returned an error".to_string(),
+        ));
     }
 
     // Parse XML response: <xml><response><status>00</status><detail>Accepted</detail><tranid>...</tranid></response>...</xml>
@@ -169,10 +172,8 @@ pub async fn send_sms(
 
 /// Parse INET CSGAPI XML response (simple tag extraction — no XML crate needed).
 fn parse_inet_xml_response(xml: &str) -> Result<SmsResponse, AppError> {
-    let status = extract_xml_tag(xml, "status")
-        .unwrap_or_default();
-    let detail = extract_xml_tag(xml, "detail")
-        .unwrap_or_default();
+    let status = extract_xml_tag(xml, "status").unwrap_or_default();
+    let detail = extract_xml_tag(xml, "detail").unwrap_or_default();
     let tran_id = extract_xml_tag(xml, "tranid");
 
     Ok(SmsResponse {
@@ -230,7 +231,10 @@ mod tests {
         let result = parse_inet_xml_response(xml).unwrap();
         assert_eq!(result.status, "00");
         assert_eq!(result.detail, "Accepted");
-        assert_eq!(result.tran_id, Some("CM.108.1350356789.51730500".to_string()));
+        assert_eq!(
+            result.tran_id,
+            Some("CM.108.1350356789.51730500".to_string())
+        );
     }
 
     #[test]

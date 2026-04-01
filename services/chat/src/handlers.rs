@@ -23,8 +23,8 @@ pub struct AttachmentUploadForm {
 
 use crate::models::{
     AttachmentResponse, ConversationResponse, CreateConversationRequest,
-    EnrichedConversationResponse, IncomingChatMessage, ListConversationsQuery,
-    ListMessagesQuery, MessageResponse,
+    EnrichedConversationResponse, IncomingChatMessage, ListConversationsQuery, ListMessagesQuery,
+    MessageResponse,
 };
 use crate::state::AppState;
 
@@ -69,7 +69,9 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": format!("Invalid message: {e}")}).to_string().into(),
+                        serde_json::json!({"error": format!("Invalid message: {e}")})
+                            .to_string()
+                            .into(),
                     ))
                     .await;
                 continue;
@@ -86,7 +88,9 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": e.to_string()}).to_string().into(),
+                        serde_json::json!({"error": e.to_string()})
+                            .to_string()
+                            .into(),
                     ))
                     .await;
             }
@@ -170,7 +174,8 @@ pub async fn list_messages(
     Path(id): Path<Uuid>,
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<ApiResponse<Vec<MessageResponse>>>, AppError> {
-    let messages = crate::service::list_messages(&state.db, id, user.user_id, &user.role, query).await?;
+    let messages =
+        crate::service::list_messages(&state.db, id, user.user_id, &user.role, query).await?;
     Ok(Json(ApiResponse::success(messages)))
 }
 
@@ -197,8 +202,11 @@ pub async fn mark_read(
     // Authorization: only participants or admins can mark conversations as read
     if user.role != "admin" {
         let is_participant = crate::service::is_conversation_participant_by_conversation(
-            &state.db, id, user.user_id,
-        ).await?;
+            &state.db,
+            id,
+            user.user_id,
+        )
+        .await?;
         if !is_participant {
             return Err(AppError::Forbidden(
                 "You are not a participant of this conversation".to_string(),
@@ -266,8 +274,8 @@ pub async fn upload_attachment(
         }
     }
 
-    let conversation_id =
-        conversation_id.ok_or_else(|| AppError::BadRequest("conversation_id is required".to_string()))?;
+    let conversation_id = conversation_id
+        .ok_or_else(|| AppError::BadRequest("conversation_id is required".to_string()))?;
 
     // Authorization: verify uploader is a participant in this conversation or admin
     if user.role != "admin" {
@@ -284,8 +292,7 @@ pub async fn upload_attachment(
         }
     }
 
-    let data =
-        file_data.ok_or_else(|| AppError::BadRequest("file is required".to_string()))?;
+    let data = file_data.ok_or_else(|| AppError::BadRequest("file is required".to_string()))?;
     let mime = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
     // Validate file (checks MIME + magic bytes + size — images 10MB, videos 50MB)
@@ -300,12 +307,10 @@ pub async fn upload_attachment(
     let data_len = data.len();
 
     // Upload to S3/MinIO (consumes data, no clone needed)
-    crate::s3::upload_file(&state.s3_client, &state.s3_bucket, &file_key, data, &mime)
-        .await?;
+    crate::s3::upload_file(&state.s3_client, &state.s3_bucket, &file_key, data, &mime).await?;
 
     // Generate signed URL and rewrite host for client access (per CLAUDE.md presigned URL host rewrite)
-    let raw_url =
-        crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &file_key).await?;
+    let raw_url = crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &file_key).await?;
     let file_url = if state.s3_endpoint != state.s3_public_url {
         raw_url.replacen(&state.s3_endpoint, &state.s3_public_url, 1)
     } else {
@@ -378,12 +383,9 @@ pub async fn get_signed_url(
     let attachment = crate::service::get_attachment(&state.db, id).await?;
 
     // Authorization: only the uploader or a conversation participant can access
-    let is_participant = crate::service::is_conversation_participant(
-        &state.db,
-        attachment.message_id,
-        user.user_id,
-    )
-    .await?;
+    let is_participant =
+        crate::service::is_conversation_participant(&state.db, attachment.message_id, user.user_id)
+            .await?;
 
     if !is_participant && user.role != "admin" {
         return Err(AppError::Forbidden(
@@ -393,8 +395,7 @@ pub async fn get_signed_url(
 
     // Regenerate signed URL (previous one may have expired) + host rewrite
     let raw_url =
-        crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &attachment.file_key)
-            .await?;
+        crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &attachment.file_key).await?;
     let fresh_url = if state.s3_endpoint != state.s3_public_url {
         raw_url.replacen(&state.s3_endpoint, &state.s3_public_url, 1)
     } else {

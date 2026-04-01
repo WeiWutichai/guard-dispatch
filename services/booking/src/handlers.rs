@@ -15,11 +15,10 @@ use shared::models::ApiResponse;
 use crate::models::{
     AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse,
     AvailableGuardResponse, AvailableGuardsQuery, CreatePaymentDto, CreateRequestDto,
-    CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
-    GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
-    ListRequestsQuery, PaymentResponse, ProgressReportResponse, ReviewCompletionDto, ServiceRate,
-    StartJobDto, SubmitReviewResponse, UpdateAssignmentStatusDto, UpdateServiceRateDto,
-    WorkHistoryResponse,
+    CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
+    GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListRequestsQuery, PaymentResponse,
+    ProgressReportResponse, ReviewCompletionDto, ServiceRate, StartJobDto, SubmitReviewResponse,
+    UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -177,8 +176,16 @@ pub async fn update_assignment_status(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<UpdateAssignmentStatusDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
-    let assignment =
-        crate::service::update_assignment_status(&state.db, id, user.user_id, &user.role, req, &state.redis_conn, &state.http_client).await?;
+    let assignment = crate::service::update_assignment_status(
+        &state.db,
+        id,
+        user.user_id,
+        &user.role,
+        req,
+        &state.redis_conn,
+        &state.http_client,
+    )
+    .await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -201,8 +208,15 @@ pub async fn review_completion(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<ReviewCompletionDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
-    let assignment =
-        crate::service::review_completion(&state.db, id, user.user_id, &user.role, req, &state.redis_conn).await?;
+    let assignment = crate::service::review_completion(
+        &state.db,
+        id,
+        user.user_id,
+        &user.role,
+        req,
+        &state.redis_conn,
+    )
+    .await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -264,7 +278,8 @@ pub async fn submit_review(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<CreateReviewDto>,
 ) -> Result<Json<ApiResponse<SubmitReviewResponse>>, AppError> {
-    let result = crate::service::submit_review(&state.db, id, user.user_id, &user.role, req).await?;
+    let result =
+        crate::service::submit_review(&state.db, id, user.user_id, &user.role, req).await?;
     Ok(Json(ApiResponse::success(result)))
 }
 
@@ -290,8 +305,7 @@ pub async fn guard_dashboard(
     if user.role != "guard" {
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
-    let summary =
-        crate::service::get_guard_dashboard_summary(&state.db, user.user_id).await?;
+    let summary = crate::service::get_guard_dashboard_summary(&state.db, user.user_id).await?;
     Ok(Json(ApiResponse::success(summary)))
 }
 
@@ -463,8 +477,14 @@ pub async fn accept_decline_assignment(
     if user.role != "guard" {
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
-    let assignment =
-        crate::service::accept_or_decline_assignment(&state.db, id, user.user_id, req, &state.redis_conn).await?;
+    let assignment = crate::service::accept_or_decline_assignment(
+        &state.db,
+        id,
+        user.user_id,
+        req,
+        &state.redis_conn,
+    )
+    .await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -488,7 +508,8 @@ pub async fn create_payment(
     user: AuthUser,
     Json(req): Json<CreatePaymentDto>,
 ) -> Result<Json<ApiResponse<PaymentResponse>>, AppError> {
-    let payment = crate::service::create_payment(&state.db, user.user_id, req, &state.redis_conn).await?;
+    let payment =
+        crate::service::create_payment(&state.db, user.user_id, req, &state.redis_conn).await?;
     Ok(Json(ApiResponse::success(payment)))
 }
 
@@ -518,7 +539,8 @@ pub async fn start_job(
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
     let (lat, lng) = body.map(|b| (b.lat, b.lng)).unwrap_or((None, None));
-    let job = crate::service::start_job(&state.db, id, user.user_id, lat, lng, &state.http_client).await?;
+    let job = crate::service::start_job(&state.db, id, user.user_id, lat, lng, &state.http_client)
+        .await?;
     Ok(Json(ApiResponse::success(job)))
 }
 
@@ -570,7 +592,9 @@ pub async fn get_customer_active_job(
     user: AuthUser,
     Path(request_id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<Option<ActiveJobResponse>>>, AppError> {
-    let job = crate::service::get_customer_active_job(&state.db, request_id, user.user_id, &user.role).await?;
+    let job =
+        crate::service::get_customer_active_job(&state.db, request_id, user.user_id, &user.role)
+            .await?;
     Ok(Json(ApiResponse::success(job)))
 }
 
@@ -912,8 +936,7 @@ pub async fn submit_progress_report(
                     .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
                     .to_vec();
                 // Use magic-byte detected MIME, fallback to declared
-                let mime = crate::s3::detect_mime(&data)
-                    .unwrap_or(&declared_mime);
+                let mime = crate::s3::detect_mime(&data).unwrap_or(&declared_mime);
                 crate::s3::validate_upload(mime, data.len(), &data)?;
                 files.push((data, mime.to_string()));
             }

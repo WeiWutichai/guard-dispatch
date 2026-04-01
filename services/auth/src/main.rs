@@ -130,8 +130,8 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("S3_ACCESS_KEY env var is required"))?;
     let s3_secret_key = std::env::var("S3_SECRET_KEY")
         .map_err(|_| anyhow::anyhow!("S3_SECRET_KEY env var is required"))?;
-    let s3_bucket = std::env::var("S3_BUCKET")
-        .map_err(|_| anyhow::anyhow!("S3_BUCKET env var is required"))?;
+    let s3_bucket =
+        std::env::var("S3_BUCKET").map_err(|_| anyhow::anyhow!("S3_BUCKET env var is required"))?;
     // Public URL for presigned URLs. Defaults to S3_ENDPOINT when not set
     // (useful when MinIO is directly accessible, e.g. in some CI environments).
     // In Docker dev: set to http://localhost/minio-files so the browser can load images.
@@ -166,9 +166,11 @@ async fn main() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
             interval.tick().await;
-            match sqlx::query("DELETE FROM auth.otp_codes WHERE expires_at < NOW() - INTERVAL '1 hour'")
-                .execute(&cleanup_db)
-                .await
+            match sqlx::query(
+                "DELETE FROM auth.otp_codes WHERE expires_at < NOW() - INTERVAL '1 hour'",
+            )
+            .execute(&cleanup_db)
+            .await
             {
                 Ok(result) => {
                     if result.rows_affected() > 0 {
@@ -198,7 +200,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/logout", post(handlers::logout))
         .route("/users", get(handlers::list_users))
-        .route("/users/{id}/approval", patch(handlers::update_approval_status))
+        .route(
+            "/users/{id}/approval",
+            patch(handlers::update_approval_status),
+        )
         .merge(
             Router::new()
                 .route("/profile/guard", post(handlers::submit_guard_profile))
@@ -207,22 +212,40 @@ async fn main() -> anyhow::Result<()> {
         .route("/profile/reissue", post(handlers::reissue_profile_token))
         .route("/profile/role", post(handlers::update_role))
         .route("/profile/customer", post(handlers::submit_customer_profile))
-        .route("/guards/{user_id}/profile", get(handlers::get_public_guard_profile))
-        .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile).put(handlers::admin_update_guard_profile))
-        .route("/admin/customer-profile/{user_id}", get(handlers::get_customer_profile))
-        .route("/admin/customer-applicants", get(handlers::list_customer_applicants))
-        .route("/admin/customer-profile/{user_id}/approval", patch(handlers::update_customer_approval))
+        .route(
+            "/guards/{user_id}/profile",
+            get(handlers::get_public_guard_profile),
+        )
+        .route(
+            "/admin/guard-profile/{user_id}",
+            get(handlers::get_guard_profile).put(handlers::admin_update_guard_profile),
+        )
+        .route(
+            "/admin/customer-profile/{user_id}",
+            get(handlers::get_customer_profile),
+        )
+        .route(
+            "/admin/customer-applicants",
+            get(handlers::list_customer_applicants),
+        )
+        .route(
+            "/admin/customer-profile/{user_id}/approval",
+            patch(handlers::update_customer_approval),
+        )
         .merge({
-            let swagger = SwaggerUi::new("/swagger-ui")
-                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            let swagger =
+                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
             match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(
-                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
-                ),
+                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                    "{prefix}/api-docs/openapi.json"
+                ))),
                 Err(_) => swagger,
             }
         })
-        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            shared::audit::audit_middleware::<Arc<AppState>>,
+        ))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

@@ -13,15 +13,13 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AdminUpdateGuardProfileRequest,
-    AuthResponse, CheckStatusRequest, CheckStatusResponse,
-    CustomerProfileResponse, GuardProfileFormData, GuardProfileResponse, PublicGuardProfileResponse,
-    ListUsersQuery, LoginRequest, PaginatedUsers, PhoneLoginRequest, RefreshRequest,
-    RegisterRequest, RegisterWithOtpRequest, RegisterWithOtpResponse,
-    ReissueProfileTokenRequest, ReissueProfileTokenResponse, RequestOtpRequest,
-    RequestOtpResponse, SubmitCustomerProfileRequest, UpdateApprovalStatusRequest,
-    UpdateProfileRequest, UpdateRoleRequest, UpdateRoleResponse, UserResponse,
-    VerifyOtpRequest, VerifyOtpResponse,
+    AdminUpdateGuardProfileRequest, AuthResponse, CheckStatusRequest, CheckStatusResponse,
+    CustomerProfileResponse, GuardProfileFormData, GuardProfileResponse, ListUsersQuery,
+    LoginRequest, PaginatedUsers, PhoneLoginRequest, PublicGuardProfileResponse, RefreshRequest,
+    RegisterRequest, RegisterWithOtpRequest, RegisterWithOtpResponse, ReissueProfileTokenRequest,
+    ReissueProfileTokenResponse, RequestOtpRequest, RequestOtpResponse,
+    SubmitCustomerProfileRequest, UpdateApprovalStatusRequest, UpdateProfileRequest,
+    UpdateRoleRequest, UpdateRoleResponse, UserResponse, VerifyOtpRequest, VerifyOtpResponse,
 };
 use crate::state::AppState;
 
@@ -196,17 +194,14 @@ pub async fn refresh_token(
             .get("Cookie")
             .and_then(|v| v.to_str().ok())
             .and_then(|cookies| {
-                cookies
-                    .split(';')
-                    .map(|s| s.trim())
-                    .find_map(|pair| {
-                        let (key, value) = pair.split_once('=')?;
-                        if key.trim() == REFRESH_TOKEN_COOKIE {
-                            Some(value.trim().to_string())
-                        } else {
-                            None
-                        }
-                    })
+                cookies.split(';').map(|s| s.trim()).find_map(|pair| {
+                    let (key, value) = pair.split_once('=')?;
+                    if key.trim() == REFRESH_TOKEN_COOKIE {
+                        Some(value.trim().to_string())
+                    } else {
+                        None
+                    }
+                })
             })
             .unwrap_or_default()
     } else {
@@ -214,16 +209,14 @@ pub async fn refresh_token(
     };
 
     if refresh_tok.is_empty() {
-        return Err(AppError::BadRequest("refresh_token is required".to_string()));
+        return Err(AppError::BadRequest(
+            "refresh_token is required".to_string(),
+        ));
     }
 
-    let auth = crate::service::refresh_token(
-        &state.db,
-        &state.redis,
-        &state.jwt_config,
-        &refresh_tok,
-    )
-    .await?;
+    let auth =
+        crate::service::refresh_token(&state.db, &state.redis, &state.jwt_config, &refresh_tok)
+            .await?;
 
     let cookie_headers = auth_cookie_headers(&auth);
     Ok((cookie_headers, Json(ApiResponse::success(auth))))
@@ -368,13 +361,8 @@ pub async fn register_with_otp(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterWithOtpRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<RegisterWithOtpResponse>>), AppError> {
-    let response = crate::service::register_with_otp(
-        &state.db,
-        &state.redis,
-        &state.jwt_config,
-        req,
-    )
-    .await?;
+    let response =
+        crate::service::register_with_otp(&state.db, &state.redis, &state.jwt_config, req).await?;
     Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(response))))
 }
 
@@ -462,45 +450,95 @@ pub async fn submit_guard_profile(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::Unauthorized("Missing profile token".to_string()))?;
 
-    let user_id = crate::service::validate_profile_token(token, &state.jwt_config, &state.redis, "guard_profile").await?;
+    let user_id = crate::service::validate_profile_token(
+        token,
+        &state.jwt_config,
+        &state.redis,
+        "guard_profile",
+    )
+    .await?;
 
     let mut form = GuardProfileFormData::default();
     let mut files: HashMap<String, Vec<u8>> = HashMap::new();
 
     // Parse multipart fields
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        AppError::BadRequest(format!("Multipart parse error: {e}"))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart parse error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "full_name" => {
-                form.full_name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                form.full_name = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
             "gender" => {
-                form.gender = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                form.gender = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
             "date_of_birth" => {
-                form.date_of_birth = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                form.date_of_birth = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
             "years_of_experience" => {
-                let s = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                let s = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
                 form.years_of_experience = s.parse::<i32>().ok();
             }
             "previous_workplace" => {
-                form.previous_workplace = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                form.previous_workplace = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
             "bank_name" => {
-                form.bank_name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                form.bank_name = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
             "account_number" => {
-                form.account_number = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                form.account_number = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
             "account_name" => {
-                form.account_name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                form.account_name = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
             // Document image fields
-            "id_card" | "security_license" | "training_cert" | "criminal_check" | "driver_license" | "passbook_photo" => {
-                let data = field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+            "id_card" | "security_license" | "training_cert" | "criminal_check"
+            | "driver_license" | "passbook_photo" => {
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
                 if !data.is_empty() {
                     files.insert(name, data.to_vec());
                 }
@@ -522,7 +560,10 @@ pub async fn submit_guard_profile(
     )
     .await?;
 
-    Ok((StatusCode::OK, Json(shared::models::ApiResponse::success(()))))
+    Ok((
+        StatusCode::OK,
+        Json(shared::models::ApiResponse::success(())),
+    ))
 }
 
 /// Reissue a profile_token for a pending guard who already verified OTP.
@@ -651,9 +692,8 @@ pub async fn get_public_guard_profile(
 ) -> Result<Json<shared::models::ApiResponse<PublicGuardProfileResponse>>, AppError> {
     // Authorization: only the guard themselves, admins, or customers with active bookings
     if user.role != "admin" && user.user_id != user_id {
-        let has_booking = crate::service::has_active_booking_with_guard(
-            &state.db, user.user_id, user_id,
-        ).await?;
+        let has_booking =
+            crate::service::has_active_booking_with_guard(&state.db, user.user_id, user_id).await?;
         if !has_booking {
             return Err(AppError::Forbidden(
                 "You don't have permission to view this guard's profile".to_string(),
@@ -698,12 +738,7 @@ pub async fn admin_update_guard_profile(
         return Err(AppError::Forbidden("Admin only".to_string()));
     }
 
-    crate::service::admin_update_guard_profile(
-        &state.db,
-        &state.redis,
-        user_id,
-        req,
-    ).await?;
+    crate::service::admin_update_guard_profile(&state.db, &state.redis, user_id, req).await?;
 
     Ok(Json(shared::models::ApiResponse::success(())))
 }
@@ -880,10 +915,16 @@ mod tests {
             .map(|v| v.to_str().unwrap().to_string())
             .collect();
 
-        let access = cookies.iter().find(|c| c.starts_with("access_token=")).unwrap();
+        let access = cookies
+            .iter()
+            .find(|c| c.starts_with("access_token="))
+            .unwrap();
         assert!(access.contains("HttpOnly"), "access_token must be HttpOnly");
         assert!(access.contains("Secure"), "access_token must be Secure");
-        assert!(access.contains("SameSite=Lax"), "access_token must be SameSite=Lax");
+        assert!(
+            access.contains("SameSite=Lax"),
+            "access_token must be SameSite=Lax"
+        );
         assert!(access.contains("Path=/"), "access_token must have Path=/");
     }
 
@@ -897,8 +938,14 @@ mod tests {
             .map(|v| v.to_str().unwrap().to_string())
             .collect();
 
-        let refresh = cookies.iter().find(|c| c.starts_with("refresh_token=")).unwrap();
-        assert!(refresh.contains("Path=/auth"), "refresh_token must have Path=/auth");
+        let refresh = cookies
+            .iter()
+            .find(|c| c.starts_with("refresh_token="))
+            .unwrap();
+        assert!(
+            refresh.contains("Path=/auth"),
+            "refresh_token must have Path=/auth"
+        );
         assert!(refresh.contains("HttpOnly"));
         assert!(refresh.contains("Secure"));
     }
@@ -913,10 +960,19 @@ mod tests {
             .map(|v| v.to_str().unwrap().to_string())
             .collect();
 
-        let marker = cookies.iter().find(|c| c.starts_with("logged_in=")).unwrap();
-        assert!(!marker.contains("HttpOnly"), "logged_in must NOT be HttpOnly");
+        let marker = cookies
+            .iter()
+            .find(|c| c.starts_with("logged_in="))
+            .unwrap();
+        assert!(
+            !marker.contains("HttpOnly"),
+            "logged_in must NOT be HttpOnly"
+        );
         assert!(marker.contains("Secure"), "logged_in must have Secure flag");
-        assert!(marker.contains("logged_in=1"), "logged_in value must be '1'");
+        assert!(
+            marker.contains("logged_in=1"),
+            "logged_in value must be '1'"
+        );
     }
 
     #[test]
@@ -929,7 +985,10 @@ mod tests {
             .map(|v| v.to_str().unwrap().to_string())
             .collect();
 
-        let access = cookies.iter().find(|c| c.starts_with("access_token=")).unwrap();
+        let access = cookies
+            .iter()
+            .find(|c| c.starts_with("access_token="))
+            .unwrap();
         assert!(access.contains("access-jwt-token"));
     }
 
@@ -943,7 +1002,10 @@ mod tests {
             .map(|v| v.to_str().unwrap().to_string())
             .collect();
 
-        let refresh = cookies.iter().find(|c| c.starts_with("refresh_token=")).unwrap();
+        let refresh = cookies
+            .iter()
+            .find(|c| c.starts_with("refresh_token="))
+            .unwrap();
         let expected_max_age = 30 * 24 * 3600;
         assert!(
             refresh.contains(&format!("Max-Age={expected_max_age}")),

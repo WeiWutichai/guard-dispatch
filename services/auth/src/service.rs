@@ -10,7 +10,10 @@ use uuid::Uuid;
 use std::collections::HashMap;
 
 use aws_sdk_s3::presigning::PresigningConfig;
-use shared::auth::{decode_profile_token, encode_jwt_with_key, encode_phone_verify_token, decode_phone_verify_token, encode_profile_token};
+use shared::auth::{
+    decode_phone_verify_token, decode_profile_token, encode_jwt_with_key,
+    encode_phone_verify_token, encode_profile_token,
+};
 use shared::config::JwtConfig;
 use shared::error::AppError;
 use shared::models::UserRole;
@@ -27,8 +30,8 @@ fn escape_ilike(s: &str) -> String {
 }
 
 use crate::models::{
-    AuthResponse, GuardProfileFormData, GuardProfileResponse, GuardProfileRow,
-    ListUsersQuery, LoginRequest, OtpRow, PaginatedUsers, PhoneLoginRequest, RegisterRequest,
+    AuthResponse, GuardProfileFormData, GuardProfileResponse, GuardProfileRow, ListUsersQuery,
+    LoginRequest, OtpRow, PaginatedUsers, PhoneLoginRequest, RegisterRequest,
     RegisterWithOtpRequest, RegisterWithOtpResponse, RequestOtpResponse, SessionRow,
     UpdateApprovalStatusRequest, UpdateProfileRequest, UserResponse, UserRow, VerifyOtpResponse,
 };
@@ -95,8 +98,9 @@ async fn get_cached_user(
     let cached: Option<String> = conn.get(&key).await.map_err(AppError::Redis)?;
     match cached {
         Some(json) => {
-            let user: UserResponse = serde_json::from_str(&json)
-                .map_err(|e| AppError::Internal(format!("Failed to deserialize cached user: {e}")))?;
+            let user: UserResponse = serde_json::from_str(&json).map_err(|e| {
+                AppError::Internal(format!("Failed to deserialize cached user: {e}"))
+            })?;
             Ok(Some(user))
         }
         None => Ok(None),
@@ -117,19 +121,18 @@ async fn invalidate_user_cache(
 // Register
 // =============================================================================
 
-pub async fn register(
-    db: &PgPool,
-    req: RegisterRequest,
-) -> Result<UserResponse, AppError> {
-    if req.email.is_empty() || req.password.is_empty() || req.full_name.is_empty() || req.phone.is_empty() {
+pub async fn register(db: &PgPool, req: RegisterRequest) -> Result<UserResponse, AppError> {
+    if req.email.is_empty()
+        || req.password.is_empty()
+        || req.full_name.is_empty()
+        || req.phone.is_empty()
+    {
         return Err(AppError::BadRequest("All fields are required".to_string()));
     }
 
     // Basic email format validation
     if !req.email.contains('@') || !req.email.contains('.') || req.email.len() < 5 {
-        return Err(AppError::BadRequest(
-            "Invalid email format".to_string(),
-        ));
+        return Err(AppError::BadRequest("Invalid email format".to_string()));
     }
 
     // Thai phone format validation: 0x-xxxx-xxxx (10 digits starting with 0)
@@ -187,7 +190,8 @@ pub async fn login(
 ) -> Result<AuthResponse, AppError> {
     // Always run password verification to prevent timing-based user enumeration.
     // If user not found, verify against a dummy hash (constant time).
-    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let dummy_hash =
+        "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let user = sqlx::query_as::<_, UserRow>(
         r#"
         SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
@@ -215,14 +219,17 @@ pub async fn login(
 
     if !valid || !user.is_active || user.approval_status != ApprovalStatus::Approved {
         // Combine inactive, pending/rejected, and wrong-password into same error to prevent user enumeration
-        return Err(AppError::Unauthorized("Invalid email or password".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid email or password".to_string(),
+        ));
     }
 
     // Null role means the user hasn't completed onboarding — treat as unauthorized
     // using the same generic message to avoid leaking account state.
-    let role = user.role.as_ref().ok_or_else(|| {
-        AppError::Unauthorized("Invalid email or password".to_string())
-    })?;
+    let role = user
+        .role
+        .as_ref()
+        .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
 
     let access_token = encode_jwt_with_key(
         user.id,
@@ -300,7 +307,8 @@ pub async fn check_status(
 
     // Always run password verification to prevent timing attacks.
     // If user not found, verify against a dummy hash (constant time).
-    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let dummy_hash =
+        "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let (found_user, valid) = match user {
         Some(u) => {
             let v = verify_password(&req.password, &u.password_hash).await?;
@@ -328,12 +336,21 @@ pub async fn check_status(
 
     // Check profiles
     let has_guard = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM auth.guard_profiles WHERE user_id = $1)"
-    ).bind(user.id).fetch_one(db).await.unwrap_or(false);
+        "SELECT EXISTS(SELECT 1 FROM auth.guard_profiles WHERE user_id = $1)",
+    )
+    .bind(user.id)
+    .fetch_one(db)
+    .await
+    .unwrap_or(false);
 
     let customer_row = sqlx::query_scalar::<_, String>(
-        "SELECT approval_status::text FROM auth.customer_profiles WHERE user_id = $1"
-    ).bind(user.id).fetch_optional(db).await.ok().flatten();
+        "SELECT approval_status::text FROM auth.customer_profiles WHERE user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
 
     Ok(crate::models::CheckStatusResponse {
         exists: true,
@@ -355,7 +372,8 @@ pub async fn login_with_phone(
 ) -> Result<AuthResponse, AppError> {
     // Always run password verification to prevent timing-based user enumeration.
     // If user not found, verify against a dummy hash (constant time).
-    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let dummy_hash =
+        "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let user = sqlx::query_as::<_, UserRow>(
         r#"
         SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
@@ -382,20 +400,25 @@ pub async fn login_with_phone(
         .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
 
     if !valid || !user.is_active {
-        return Err(AppError::Unauthorized("Invalid phone or password".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid phone or password".to_string(),
+        ));
     }
     // Return generic 401 for ALL non-approved states (pending, rejected)
     // to prevent user enumeration via status codes.
     // Mobile uses locally stored pending flag (SharedPreferences) to show pending UI.
     if user.approval_status != ApprovalStatus::Approved {
-        return Err(AppError::Unauthorized("Invalid phone or password".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid phone or password".to_string(),
+        ));
     }
 
     // Null role means the user hasn't completed onboarding — treat as unauthorized
     // using the same generic message to avoid leaking account state.
-    let role = user.role.as_ref().ok_or_else(|| {
-        AppError::Unauthorized("Invalid phone or password".to_string())
-    })?;
+    let role = user
+        .role
+        .as_ref()
+        .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
 
     let access_token = encode_jwt_with_key(
         user.id,
@@ -495,12 +518,15 @@ pub async fn refresh_token(
     .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
     if !user.is_active || user.approval_status != ApprovalStatus::Approved {
-        return Err(AppError::Unauthorized("Invalid email or password".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid email or password".to_string(),
+        ));
     }
 
-    let role = user.role.as_ref().ok_or_else(|| {
-        AppError::Unauthorized("Invalid email or password".to_string())
-    })?;
+    let role = user
+        .role
+        .as_ref()
+        .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
 
     let access_token = encode_jwt_with_key(
         user.id,
@@ -625,7 +651,9 @@ pub async fn get_profile(
         company_name: row.cp_company_name,
         contact_phone: row.cp_contact_phone,
         gender: row.gp_gender,
-        date_of_birth: row.gp_date_of_birth.map(|d| d.format("%Y-%m-%d").to_string()),
+        date_of_birth: row
+            .gp_date_of_birth
+            .map(|d| d.format("%Y-%m-%d").to_string()),
         years_of_experience: row.gp_years_of_experience,
         previous_workplace: row.gp_previous_workplace,
         customer_address: row.cp_address,
@@ -727,9 +755,7 @@ pub async fn request_otp(
         .map_err(AppError::Redis)?;
 
     if was_set.is_none() {
-        return Err(AppError::BadRequest(
-            "กรุณารอสักครู่ก่อนขอ OTP ใหม่".to_string(),
-        ));
+        return Err(AppError::BadRequest("กรุณารอสักครู่ก่อนขอ OTP ใหม่".to_string()));
     }
 
     // Daily per-phone OTP cap
@@ -899,10 +925,8 @@ pub async fn register_with_otp(
     req: RegisterWithOtpRequest,
 ) -> Result<RegisterWithOtpResponse, AppError> {
     // Decode and validate the phone_verified_token
-    let (phone, jti) = decode_phone_verify_token(
-        &req.phone_verified_token,
-        &jwt_config.decoding_key,
-    )?;
+    let (phone, jti) =
+        decode_phone_verify_token(&req.phone_verified_token, &jwt_config.decoding_key)?;
 
     // Single-use enforcement: GETDEL atomically retrieves and deletes the jti,
     // preventing replay even under concurrent requests.
@@ -926,7 +950,9 @@ pub async fn register_with_otp(
     // Validate optional fields if provided
     if let Some(ref name) = req.full_name {
         if name.is_empty() {
-            return Err(AppError::BadRequest("Full name cannot be empty".to_string()));
+            return Err(AppError::BadRequest(
+                "Full name cannot be empty".to_string(),
+            ));
         }
     }
 
@@ -1036,20 +1062,22 @@ pub async fn register_with_otp(
 // List Users (Admin)
 // =============================================================================
 
-pub async fn list_users(
-    db: &PgPool,
-    query: ListUsersQuery,
-) -> Result<PaginatedUsers, AppError> {
+pub async fn list_users(db: &PgPool, query: ListUsersQuery) -> Result<PaginatedUsers, AppError> {
     let limit = query.limit.unwrap_or(20).min(100);
     let offset = query.offset.unwrap_or(0);
 
-    let search_pattern = query.search
+    let search_pattern = query
+        .search
         .as_ref()
         .filter(|s| !s.is_empty())
         .map(|s| format!("%{}%", escape_ilike(s)));
 
     let role_filter = query.role.as_ref().filter(|s| !s.is_empty()).cloned();
-    let status_filter = query.approval_status.as_ref().filter(|s| !s.is_empty()).cloned();
+    let status_filter = query
+        .approval_status
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned();
 
     let total: i64 = sqlx::query_scalar(
         r#"
@@ -1142,16 +1170,13 @@ pub async fn reissue_profile_token(
     let phone_clean = otp::validate_thai_phone(phone)?;
 
     // User must exist (allow both pending and approved users to reissue profile tokens)
-    let user: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM auth.users WHERE phone = $1"
-    )
-    .bind(&phone_clean)
-    .fetch_optional(db)
-    .await?;
+    let user: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM auth.users WHERE phone = $1")
+        .bind(&phone_clean)
+        .fetch_optional(db)
+        .await?;
 
-    let (user_id,) = user.ok_or_else(|| {
-        AppError::NotFound("No registration found for this phone".to_string())
-    })?;
+    let (user_id,) =
+        user.ok_or_else(|| AppError::NotFound("No registration found for this phone".to_string()))?;
 
     // Determine purpose from role (default: guard for backward compatibility)
     let purpose = match role {
@@ -1210,19 +1235,14 @@ pub async fn update_user_role(
     // Both paths SELECT verify + issue profile_token.
     // Allow any existing user (pending or approved) to add a profile for a different role
     // (e.g., approved guard adding customer profile).
-    let user: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM auth.users WHERE phone = $1",
-    )
-    .bind(&phone_clean)
-    .fetch_optional(db)
-    .await
-    .map_err(AppError::Database)?;
+    let user: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM auth.users WHERE phone = $1")
+        .bind(&phone_clean)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::Database)?;
 
-    let (user_id,) = user.ok_or_else(|| {
-        AppError::BadRequest(
-            "No user found for this phone".to_string(),
-        )
-    })?;
+    let (user_id,) =
+        user.ok_or_else(|| AppError::BadRequest("No user found for this phone".to_string()))?;
 
     // Invalidate user cache
     invalidate_user_cache(redis, &user_id).await?;
@@ -1261,7 +1281,9 @@ pub async fn update_user_role(
 /// Accepted formats: JPEG (FF D8 FF), PNG (89 50 4E 47 0D 0A 1A 0A), WEBP (RIFF....WEBP).
 fn validate_image_magic_bytes(data: &[u8]) -> Result<&'static str, AppError> {
     if data.len() < 12 {
-        return Err(AppError::BadRequest("File too small to be a valid image".to_string()));
+        return Err(AppError::BadRequest(
+            "File too small to be a valid image".to_string(),
+        ));
     }
     if data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
         return Ok("jpg");
@@ -1316,8 +1338,9 @@ async fn presign_url(
     bucket: &str,
     key: &str,
 ) -> Result<String, AppError> {
-    let presign_config = PresigningConfig::expires_in(std::time::Duration::from_secs(SIGNED_URL_EXPIRY_SECS))
-        .map_err(|e| AppError::Internal(format!("Presign config error: {e}")))?;
+    let presign_config =
+        PresigningConfig::expires_in(std::time::Duration::from_secs(SIGNED_URL_EXPIRY_SECS))
+            .map_err(|e| AppError::Internal(format!("Presign config error: {e}")))?;
 
     let url = s3_client
         .get_object()
@@ -1370,7 +1393,14 @@ pub async fn submit_guard_profile(
     let mut join_set: tokio::task::JoinSet<Result<(String, String), AppError>> =
         tokio::task::JoinSet::new();
 
-    let doc_fields = ["id_card", "security_license", "training_cert", "criminal_check", "driver_license", "passbook_photo"];
+    let doc_fields = [
+        "id_card",
+        "security_license",
+        "training_cert",
+        "criminal_check",
+        "driver_license",
+        "passbook_photo",
+    ];
     for field in &doc_fields {
         if let Some(data) = files.get(*field) {
             if !data.is_empty() {
@@ -1393,7 +1423,8 @@ pub async fn submit_guard_profile(
     }
 
     // Parse date_of_birth from ISO string "YYYY-MM-DD"
-    let dob: Option<chrono::NaiveDate> = form.date_of_birth
+    let dob: Option<chrono::NaiveDate> = form
+        .date_of_birth
         .as_deref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
@@ -1516,15 +1547,25 @@ pub async fn get_guard_profile(
     .ok_or_else(|| AppError::NotFound("Guard profile not found".to_string()))?;
 
     // Generate signed URLs for each document that has been uploaded.
-    async fn signed(client: &aws_sdk_s3::Client, bucket: &str, key: &Option<String>) -> Option<String> {
+    async fn signed(
+        client: &aws_sdk_s3::Client,
+        bucket: &str,
+        key: &Option<String>,
+    ) -> Option<String> {
         match key {
             Some(k) => presign_url(client, bucket, k).await.ok(),
             None => None,
         }
     }
 
-    let (id_card_url, security_license_url, training_cert_url, criminal_check_url,
-         driver_license_url, passbook_photo_url) = tokio::join!(
+    let (
+        id_card_url,
+        security_license_url,
+        training_cert_url,
+        criminal_check_url,
+        driver_license_url,
+        passbook_photo_url,
+    ) = tokio::join!(
         signed(s3_client, bucket, &row.id_card_key),
         signed(s3_client, bucket, &row.security_license_key),
         signed(s3_client, bucket, &row.training_cert_key),
@@ -1561,10 +1602,18 @@ pub async fn get_guard_profile(
         account_name: row.account_name,
         passbook_photo_url: rewrite(passbook_photo_url),
         id_card_expiry: row.id_card_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
-        security_license_expiry: row.security_license_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
-        training_cert_expiry: row.training_cert_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
-        criminal_check_expiry: row.criminal_check_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
-        driver_license_expiry: row.driver_license_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
+        security_license_expiry: row
+            .security_license_expiry
+            .map(|d| d.format("%Y-%m-%d").to_string()),
+        training_cert_expiry: row
+            .training_cert_expiry
+            .map(|d| d.format("%Y-%m-%d").to_string()),
+        criminal_check_expiry: row
+            .criminal_check_expiry
+            .map(|d| d.format("%Y-%m-%d").to_string()),
+        driver_license_expiry: row
+            .driver_license_expiry
+            .map(|d| d.format("%Y-%m-%d").to_string()),
     })
 }
 
@@ -1579,7 +1628,8 @@ pub async fn admin_update_guard_profile(
     req: crate::models::AdminUpdateGuardProfileRequest,
 ) -> Result<(), AppError> {
     fn parse_date(s: &Option<String>) -> Option<chrono::NaiveDate> {
-        s.as_ref().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        s.as_ref()
+            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
     }
 
     sqlx::query(
@@ -1639,12 +1689,14 @@ pub async fn submit_customer_profile(
     }
 
     // Validate email if provided
-    let email = req.email.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let email = req
+        .email
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     if let Some(ref e) = email {
         if e.len() < 5 || !e.contains('@') || !e.contains('.') {
-            return Err(AppError::BadRequest(
-                "Invalid email format".to_string(),
-            ));
+            return Err(AppError::BadRequest("Invalid email format".to_string()));
         }
     }
 
@@ -1658,8 +1710,16 @@ pub async fn submit_customer_profile(
         shared::otp::validate_thai_phone(p)?;
     }
 
-    let full_name = req.full_name.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let company_name = req.company_name.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let full_name = req
+        .full_name
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let company_name = req
+        .company_name
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     // UPSERT customer_profiles (reset approval_status to pending on re-submission)
     sqlx::query(
@@ -1762,12 +1822,17 @@ pub async fn list_customer_applicants(
     let limit = query.limit.unwrap_or(20).min(100);
     let offset = query.offset.unwrap_or(0);
 
-    let search_pattern = query.search
+    let search_pattern = query
+        .search
         .as_ref()
         .filter(|s| !s.is_empty())
         .map(|s| format!("%{}%", escape_ilike(s)));
 
-    let status_filter = query.approval_status.as_ref().filter(|s| !s.is_empty()).cloned();
+    let status_filter = query
+        .approval_status
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned();
 
     let total: i64 = sqlx::query_scalar(
         r#"
@@ -1944,7 +2009,11 @@ mod tests {
     // NOTE: This mirrors the validation in register() to test without a DB.
     // If register()'s validation changes, update this helper too.
     fn validate_register_fields(req: &RegisterRequest) -> Result<(), AppError> {
-        if req.email.is_empty() || req.password.is_empty() || req.full_name.is_empty() || req.phone.is_empty() {
+        if req.email.is_empty()
+            || req.password.is_empty()
+            || req.full_name.is_empty()
+            || req.phone.is_empty()
+        {
             return Err(AppError::BadRequest("All fields are required".to_string()));
         }
         if !req.email.contains('@') || !req.email.contains('.') || req.email.len() < 5 {
@@ -2100,7 +2169,10 @@ mod tests {
         assert_eq!(response.phone, "0899999999");
         assert_eq!(response.full_name, "Admin User");
         assert_eq!(response.role, Some(UserRole::Admin));
-        assert_eq!(response.avatar_url, Some("https://cdn.example.com/avatar.jpg".to_string()));
+        assert_eq!(
+            response.avatar_url,
+            Some("https://cdn.example.com/avatar.jpg".to_string())
+        );
         assert!(!response.is_active);
         assert_eq!(response.created_at, now);
     }

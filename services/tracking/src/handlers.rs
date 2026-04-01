@@ -122,7 +122,9 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": format!("Invalid GPS data: {e}")}).to_string().into(),
+                        serde_json::json!({"error": format!("Invalid GPS data: {e}")})
+                            .to_string()
+                            .into(),
                     ))
                     .await;
                 continue;
@@ -169,7 +171,9 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
         // Send acknowledgment back
         let _ = socket
             .send(Message::Text(
-                serde_json::json!({"status": "ok", "recorded_at": event.recorded_at}).to_string().into(),
+                serde_json::json!({"status": "ok", "recorded_at": event.recorded_at})
+                    .to_string()
+                    .into(),
             ))
             .await;
     }
@@ -208,7 +212,8 @@ pub async fn get_latest_location(
 
     // Customers can only see guards they have an active booking with
     if user.role == "customer" || (user.role == "guard" && user.user_id != guard_id) {
-        let has_booking = crate::service::has_active_booking(&state.db, user.user_id, guard_id).await?;
+        let has_booking =
+            crate::service::has_active_booking(&state.db, user.user_id, guard_id).await?;
         if !has_booking {
             return Err(AppError::Forbidden(
                 "You can only track guards assigned to your active booking".to_string(),
@@ -250,7 +255,8 @@ pub async fn get_location_history(
 
     // Customers can only see history for guards they have/had a booking with
     if user.role == "customer" {
-        let has_booking = crate::service::has_active_booking(&state.db, user.user_id, guard_id).await?;
+        let has_booking =
+            crate::service::has_active_booking(&state.db, user.user_id, guard_id).await?;
         if !has_booking {
             return Err(AppError::Forbidden(
                 "You can only view history for guards assigned to your booking".to_string(),

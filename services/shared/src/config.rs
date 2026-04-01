@@ -1,7 +1,4 @@
-use axum::http::header::{
-    AUTHORIZATION, ACCEPT, CONTENT_TYPE, ORIGIN, COOKIE,
-    HeaderName,
-};
+use axum::http::header::{HeaderName, ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN};
 use axum::http::{HeaderValue, Method};
 use tower_http::cors::CorsLayer;
 
@@ -201,14 +198,11 @@ mod tests {
 
     #[test]
     fn database_config_reads_from_env() {
-        with_env_vars(
-            &[("DATABASE_URL", "postgres://localhost/test")],
-            || {
-                let cfg = DatabaseConfig::from_env().unwrap();
-                assert_eq!(cfg.url, "postgres://localhost/test");
-                assert_eq!(cfg.max_connections, 20); // default
-            },
-        );
+        with_env_vars(&[("DATABASE_URL", "postgres://localhost/test")], || {
+            let cfg = DatabaseConfig::from_env().unwrap();
+            assert_eq!(cfg.url, "postgres://localhost/test");
+            assert_eq!(cfg.max_connections, 20); // default
+        });
     }
 
     #[test]
@@ -235,28 +229,19 @@ mod tests {
 
     #[test]
     fn jwt_config_reads_from_env() {
-        with_env_vars(
-            &[("JWT_SECRET", "super-secret-key")],
-            || {
-                let cfg = JwtConfig::from_env().unwrap();
-                assert_eq!(cfg.secret, "super-secret-key");
-                assert_eq!(cfg.expiry_hours, 24); // default
-            },
-        );
+        with_env_vars(&[("JWT_SECRET", "super-secret-key")], || {
+            let cfg = JwtConfig::from_env().unwrap();
+            assert_eq!(cfg.secret, "super-secret-key");
+            assert_eq!(cfg.expiry_hours, 24); // default
+        });
     }
 
     #[test]
     fn jwt_config_custom_expiry() {
-        with_env_vars(
-            &[
-                ("JWT_SECRET", "key"),
-                ("JWT_EXPIRY_HOURS", "48"),
-            ],
-            || {
-                let cfg = JwtConfig::from_env().unwrap();
-                assert_eq!(cfg.expiry_hours, 48);
-            },
-        );
+        with_env_vars(&[("JWT_SECRET", "key"), ("JWT_EXPIRY_HOURS", "48")], || {
+            let cfg = JwtConfig::from_env().unwrap();
+            assert_eq!(cfg.expiry_hours, 48);
+        });
     }
 
     #[test]

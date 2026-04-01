@@ -113,8 +113,10 @@ pub fn decode_phone_verify_token(
     validation.validate_exp = true;
     validation.set_required_spec_claims(&["exp"]);
 
-    let token_data = jsonwebtoken::decode::<PhoneVerifyClaims>(token, key, &validation)
-        .map_err(|e| AppError::BadRequest(format!("Invalid or expired phone verification token: {e}")))?;
+    let token_data =
+        jsonwebtoken::decode::<PhoneVerifyClaims>(token, key, &validation).map_err(|e| {
+            AppError::BadRequest(format!("Invalid or expired phone verification token: {e}"))
+        })?;
 
     if token_data.claims.purpose != "phone_verify" {
         return Err(AppError::BadRequest("Invalid token purpose".to_string()));
@@ -186,16 +188,12 @@ pub fn decode_profile_token(
 
 /// Build a Set-Cookie header value for an httpOnly, Secure, SameSite=Lax cookie.
 pub fn build_cookie(name: &str, value: &str, max_age_secs: i64, path: &str) -> String {
-    format!(
-        "{name}={value}; HttpOnly; Secure; SameSite=Lax; Path={path}; Max-Age={max_age_secs}"
-    )
+    format!("{name}={value}; HttpOnly; Secure; SameSite=Lax; Path={path}; Max-Age={max_age_secs}")
 }
 
 /// Build a Set-Cookie header to clear/expire a cookie.
 pub fn build_clear_cookie(name: &str, path: &str) -> String {
-    format!(
-        "{name}=; HttpOnly; Secure; SameSite=Lax; Path={path}; Max-Age=0"
-    )
+    format!("{name}=; HttpOnly; Secure; SameSite=Lax; Path={path}; Max-Age=0")
 }
 
 /// Cookie names used for auth tokens.
@@ -204,17 +202,14 @@ pub const REFRESH_TOKEN_COOKIE: &str = "refresh_token";
 
 /// Extract a named cookie value from a Cookie header string.
 pub fn extract_cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
-    cookie_header
-        .split(';')
-        .map(|s| s.trim())
-        .find_map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            if key.trim() == name {
-                Some(value.trim())
-            } else {
-                None
-            }
-        })
+    cookie_header.split(';').map(|s| s.trim()).find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        if key.trim() == name {
+            Some(value.trim())
+        } else {
+            None
+        }
+    })
 }
 
 /// Axum extractor that validates JWT from:
@@ -239,9 +234,7 @@ where
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
         {
-            auth_header
-                .strip_prefix("Bearer ")
-                .map(|t| t.to_string())
+            auth_header.strip_prefix("Bearer ").map(|t| t.to_string())
         } else {
             None
         };
@@ -256,9 +249,8 @@ where
                 .map(|t| t.to_string())
         });
 
-        let token = token.ok_or_else(|| {
-            AppError::Unauthorized("Missing authentication token".to_string())
-        })?;
+        let token = token
+            .ok_or_else(|| AppError::Unauthorized("Missing authentication token".to_string()))?;
 
         let claims = decode_jwt_with_key(&token, state.decoding_key())?;
 
@@ -397,13 +389,19 @@ mod tests {
     #[test]
     fn extract_cookie_value_handles_single_cookie() {
         let header = "access_token=mytoken";
-        assert_eq!(extract_cookie_value(header, "access_token"), Some("mytoken"));
+        assert_eq!(
+            extract_cookie_value(header, "access_token"),
+            Some("mytoken")
+        );
     }
 
     #[test]
     fn extract_cookie_value_handles_spaces() {
         let header = "  access_token = mytoken ; other = val  ";
-        assert_eq!(extract_cookie_value(header, "access_token"), Some("mytoken"));
+        assert_eq!(
+            extract_cookie_value(header, "access_token"),
+            Some("mytoken")
+        );
     }
 
     // =========================================================================
@@ -445,8 +443,7 @@ mod tests {
             .body(())
             .unwrap();
 
-        let result =
-            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let result = AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
         let auth_user = result.unwrap();
         assert_eq!(auth_user.user_id, user_id);
         assert_eq!(auth_user.role, "guard");
@@ -463,8 +460,7 @@ mod tests {
             .body(())
             .unwrap();
 
-        let result =
-            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let result = AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
         let auth_user = result.unwrap();
         assert_eq!(auth_user.user_id, user_id);
         assert_eq!(auth_user.role, "admin");
@@ -480,15 +476,11 @@ mod tests {
 
         let request = Request::builder()
             .header(header::AUTHORIZATION, format!("Bearer {bearer_token}"))
-            .header(
-                header::COOKIE,
-                format!("access_token={cookie_token}"),
-            )
+            .header(header::COOKIE, format!("access_token={cookie_token}"))
             .body(())
             .unwrap();
 
-        let result =
-            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let result = AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
         let auth_user = result.unwrap();
         assert_eq!(auth_user.user_id, bearer_id);
         assert_eq!(auth_user.role, "guard");
@@ -500,8 +492,7 @@ mod tests {
 
         let request = Request::builder().body(()).unwrap();
 
-        let result =
-            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let result = AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
         assert!(result.is_err());
     }
 
@@ -514,8 +505,7 @@ mod tests {
             .body(())
             .unwrap();
 
-        let result =
-            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let result = AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
         assert!(result.is_err());
     }
 
@@ -529,8 +519,7 @@ mod tests {
             .body(())
             .unwrap();
 
-        let result =
-            AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        let result = AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
         assert!(result.is_err());
     }
 
