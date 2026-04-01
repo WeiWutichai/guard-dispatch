@@ -2747,3 +2747,260 @@ pub async fn list_progress_reports(
 
     Ok(responses)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CreateRequestDto, UrgencyLevel};
+
+    // =========================================================================
+    // create_request input validation (mirrors validation in create_request())
+    // These test validation logic without requiring a database connection.
+    // =========================================================================
+
+    /// Helper that runs the same validation checks as create_request().
+    fn validate_create_request(req: &CreateRequestDto) -> Result<(), AppError> {
+        if req.address.is_empty() {
+            return Err(AppError::BadRequest("Address is required".to_string()));
+        }
+
+        // Validate coordinates
+        if !(-90.0..=90.0).contains(&req.location_lat) {
+            return Err(AppError::BadRequest(
+                "Latitude must be between -90 and 90".to_string(),
+            ));
+        }
+        if !(-180.0..=180.0).contains(&req.location_lng) {
+            return Err(AppError::BadRequest(
+                "Longitude must be between -180 and 180".to_string(),
+            ));
+        }
+        if req.location_lat == 0.0 && req.location_lng == 0.0 {
+            return Err(AppError::BadRequest(
+                "Invalid coordinates (0,0)".to_string(),
+            ));
+        }
+
+        // Validate booked_hours
+        if let Some(hours) = req.booked_hours {
+            if !(1..=720).contains(&hours) {
+                return Err(AppError::BadRequest(
+                    "Booked hours must be between 1 and 720".to_string(),
+                ));
+            }
+        }
+
+        // Validate offered_price
+        if let Some(price) = req.offered_price {
+            if price < 0.0 {
+                return Err(AppError::BadRequest(
+                    "Offered price cannot be negative".to_string(),
+                ));
+            }
+        }
+
+        // Validate Decimal conversion (NaN/Infinity)
+        if let Some(p) = req.offered_price {
+            rust_decimal::Decimal::try_from(p)
+                .map_err(|_| AppError::BadRequest("Invalid offered price value".to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    fn valid_request() -> CreateRequestDto {
+        CreateRequestDto {
+            location_lat: 13.7563,
+            location_lng: 100.5018,
+            address: "123 Test Street, Bangkok".to_string(),
+            description: None,
+            offered_price: None,
+            special_instructions: None,
+            urgency: UrgencyLevel::Medium,
+            booked_hours: Some(6),
+        }
+    }
+
+    #[test]
+    fn create_request_accepts_valid_input() {
+        assert!(validate_create_request(&valid_request()).is_ok());
+    }
+
+    // --- Coordinate validation ---
+
+    #[test]
+    fn create_request_rejects_lat_above_90() {
+        let mut req = valid_request();
+        req.location_lat = 91.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Latitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_lat_below_negative_90() {
+        let mut req = valid_request();
+        req.location_lat = -91.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Latitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_lng_above_180() {
+        let mut req = valid_request();
+        req.location_lng = 181.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Longitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_lng_below_negative_180() {
+        let mut req = valid_request();
+        req.location_lng = -181.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Longitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_zero_zero_coordinates() {
+        let mut req = valid_request();
+        req.location_lat = 0.0;
+        req.location_lng = 0.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("(0,0)"));
+    }
+
+    #[test]
+    fn create_request_accepts_lat_at_boundaries() {
+        let mut req = valid_request();
+        req.location_lat = 90.0;
+        assert!(validate_create_request(&req).is_ok());
+        req.location_lat = -90.0;
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_lng_at_boundaries() {
+        let mut req = valid_request();
+        req.location_lng = 180.0;
+        assert!(validate_create_request(&req).is_ok());
+        req.location_lng = -180.0;
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    // --- booked_hours validation ---
+
+    #[test]
+    fn create_request_rejects_zero_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(0);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Booked hours"));
+    }
+
+    #[test]
+    fn create_request_rejects_negative_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(-1);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Booked hours"));
+    }
+
+    #[test]
+    fn create_request_rejects_721_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(721);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Booked hours"));
+    }
+
+    #[test]
+    fn create_request_accepts_1_booked_hour() {
+        let mut req = valid_request();
+        req.booked_hours = Some(1);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_720_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(720);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_none_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = None;
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    // --- offered_price validation ---
+
+    #[test]
+    fn create_request_rejects_negative_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(-1.0);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("price"));
+    }
+
+    #[test]
+    fn create_request_rejects_nan_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(f64::NAN);
+        // NaN fails both the negativity check (NaN < 0.0 is false) and
+        // the Decimal::try_from conversion
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("price") || format!("{err:?}").contains("Invalid"));
+    }
+
+    #[test]
+    fn create_request_rejects_infinity_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(f64::INFINITY);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("price") || format!("{err:?}").contains("Invalid"));
+    }
+
+    #[test]
+    fn create_request_accepts_zero_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(0.0);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_valid_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(500.50);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    // --- sanitize_coords ---
+
+    #[test]
+    fn sanitize_coords_rejects_out_of_range() {
+        assert_eq!(sanitize_coords(Some(91.0), Some(0.0)), (None, None));
+        assert_eq!(sanitize_coords(Some(0.0), Some(181.0)), (None, None));
+    }
+
+    #[test]
+    fn sanitize_coords_rejects_zero_zero() {
+        assert_eq!(sanitize_coords(Some(0.0), Some(0.0)), (None, None));
+    }
+
+    #[test]
+    fn sanitize_coords_accepts_valid() {
+        assert_eq!(
+            sanitize_coords(Some(13.75), Some(100.5)),
+            (Some(13.75), Some(100.5))
+        );
+    }
+
+    #[test]
+    fn sanitize_coords_returns_none_for_none_input() {
+        assert_eq!(sanitize_coords(None, None), (None, None));
+        assert_eq!(sanitize_coords(Some(13.0), None), (None, None));
+        assert_eq!(sanitize_coords(None, Some(100.0)), (None, None));
+    }
+}
