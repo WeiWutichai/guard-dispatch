@@ -61,7 +61,7 @@ class _RatingsReviewsScreenState extends State<RatingsReviewsScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'PGuard',
+                        'P-Guard',
                         style: GoogleFonts.inter(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,

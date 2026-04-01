@@ -498,6 +498,18 @@ pub async fn submit_guard_profile(
             "account_name" => {
                 form.account_name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
             }
+            // Document expiry dates
+            "id_card_expiry" | "security_license_expiry" | "training_cert_expiry" | "criminal_check_expiry" | "driver_license_expiry" => {
+                let val = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                match name.as_str() {
+                    "id_card_expiry" => form.id_card_expiry = Some(val),
+                    "security_license_expiry" => form.security_license_expiry = Some(val),
+                    "training_cert_expiry" => form.training_cert_expiry = Some(val),
+                    "criminal_check_expiry" => form.criminal_check_expiry = Some(val),
+                    "driver_license_expiry" => form.driver_license_expiry = Some(val),
+                    _ => {}
+                }
+            }
             // Document image fields
             "id_card" | "security_license" | "training_cert" | "criminal_check" | "driver_license" | "passbook_photo" => {
                 let data = field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -661,6 +673,42 @@ pub async fn get_public_guard_profile(
 
     let public_profile: PublicGuardProfileResponse = full_profile.into();
     Ok(Json(shared::models::ApiResponse::success(public_profile)))
+}
+
+/// Guard: update own document expiry dates.
+#[utoipa::path(
+    put,
+    path = "/guards/me/expiry",
+    tag = "Profile",
+    security(("bearer" = [])),
+    request_body = AdminUpdateGuardProfileRequest,
+    responses(
+        (status = 200, description = "Expiry dates updated"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn update_own_expiry(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(req): Json<AdminUpdateGuardProfileRequest>,
+) -> Result<Json<shared::models::ApiResponse<()>>, AppError> {
+    // Only allow expiry fields — strip everything else for safety
+    let expiry_only = AdminUpdateGuardProfileRequest {
+        gender: None,
+        date_of_birth: None,
+        years_of_experience: None,
+        previous_workplace: None,
+        bank_name: None,
+        account_number: None,
+        account_name: None,
+        id_card_expiry: req.id_card_expiry,
+        security_license_expiry: req.security_license_expiry,
+        training_cert_expiry: req.training_cert_expiry,
+        criminal_check_expiry: req.criminal_check_expiry,
+        driver_license_expiry: req.driver_license_expiry,
+    };
+    crate::service::admin_update_guard_profile(&state.db, &state.redis, user.user_id, expiry_only).await?;
+    Ok(Json(shared::models::ApiResponse::success(())))
 }
 
 /// Admin: update guard profile fields (personal info, bank, document expiry dates).

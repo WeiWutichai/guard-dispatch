@@ -42,17 +42,24 @@ const statusConfig = {
   },
   alert: {
     label: "Alert",
+    color: "bg-slate-400",
+    ring: "ring-slate-200",
+    hex: "#94a3b8",
+  },
+  offline: {
+    label: "Offline",
     color: "bg-red-500",
     ring: "ring-red-200",
     hex: "#ef4444",
   },
 };
 
-function getGuardStatus(recordedAt: string): "active" | "idle" | "alert" {
+function getGuardStatus(recordedAt: string, isOnline: boolean, hasActiveJob: boolean): "active" | "idle" | "alert" | "offline" {
+  if (!isOnline) return "offline";
   const minutesAgo =
     (Date.now() - new Date(recordedAt).getTime()) / 60000;
-  if (minutesAgo > 30) return "alert";
-  if (minutesAgo > 10) return "idle";
+  if (minutesAgo > 5) return "alert";
+  if (hasActiveJob) return "idle";
   return "active";
 }
 
@@ -68,7 +75,7 @@ function toDisplayGuard(loc: GuardLocationWithName): DisplayGuard {
   return {
     id: loc.guard_id,
     name: loc.full_name ?? "Guard",
-    status: getGuardStatus(loc.recorded_at),
+    status: getGuardStatus(loc.recorded_at, loc.is_online, loc.has_active_job),
     location: `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`,
     lat: loc.lat,
     lng: loc.lng,
@@ -82,7 +89,7 @@ export default function MapPage() {
   const [guards, setGuards] = useState<DisplayGuard[]>([]);
   const [selectedGuard, setSelectedGuard] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<
-    "all" | "active" | "idle" | "alert"
+    "all" | "active" | "idle" | "alert" | "offline"
   >("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -104,7 +111,9 @@ export default function MapPage() {
 
   const fetchLocations = useCallback(async () => {
     try {
-      const locations = await trackingApi.getAllLocations();
+      const rawLocations = await trackingApi.getAllLocations();
+      // Filter out guards at (0,0) — no real GPS data yet
+      const locations = rawLocations.filter((l) => !(l.lat === 0 && l.lng === 0));
       // Show immediately with coordinate strings
       setGuards(locations.map(toDisplayGuard));
 
@@ -150,13 +159,15 @@ export default function MapPage() {
   const stats = useMemo(() => {
     let active = 0,
       idle = 0,
-      alerts = 0;
+      alerts = 0,
+      offline = 0;
     for (const g of displayGuards) {
       if (g.status === "active") active++;
       else if (g.status === "idle") idle++;
+      else if (g.status === "offline") offline++;
       else alerts++;
     }
-    return { total: displayGuards.length, active, idle, alerts };
+    return { total: displayGuards.length, active, idle, alerts, offline };
   }, [displayGuards]);
 
   const handleGuardSelect = useCallback(
@@ -178,6 +189,7 @@ export default function MapPage() {
     active: t.map.active,
     idle: t.map.idle,
     alert: t.map.alerts,
+    offline: t.map.offline,
   };
 
   // ── Auth gate: admin and customer only ──────────────────────────────────────
@@ -209,7 +221,7 @@ export default function MapPage() {
           <div className="flex items-center gap-4">
             <h2 className="font-semibold text-slate-900">{t.map.bangkokArea}</h2>
             <div className="flex items-center gap-2">
-              {(["all", "active", "idle", "alert"] as const).map((status) => (
+              {(["all", "active", "idle", "alert", "offline"] as const).map((status) => (
                 <button
                   key={status}
                   onClick={() => setFilterStatus(status)}
@@ -264,6 +276,7 @@ export default function MapPage() {
             activeLabel={t.map.active}
             idleLabel={t.map.idle}
             alertLabel={t.map.alerts}
+            offlineLabel={t.map.offline}
             flyToRef={flyToRef}
             invalidateSizeRef={invalidateSizeRef}
             height="100%"
@@ -300,7 +313,7 @@ export default function MapPage() {
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-200">
           <div className="flex items-center justify-between">
             <div>
@@ -341,11 +354,22 @@ export default function MapPage() {
         <div className="bg-white p-4 rounded-xl border border-slate-200">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-2xl font-bold text-red-600">{stats.alerts}</p>
+              <p className="text-2xl font-bold text-slate-500">{stats.alerts}</p>
               <p className="text-sm text-slate-500">{t.map.alerts}</p>
             </div>
+            <div className="p-2 bg-slate-100 rounded-lg">
+              <AlertTriangle className="h-5 w-5 text-slate-400" />
+            </div>
+          </div>
+        </div>
+        <div className="bg-white p-4 rounded-xl border border-slate-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-2xl font-bold text-red-600">{stats.offline}</p>
+              <p className="text-sm text-slate-500">{t.map.offline}</p>
+            </div>
             <div className="p-2 bg-red-50 rounded-lg">
-              <AlertTriangle className="h-5 w-5 text-red-600" />
+              <ShieldX className="h-5 w-5 text-red-600" />
             </div>
           </div>
         </div>
@@ -420,6 +444,7 @@ export default function MapPage() {
             activeLabel={t.map.active}
             idleLabel={t.map.idle}
             alertLabel={t.map.alerts}
+            offlineLabel={t.map.offline}
             flyToRef={flyToRef}
             invalidateSizeRef={invalidateSizeRef}
           />

@@ -161,7 +161,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'PGuard',
+                  'P-Guard',
                   style: GoogleFonts.inter(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
@@ -319,6 +319,8 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
           MaterialPageRoute(
             builder: (_) => ActiveJobScreen(
               assignmentId: assignmentId,
+              requestId: result['request_id'] as String?,
+              customerId: result['customer_id'] as String?,
               customerName: result['customer_name'] as String?,
               address: result['address'] as String?,
               bookedHours: bookedHours,

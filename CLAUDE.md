@@ -20,7 +20,7 @@
 ### Frontend
 - **Web Admin:** Next.js 16 + TypeScript (App Router)
   - Dev: `localhost:3000` ตรง (ไม่มี basePath)
-  - Production (Docker/Nginx): basePath `/pguard-app` (ตั้งผ่าน `NEXT_PUBLIC_BASE_PATH`)
+  - Production (Docker/Nginx): basePath `/p-guard-app` (ตั้งผ่าน `NEXT_PUBLIC_BASE_PATH`)
   - **Map:** react-leaflet + leaflet (OpenStreetMap tiles — ต้องเปลี่ยนเป็น commercial tile provider สำหรับ production)
 - **Mobile App:** Flutter (iOS + Android) — อยู่ใน Monorepo เดียวกัน
   - **State Management:** Provider (`ChangeNotifierProvider`)
@@ -63,7 +63,7 @@
 
 ```
 nginx-gateway (port 80/443 — จุดเข้าเดียว)
-├── web-admin                  (Next.js 16, /pguard-app)
+├── web-admin                  (Next.js 16, /p-guard-app)
 ├── rust-auth-service          (Port 3001, /auth/*)
 ├── rust-booking-service       (Port 3002, /booking/*)
 ├── rust-tracking-service      (Port 3003, /ws/track + /tracking/*)
@@ -1006,10 +1006,10 @@ RegistrationPendingScreen({role})
 - **main.dart**: `ChangeNotifierProvider(create: (_) => TrackingProvider(TrackingService()))` registered in `MultiProvider`
 - **GuardHomeTab**: `context.watch<TrackingProvider>()` replaces local `_isReady` state; shows GPS accuracy when online
 
-**Unified PGuard Header Pattern (Flutter Mobile):**
+**Unified P-Guard Header Pattern (Flutter Mobile):**
 - All guard-side screens (4 tabs + 4 detail screens) and hirer profile settings use the same green header design:
   - `Container` with `AppColors.primary` background, `BorderRadius.vertical(bottom: Radius.circular(32))`, `EdgeInsets.fromLTRB(12, 60, 24, 30)` padding
-  - Top row: back button (where applicable) + shield icon (white alpha 0.2 bg, rounded 12) + "PGuard" title (bold 20 white) + subtitle (13 white alpha 0.9) + optional action icons
+  - Top row: back button (where applicable) + shield icon (white alpha 0.2 bg, rounded 12) + "P-Guard" title (bold 20 white) + subtitle (13 white alpha 0.9) + optional action icons
   - Screens with tabs (jobs, income, work history): embed `TabBar`/sub-tab navigation inside the green header using `Colors.white.withValues(alpha: 0.15)` pill container, white selected indicator, `AppColors.primary` selected text color
   - Manual top padding (60px) instead of `SafeArea` — provides status bar clearance on all devices
   - Guard home tab header: back arrow → `RoleSelectionScreen(phone)`, greeting text with `authProvider.fullName`, notification bell
@@ -1329,7 +1329,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม start GPS stream ก่อน WebSocket connected — `_startGpsStream()` เรียกเฉพาะเมื่อ `_isConnected == true`
 - ❌ ห้ามสร้าง WS listener ใหม่โดยไม่ cancel อันเก่า — `_connectWebSocket()` ต้อง `await _wsSub?.cancel()` ก่อนเสมอ (ป้องกัน orphaned subscriptions)
 - ❌ ห้ามใช้ local state (`_isReady`) สำหรับ guard online toggle — ใช้ `context.watch<TrackingProvider>().isOnline` เท่านั้น
-- ❌ ห้ามใช้ `AppBar` widget หรือ `AppColors.deepBlue` ใน guard/hirer screens — ใช้ custom `Container` header ด้วย `AppColors.primary` + `BorderRadius.vertical(bottom: Radius.circular(32))` เท่านั้น (unified PGuard header pattern)
+- ❌ ห้ามใช้ `AppBar` widget หรือ `AppColors.deepBlue` ใน guard/hirer screens — ใช้ custom `Container` header ด้วย `AppColors.primary` + `BorderRadius.vertical(bottom: Radius.circular(32))` เท่านั้น (unified P-Guard header pattern)
 - ❌ ห้ามใช้ `SafeArea` ใน screens ที่มี green header — ใช้ manual top padding (`EdgeInsets.fromLTRB(12, 60, 24, 30)`) แทน
 - ❌ ห้ามใช้ shared `_isLoadingGuards` flag ร่วมกับ `_isLoading` หรือ `_isLoadingRates` — ต้องแยก flag สำหรับ available guards loading
 - ❌ ห้ามให้ non-owner customer assign guard ไปยัง request ของคนอื่น — backend `assign_guard` ตรวจ `request.customer_id == user.user_id` สำหรับ non-admin

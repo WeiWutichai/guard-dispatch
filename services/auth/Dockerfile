@@ -30,9 +30,10 @@ RUN mkdir -p services/shared/src services/auth/src services/booking/src \
 # Build dependencies only (cached layer)
 RUN cargo build --release -p auth-service 2>/dev/null; true
 
-# Copy actual source
+# Copy actual source + assets (font embedded via include_bytes!)
 COPY services/shared/src services/shared/src
 COPY services/auth/src services/auth/src
+COPY services/auth/assets services/auth/assets
 
 # Build the actual binary
 RUN find services/shared/src services/auth/src -name '*.rs' | xargs touch && cargo build --release -p auth-service

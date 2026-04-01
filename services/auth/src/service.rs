@@ -1220,6 +1220,102 @@ pub async fn update_user_role(
 // Submit Guard Profile (profile_token protected)
 // =============================================================================
 
+/// Embed a diagonal "FOR SECURITY USE ONLY" watermark across the entire image.
+/// Runs on a blocking thread to avoid stalling the async runtime.
+async fn apply_watermark(data: Vec<u8>) -> Result<Vec<u8>, AppError> {
+    tokio::task::spawn_blocking(move || apply_watermark_blocking(&data))
+        .await
+        .map_err(|e| AppError::Internal(format!("Watermark task failed: {e}")))?
+}
+
+fn apply_watermark_blocking(data: &[u8]) -> Result<Vec<u8>, AppError> {
+    use image::{DynamicImage, GenericImageView, Rgba, ImageFormat, ImageReader};
+    use imageproc::drawing::draw_text_mut;
+    use ab_glyph::{FontRef, PxScale};
+    use std::io::Cursor;
+
+    // Detect format from bytes
+    let reader = ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .map_err(|e| AppError::Internal(format!("Failed to read image: {e}")))?;
+    let format = reader.format().unwrap_or(ImageFormat::Jpeg);
+
+    let mut img: DynamicImage = reader
+        .decode()
+        .map_err(|e| AppError::Internal(format!("Failed to decode image: {e}")))?;
+
+    let (width, height) = img.dimensions();
+
+    // Use embedded font (DejaVuSans is commonly available; embed a minimal font)
+    let font_data = include_bytes!("../assets/watermark-font.ttf");
+    let font = FontRef::try_from_slice(font_data)
+        .map_err(|e| AppError::Internal(format!("Failed to load font: {e}")))?;
+
+    // Scale text relative to image size (roughly 3% of the shorter dimension)
+    let short_side = width.min(height) as f32;
+    let font_size = (short_side * 0.035).max(16.0);
+    let scale = PxScale::from(font_size);
+
+    let text = "FOR SECURITY USE ONLY";
+    let color = Rgba([128u8, 128, 128, 80]); // semi-transparent gray
+
+    // Approximate text width (0.6 * font_size per char is a rough heuristic)
+    let char_width = font_size * 0.6;
+    let text_width = text.len() as f32 * char_width;
+    let step_x = (text_width + font_size * 2.0) as i32; // horizontal spacing
+    let step_y = (font_size * 4.0) as i32; // vertical spacing
+
+    // Draw repeating diagonal watermark grid
+    let rgba_img = img.as_mut_rgba8();
+    if let Some(buf) = rgba_img {
+        let mut y = -(height as i32);
+        while y < (height as i32) * 2 {
+            let mut x = -(width as i32);
+            while x < (width as i32) * 2 {
+                // Simulate diagonal by offsetting x based on y
+                let diag_x = x + (y as f32 * 0.5) as i32;
+                draw_text_mut(buf, color, diag_x, y, scale, &font, text);
+                x += step_x;
+            }
+            y += step_y;
+        }
+        // Write back to the same format
+        let mut output = Vec::new();
+        let out_format = match format {
+            ImageFormat::Png => ImageFormat::Png,
+            ImageFormat::WebP => ImageFormat::Png, // re-encode WEBP as PNG (image crate encoding support)
+            _ => ImageFormat::Jpeg,
+        };
+        DynamicImage::ImageRgba8(buf.clone())
+            .write_to(&mut Cursor::new(&mut output), out_format)
+            .map_err(|e| AppError::Internal(format!("Failed to encode watermarked image: {e}")))?;
+        return Ok(output);
+    }
+
+    // Fallback for non-RGBA images: convert first
+    let mut rgba = img.to_rgba8();
+    let mut y = -(height as i32);
+    while y < (height as i32) * 2 {
+        let mut x = -(width as i32);
+        while x < (width as i32) * 2 {
+            let diag_x = x + (y as f32 * 0.5) as i32;
+            draw_text_mut(&mut rgba, color, diag_x, y, scale, &font, text);
+            x += step_x;
+        }
+        y += step_y;
+    }
+    let mut output = Vec::new();
+    let out_format = match format {
+        ImageFormat::Png => ImageFormat::Png,
+        ImageFormat::WebP => ImageFormat::Png,
+        _ => ImageFormat::Jpeg,
+    };
+    DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut Cursor::new(&mut output), out_format)
+        .map_err(|e| AppError::Internal(format!("Failed to encode watermarked image: {e}")))?;
+    Ok(output)
+}
+
 /// Validate that image bytes match an allowed magic byte signature.
 /// Accepted formats: JPEG (FF D8 FF), PNG (89 50 4E 47 0D 0A 1A 0A), WEBP (RIFF....WEBP).
 fn validate_image_magic_bytes(data: &[u8]) -> Result<&'static str, AppError> {
@@ -1258,8 +1354,13 @@ async fn upload_document(
 
     let ext = validate_image_magic_bytes(&data)?;
 
-    let file_key = format!("profiles/guard/{user_id}/{doc_type}.{ext}");
-    let body = aws_sdk_s3::primitives::ByteStream::from(data);
+    // Apply "FOR SECURITY USE ONLY" watermark before upload
+    let watermarked = apply_watermark(data).await?;
+    // WEBP is re-encoded as PNG by the watermark function
+    let final_ext = if ext == "webp" { "png" } else { ext };
+
+    let file_key = format!("profiles/guard/{user_id}/{doc_type}.{final_ext}");
+    let body = aws_sdk_s3::primitives::ByteStream::from(watermarked);
 
     s3_client
         .put_object()
@@ -1355,10 +1456,11 @@ pub async fn submit_guard_profile(
         keys.insert(field, key);
     }
 
-    // Parse date_of_birth from ISO string "YYYY-MM-DD"
-    let dob: Option<chrono::NaiveDate> = form.date_of_birth
-        .as_deref()
-        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    // Parse date from ISO string "YYYY-MM-DD"
+    fn parse_date_opt(s: &Option<String>) -> Option<chrono::NaiveDate> {
+        s.as_deref().and_then(|v| chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").ok())
+    }
+    let dob = parse_date_opt(&form.date_of_birth);
 
     // UPSERT into auth.guard_profiles — insert on first call, update on subsequent calls.
     sqlx::query(
@@ -1367,9 +1469,11 @@ pub async fn submit_guard_profile(
             user_id, gender, date_of_birth, years_of_experience, previous_workplace,
             id_card_key, security_license_key, training_cert_key, criminal_check_key,
             driver_license_key, bank_name, account_number, account_name, passbook_photo_key,
+            id_card_expiry, security_license_expiry, training_cert_expiry,
+            criminal_check_expiry, driver_license_expiry,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
         ON CONFLICT (user_id) DO UPDATE SET
             gender               = EXCLUDED.gender,
             date_of_birth        = EXCLUDED.date_of_birth,
@@ -1384,6 +1488,11 @@ pub async fn submit_guard_profile(
             account_number       = EXCLUDED.account_number,
             account_name         = EXCLUDED.account_name,
             passbook_photo_key   = COALESCE(EXCLUDED.passbook_photo_key, auth.guard_profiles.passbook_photo_key),
+            id_card_expiry       = COALESCE(EXCLUDED.id_card_expiry, auth.guard_profiles.id_card_expiry),
+            security_license_expiry = COALESCE(EXCLUDED.security_license_expiry, auth.guard_profiles.security_license_expiry),
+            training_cert_expiry = COALESCE(EXCLUDED.training_cert_expiry, auth.guard_profiles.training_cert_expiry),
+            criminal_check_expiry = COALESCE(EXCLUDED.criminal_check_expiry, auth.guard_profiles.criminal_check_expiry),
+            driver_license_expiry = COALESCE(EXCLUDED.driver_license_expiry, auth.guard_profiles.driver_license_expiry),
             updated_at           = NOW()
         "#,
     )
@@ -1401,6 +1510,11 @@ pub async fn submit_guard_profile(
     .bind(&form.account_number)
     .bind(&form.account_name)
     .bind(keys.get("passbook_photo").map(|s| s.as_str()))
+    .bind(parse_date_opt(&form.id_card_expiry))
+    .bind(parse_date_opt(&form.security_license_expiry))
+    .bind(parse_date_opt(&form.training_cert_expiry))
+    .bind(parse_date_opt(&form.criminal_check_expiry))
+    .bind(parse_date_opt(&form.driver_license_expiry))
     .execute(db)
     .await?;
 
@@ -1564,13 +1678,8 @@ pub async fn submit_customer_profile(
     user_id: Uuid,
     req: crate::models::SubmitCustomerProfileRequest,
 ) -> Result<(), AppError> {
-    // Validate address: required, min 10 chars
+    // Address is optional
     let address = req.address.trim().to_string();
-    if address.len() < 10 {
-        return Err(AppError::BadRequest(
-            "Address is required and must be at least 10 characters".to_string(),
-        ));
-    }
 
     // Validate email if provided
     let email = req.email.as_deref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());

@@ -97,10 +97,6 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
                                 ),
                               ),
                             if (rates.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              const Divider(color: AppColors.border),
-                              const SizedBox(height: 32),
-                              _buildStatsSection(isThai),
                               const SizedBox(height: 40),
                             ],
                           ],
@@ -207,7 +203,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'PGuard',
+                      'P-Guard',
                       style: GoogleFonts.inter(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,

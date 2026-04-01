@@ -37,7 +37,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     super.initState();
     // Fire-and-forget: fetch guard document URLs
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AuthProvider>().fetchGuardDocs();
+      context.read<AuthProvider>().fetchGuardDocs(force: true);
     });
   }
 
@@ -111,7 +111,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'PGuard',
+                        'P-Guard',
                         style: GoogleFonts.inter(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -395,48 +395,139 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
           ...docItems.map((item) {
             final url = docs[item.key];
             final hasDoc = url != null && url.isNotEmpty;
+            final expiry = auth.guardDocExpiry[item.key];
             return Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Row(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(item.icon, size: 20, color: hasDoc ? AppColors.primary : AppColors.disabled),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      item.label,
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: hasDoc ? AppColors.textPrimary : AppColors.textSecondary,
-                      ),
-                    ),
-                  ),
-                  if (hasDoc)
-                    GestureDetector(
-                      onTap: () => _showDocumentPreview(context, item.label, url),
-                      child: Text(
-                        isThai ? 'ดูเอกสาร' : 'View',
-                        style: GoogleFonts.inter(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.primary,
+                  Row(
+                    children: [
+                      Icon(item.icon, size: 20, color: hasDoc ? AppColors.primary : AppColors.disabled),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.label,
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: hasDoc ? AppColors.textPrimary : AppColors.textSecondary,
+                              ),
+                            ),
+                            if (hasDoc && expiry != null)
+                              Text(
+                                '${isThai ? "หมดอายุ" : "Exp"}: ${_formatExpiry(expiry)}',
+                                style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary),
+                              ),
+                          ],
                         ),
                       ),
-                    )
-                  else
-                    Text(
-                      isThai ? 'ยังไม่ได้อัพโหลด' : 'Not uploaded',
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: AppColors.disabled,
-                      ),
-                    ),
+                      if (hasDoc) ...[
+                        GestureDetector(
+                          onTap: () => _pickDocExpiry(item.key, expiry),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: expiry != null ? AppColors.primary.withValues(alpha: 0.08) : Colors.orange.shade50,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              expiry != null
+                                  ? (isThai ? 'แก้ไข' : 'Edit')
+                                  : (isThai ? 'กำหนดวันหมดอายุ' : 'Set expiry'),
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: expiry != null ? AppColors.primary : Colors.orange.shade700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => _showDocumentPreview(context, item.label, url),
+                          child: Text(
+                            isThai ? 'ดูเอกสาร' : 'View',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ),
+                      ] else
+                        Text(
+                          isThai ? 'ยังไม่ได้อัพโหลด' : 'Not uploaded',
+                          style: GoogleFonts.inter(fontSize: 12, color: AppColors.disabled),
+                        ),
+                    ],
+                  ),
+                  if (hasDoc) const Divider(height: 12, color: AppColors.border),
                 ],
               ),
             );
           }),
       ],
     );
+  }
+
+  String _formatExpiry(String isoDate) {
+    try {
+      final dt = DateTime.parse(isoDate);
+      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    } catch (_) {
+      return isoDate;
+    }
+  }
+
+  Future<void> _pickDocExpiry(String docKey, String? currentExpiry) async {
+    final now = DateTime.now();
+    DateTime initial;
+    try {
+      initial = currentExpiry != null ? DateTime.parse(currentExpiry) : now.add(const Duration(days: 365));
+    } catch (_) {
+      initial = now.add(const Duration(days: 365));
+    }
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 20)),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: AppColors.primary,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: AppColors.textPrimary,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    final dateStr = '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+    try {
+      await context.read<AuthProvider>().updateDocExpiry({'${docKey}_expiry': dateStr});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(LanguageProvider.of(context).isThai ? 'บันทึกวันหมดอายุสำเร็จ' : 'Expiry date saved'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.primary,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.danger, behavior: SnackBarBehavior.floating),
+        );
+      }
+    }
   }
 
   void _showDocumentPreview(BuildContext context, String title, String url) {

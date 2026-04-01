@@ -12,6 +12,42 @@ use crate::models::{
 };
 
 // =============================================================================
+// Notification Helper (fire-and-forget, cross-schema INSERT)
+// =============================================================================
+
+fn spawn_chat_notification(
+    db: PgPool,
+    recipient_id: Uuid,
+    sender_name: String,
+    message_preview: String,
+    conversation_id: Uuid,
+) {
+    tokio::spawn(async move {
+        let title = format!("ข้อความจาก {sender_name}");
+        let body = if message_preview.len() > 100 {
+            format!("{}...", &message_preview[..100])
+        } else {
+            message_preview
+        };
+        let payload = serde_json::json!({
+            "conversation_id": conversation_id.to_string(),
+        });
+        let _ = sqlx::query(
+            r#"
+            INSERT INTO notification.notification_logs (user_id, title, body, notification_type, payload)
+            VALUES ($1, $2, $3, 'chat_message'::notification_type, $4)
+            "#,
+        )
+        .bind(recipient_id)
+        .bind(&title)
+        .bind(&body)
+        .bind(&payload)
+        .execute(&db)
+        .await;
+    });
+}
+
+// =============================================================================
 // Create Conversation
 // =============================================================================
 
@@ -158,6 +194,38 @@ pub async fn send_message(
     let row = insert_message(db, sender_id, &msg).await?;
     let outgoing = OutgoingChatMessage::from(row);
     publish_chat_message(redis_pubsub, &outgoing).await;
+
+    // Notify other participants (fire-and-forget)
+    let recipients: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM chat.conversation_participants WHERE conversation_id = $1 AND user_id != $2",
+    )
+    .bind(msg.conversation_id)
+    .bind(sender_id)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    // Get sender name for notification title
+    let sender_name: String = sqlx::query_scalar(
+        "SELECT COALESCE(full_name, 'User') FROM auth.users WHERE id = $1",
+    )
+    .bind(sender_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "User".to_string());
+
+    for recipient_id in recipients {
+        spawn_chat_notification(
+            db.clone(),
+            recipient_id,
+            sender_name.clone(),
+            msg.content.clone().unwrap_or_default(),
+            msg.conversation_id,
+        );
+    }
+
     Ok(outgoing)
 }
 

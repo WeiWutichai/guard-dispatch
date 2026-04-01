@@ -44,7 +44,7 @@ async fn reverse_geocode(http: &reqwest::Client, lat: f64, lng: f64) -> Option<S
             ("zoom", "16".to_string()),
             ("accept-language", "th,en".to_string()),
         ])
-        .header("User-Agent", "PGuardApp/1.0")
+        .header("User-Agent", "P-GuardApp/1.0")
         .send()
         .await
         .ok()?;
@@ -176,15 +176,7 @@ pub async fn create_request(
     .fetch_one(db)
     .await?;
 
-    // Notify customer: booking created
-    spawn_notification(
-        db.clone(),
-        customer_id,
-        "การจองสำเร็จ".to_string(),
-        format!("คำขอจองเจ้าหน้าที่ รปภ. ที่ {} ถูกสร้างแล้ว", req.address),
-        "booking_created",
-        Some(serde_json::json!({"request_id": row.id.to_string(), "target_role": "customer"})),
-    );
+    // Removed: booking_created notification — customer knows they just booked
 
     Ok(GuardRequestResponse::from(row))
 }
@@ -1697,19 +1689,8 @@ pub async fn create_payment(
             .ok()
             .flatten();
 
-            if let Some(guard_id) = gid {
-                spawn_notification(
-                    db_clone,
-                    guard_id,
-                    "ชำระเงินสำเร็จ".to_string(),
-                    format!("ลูกค้าชำระเงิน ฿{} แล้ว คุณสามารถเริ่มเดินทางได้", amount),
-                    "booking_created",
-                    Some(serde_json::json!({
-                        "request_id": req_id.to_string(),
-                        "target_role": "guard",
-                    })),
-                );
-            }
+            // Removed: payment notification — guard sees payment status in job detail
+            let _ = gid;
         });
     }
 
@@ -1787,6 +1768,7 @@ pub async fn start_job(
     // Fetch request details for response
     #[derive(sqlx::FromRow)]
     struct RequestInfo {
+        customer_id: Uuid,
         customer_name: Option<String>,
         address: String,
         booked_hours: Option<i32>,
@@ -1795,7 +1777,7 @@ pub async fn start_job(
 
     let info = sqlx::query_as::<_, RequestInfo>(
         r#"
-        SELECT COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours, gr.offered_price
+        SELECT gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours, gr.offered_price
         FROM booking.guard_requests gr
         INNER JOIN auth.users u ON u.id = gr.customer_id
         LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
@@ -1814,6 +1796,7 @@ pub async fn start_job(
     Ok(ActiveJobResponse {
         assignment_id,
         request_id: existing.request_id,
+        customer_id: info.customer_id,
         customer_name: info.customer_name.unwrap_or_else(|| "-".to_string()),
         address: info.address,
         booked_hours,
@@ -1851,6 +1834,7 @@ pub async fn get_active_job(
     struct ActiveJobRow {
         assignment_id: Uuid,
         request_id: Uuid,
+        customer_id: Uuid,
         customer_name: Option<String>,
         address: String,
         booked_hours: Option<i32>,
@@ -1876,7 +1860,7 @@ pub async fn get_active_job(
 
     let row = sqlx::query_as::<_, ActiveJobRow>(
         r#"
-        SELECT a.id AS assignment_id, gr.id AS request_id,
+        SELECT a.id AS assignment_id, gr.id AS request_id, gr.customer_id,
                COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours,
                a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price,
                a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_at, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
@@ -1907,6 +1891,7 @@ pub async fn get_active_job(
             Ok(Some(ActiveJobResponse {
                 assignment_id: r.assignment_id,
                 request_id: r.request_id,
+                customer_id: r.customer_id,
                 customer_name: r.customer_name.unwrap_or_else(|| "-".to_string()),
                 address: r.address,
                 booked_hours,
@@ -2020,6 +2005,7 @@ pub async fn get_customer_active_job(
             Ok(Some(ActiveJobResponse {
                 assignment_id: r.assignment_id,
                 request_id: r.request_id,
+                customer_id: user_id,
                 customer_name: r.guard_name.unwrap_or_else(|| "-".to_string()),
                 address: r.address,
                 booked_hours,
@@ -2264,19 +2250,7 @@ pub async fn submit_review(
         Err(e) => return Err(AppError::from(e)),
     };
 
-    // Notify guard: new review received
-    spawn_notification(
-        db.clone(),
-        assignment.guard_id,
-        "คะแนนรีวิวใหม่".to_string(),
-        format!("ลูกค้าให้คะแนนคุณ {} ดาว", req.overall_rating),
-        "system",
-        Some(serde_json::json!({
-            "assignment_id": assignment_id.to_string(),
-            "rating": req.overall_rating.to_string(),
-            "target_role": "guard",
-        })),
-    );
+    // Removed: review notification — guard can see reviews in ratings tab
 
     Ok(crate::models::SubmitReviewResponse {
         id: review_id,
@@ -2529,18 +2503,7 @@ pub async fn submit_progress_report(
     // 6. photo_url = first image signed URL (backward compat)
     let photo_url = media.iter().find(|m| !crate::s3::is_video_mime(&m.mime_type)).map(|m| m.url.clone());
 
-    // 7. Notify customer (fire-and-forget)
-    spawn_notification(
-        db.clone(),
-        row.customer_id,
-        "รายงานความคืบหน้า".to_string(),
-        format!("เจ้าหน้าที่ส่งรายงานความคืบหน้าชั่วโมงที่ {hour_number}"),
-        "system",
-        Some(serde_json::json!({
-            "assignment_id": assignment_id.to_string(),
-            "hour_number": hour_number,
-        })),
-    );
+    // Removed: progress report notification — customer sees reports in active job screen
 
     Ok(ProgressReportResponse {
         id: inserted.id,

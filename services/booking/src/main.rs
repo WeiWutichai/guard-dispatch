@@ -83,6 +83,7 @@ use crate::state::AppState;
         models::CreateServiceRateDto,
         models::UpdateServiceRateDto,
         models::ProgressReportResponse,
+        models::ProgressReportMediaItem,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),

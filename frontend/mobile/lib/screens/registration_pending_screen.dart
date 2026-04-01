@@ -68,14 +68,38 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
 
       if (!mounted) return;
 
-      // Login succeeded — user is approved. Navigate to dashboard.
-      final role = authProvider.role;
-      final Widget dashboard = role == 'guard'
-          ? const GuardDashboardScreen()
-          : const HirerDashboardScreen();
+      // Login succeeded — but check if THIS role's profile is approved.
+      // Guard approval = login success (users.approval_status = approved).
+      // Customer approval = separate (customer_profiles.approval_status).
+      if (widget.role == 'customer') {
+        // fetchProfile loads customerApprovalStatus from /auth/me
+        await authProvider.fetchProfile();
+        if (!mounted) return;
+        if (authProvider.customerApprovalStatus != 'approved') {
+          // Customer profile still pending — show message, don't navigate
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(strings.notYetApproved),
+              backgroundColor: Colors.orange.shade700,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+          return;
+        }
+        // Customer approved → hirer dashboard
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const HirerDashboardScreen()),
+          (route) => false,
+        );
+        return;
+      }
+
+      // Guard approved → guard dashboard
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => dashboard),
+        MaterialPageRoute(builder: (_) => const GuardDashboardScreen()),
         (route) => false,
       );
     } on DioException {
@@ -156,6 +180,35 @@ class _RegistrationPendingScreenState extends State<RegistrationPendingScreen> {
     }
     // Fallback to legacy single profile
     data ??= await AuthService.getPendingProfile();
+
+    // If no local data + user is authenticated → fetch from API
+    if (data == null) {
+      try {
+        final auth = context.read<AuthProvider>();
+        if (auth.isAuthenticated) {
+          await auth.fetchProfile();
+          if (!mounted) return;
+          if (role == 'customer') {
+            data = {
+              'role': 'customer',
+              'full_name': auth.customerFullName ?? auth.fullName,
+              'contact_phone': auth.contactPhone ?? auth.phone,
+              'email': auth.email,
+              'company_name': auth.companyName,
+              'address': auth.customerAddress,
+            };
+          } else {
+            data = {
+              'role': 'guard',
+              'full_name': auth.fullName,
+              'gender': auth.gender,
+              'years_of_experience': auth.yearsOfExperience?.toString(),
+              'previous_workplace': auth.previousWorkplace,
+            };
+          }
+        }
+      } catch (_) {}
+    }
     if (!mounted) return;
 
     setState(() {

@@ -69,7 +69,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'PGuard',
+                              'P-Guard',
                               style: GoogleFonts.inter(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -560,8 +560,24 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
         Expanded(
           flex: 2,
           child: ElevatedButton(
-            onPressed: () {
-              context.read<BookingProvider>().acceptAssignment(assignmentId);
+            onPressed: () async {
+              try {
+                await context.read<BookingProvider>().acceptAssignment(assignmentId);
+                if (!context.mounted) return;
+                final updatedJob = Map<String, dynamic>.from(job);
+                updatedJob['assignment_status'] = 'awaiting_payment';
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => GuardJobDetailScreen(job: updatedJob),
+                  ),
+                );
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('$e')),
+                );
+              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,

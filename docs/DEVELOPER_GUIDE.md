@@ -180,7 +180,7 @@ npm run dev
 ```
 
 The dev server starts at `http://localhost:3000`. In development mode, there is
-no basePath prefix. The production Docker build uses basePath `/pguard-app`
+no basePath prefix. The production Docker build uses basePath `/p-guard-app`
 (configured via `NEXT_PUBLIC_BASE_PATH`).
 
 ### Option D: Flutter Mobile Development
@@ -1115,7 +1115,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 Key production differences:
-- Web admin builds with basePath `/pguard-app` (via `NEXT_PUBLIC_BASE_PATH`)
+- Web admin builds with basePath `/p-guard-app` (via `NEXT_PUBLIC_BASE_PATH`)
 - Nginx configured with SSL certificates
 - MinIO replaced by Cloudflare R2 (change `S3_ENDPOINT`)
 - Stricter resource limits

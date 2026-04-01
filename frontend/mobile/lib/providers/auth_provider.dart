@@ -53,8 +53,9 @@ class AuthProvider extends ChangeNotifier {
   String? _dateOfBirth;
   int? _yearsOfExperience;
   String? _previousWorkplace;
-  // Guard document URLs (from /auth/guards/{id}/profile)
+  // Guard document URLs + expiry dates (from /auth/guards/{id}/profile)
   Map<String, String?> _guardDocUrls = {};
+  Map<String, String?> _guardDocExpiry = {};
   bool _docsLoaded = false;
   String? _customerFullName;
   String? _customerApprovalStatus;
@@ -77,6 +78,7 @@ class AuthProvider extends ChangeNotifier {
   int? get yearsOfExperience => _yearsOfExperience;
   String? get previousWorkplace => _previousWorkplace;
   Map<String, String?> get guardDocUrls => _guardDocUrls;
+  Map<String, String?> get guardDocExpiry => _guardDocExpiry;
   bool get docsLoaded => _docsLoaded;
   /// Customer-only: full name from customer_profiles (may differ from guard name).
   String? get customerFullName => _customerFullName;
@@ -263,8 +265,8 @@ class AuthProvider extends ChangeNotifier {
   }
 
   /// Fetch guard document URLs from GET /auth/guards/{userId}/profile.
-  Future<void> fetchGuardDocs() async {
-    if (_userId == null || _docsLoaded) return;
+  Future<void> fetchGuardDocs({bool force = false}) async {
+    if (_userId == null || (_docsLoaded && !force)) return;
     try {
       final response = await _apiClient.dio.get('/auth/guards/$_userId/profile');
       final data = response.data['data'];
@@ -276,12 +278,30 @@ class AuthProvider extends ChangeNotifier {
           'criminal_check': data['criminal_check_url'] as String?,
           'driver_license': data['driver_license_url'] as String?,
         };
+        _guardDocExpiry = {
+          'id_card': data['id_card_expiry'] as String?,
+          'security_license': data['security_license_expiry'] as String?,
+          'training_cert': data['training_cert_expiry'] as String?,
+          'criminal_check': data['criminal_check_expiry'] as String?,
+          'driver_license': data['driver_license_expiry'] as String?,
+        };
         _docsLoaded = true;
         notifyListeners();
       }
     } catch (e) {
       debugPrint('[AuthProvider] fetchGuardDocs error: $e');
     }
+  }
+
+  /// Update own document expiry dates.
+  Future<void> updateDocExpiry(Map<String, String> expiry) async {
+    await _apiClient.dio.put('/auth/guards/me/expiry', data: expiry);
+    // Refresh local state
+    for (final entry in expiry.entries) {
+      final key = entry.key.replaceAll('_expiry', '');
+      _guardDocExpiry[key] = entry.value;
+    }
+    notifyListeners();
   }
 
   /// Request OTP from the backend for phone verification.
@@ -398,6 +418,7 @@ class AuthProvider extends ChangeNotifier {
     String? accountNumber,
     String? accountName,
     Map<String, File> files = const {},
+    Map<String, String> documentExpiry = const {},
   }) async {
     final formData = FormData();
 
@@ -420,6 +441,9 @@ class AuthProvider extends ChangeNotifier {
     }
     if (accountName != null) {
       formData.fields.add(MapEntry('account_name', accountName));
+    }
+    for (final entry in documentExpiry.entries) {
+      formData.fields.add(MapEntry(entry.key, entry.value));
     }
 
     for (final entry in files.entries) {

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -208,6 +208,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/profile/role", post(handlers::update_role))
         .route("/profile/customer", post(handlers::submit_customer_profile))
         .route("/guards/{user_id}/profile", get(handlers::get_public_guard_profile))
+        .route("/guards/me/expiry", put(handlers::update_own_expiry))
         .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile).put(handlers::admin_update_guard_profile))
         .route("/admin/customer-profile/{user_id}", get(handlers::get_customer_profile))
         .route("/admin/customer-applicants", get(handlers::list_customer_applicants))

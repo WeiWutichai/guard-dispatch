@@ -67,7 +67,7 @@ class MyApp extends StatelessWidget {
       child: LanguageProvider(
         notifier: langNotifier,
         child: MaterialApp(
-          title: 'PGuard Mobile',
+          title: 'P-Guard Mobile',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(

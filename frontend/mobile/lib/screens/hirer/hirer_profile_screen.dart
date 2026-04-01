@@ -7,8 +7,6 @@ import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 
 import 'hirer_profile_settings_screen.dart';
-import '../guard/contact_support_screen.dart';
-import '../notification_screen.dart';
 
 class HirerProfileScreen extends StatelessWidget {
   const HirerProfileScreen({super.key});
@@ -24,7 +22,7 @@ class HirerProfileScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // PGuard green header
+            // P-Guard green header
             Container(
               padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
               decoration: const BoxDecoration(
@@ -49,7 +47,7 @@ class HirerProfileScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'PGuard',
+                          'P-Guard',
                           style: GoogleFonts.inter(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -85,47 +83,10 @@ class HirerProfileScreen extends StatelessWidget {
                     _navigateTo(context, const HirerProfileSettingsScreen()),
               ),
               _SettingsItem(
-                icon: Icons.location_on_rounded,
-                iconBg: const Color(0xFF5856D6),
-                title: s.savedLocations,
-                onTap: () => _showComingSoon(context, s.savedLocations),
-              ),
-              _SettingsItem(
                 icon: Icons.credit_card_rounded,
                 iconBg: const Color(0xFFFF9500),
                 title: s.paymentMethods,
                 onTap: () => _showComingSoon(context, s.paymentMethods),
-              ),
-            ]),
-            const SizedBox(height: 24),
-
-            // Security & Notifications
-            _buildSettingsGroup(context, [
-              _SettingsItem(
-                icon: Icons.lock_rounded,
-                iconBg: const Color(0xFFFF3B30),
-                title: s.changePin,
-                onTap: () => _showComingSoon(context, s.changePin),
-              ),
-              _SettingsItem(
-                icon: Icons.notifications_rounded,
-                iconBg: const Color(0xFFFF3B30),
-                title: s.notifications,
-                onTap: () => _navigateTo(
-                  context,
-                  const NotificationScreen(isGuard: false),
-                ),
-              ),
-            ]),
-            const SizedBox(height: 24),
-
-            // Support
-            _buildSettingsGroup(context, [
-              _SettingsItem(
-                icon: Icons.help_rounded,
-                iconBg: const Color(0xFF34C759),
-                title: s.support,
-                onTap: () => _navigateTo(context, const ContactSupportScreen()),
               ),
             ]),
             const SizedBox(height: 40),

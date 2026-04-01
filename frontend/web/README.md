@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000/pguard-app](http://localhost:3000/pguard-app)
+Open [http://localhost:3000/p-guard-app](http://localhost:3000/p-guard-app)
 
 ## Docker
 

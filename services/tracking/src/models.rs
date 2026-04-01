@@ -98,6 +98,7 @@ pub struct GuardLocationWithName {
     pub speed: Option<f32>,
     pub recorded_at: DateTime<Utc>,
     pub is_online: bool,
+    pub has_active_job: bool,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -111,6 +112,7 @@ pub struct GuardLocationWithNameRow {
     pub speed: Option<f32>,
     pub recorded_at: DateTime<Utc>,
     pub is_online: bool,
+    pub has_active_job: bool,
 }
 
 impl From<GuardLocationWithNameRow> for GuardLocationWithName {
@@ -125,6 +127,7 @@ impl From<GuardLocationWithNameRow> for GuardLocationWithName {
             speed: row.speed,
             recorded_at: row.recorded_at,
             is_online: row.is_online,
+            has_active_job: row.has_active_job,
         }
     }
 }

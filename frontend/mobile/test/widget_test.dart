@@ -7,9 +7,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pguard_mobile/main.dart';
-import 'package:pguard_mobile/services/pin_storage_service.dart';
-import 'package:pguard_mobile/services/language_service.dart';
+import 'package:p-guard_mobile/main.dart';
+import 'package:p-guard_mobile/services/pin_storage_service.dart';
+import 'package:p-guard_mobile/services/language_service.dart';
 
 void main() {
   testWidgets('Counter increments smoke test', (WidgetTester tester) async {

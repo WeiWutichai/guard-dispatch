@@ -11,7 +11,7 @@ All traffic enters through a single Nginx gateway. Internal services are not exp
 
 ```
 nginx-gateway (port 80/443 -- single entry point)
-├── web-admin                  (Next.js 16, /pguard-app)
+├── web-admin                  (Next.js 16, /p-guard-app)
 ├── rust-auth-service          (Port 3001, /auth/*)
 ├── rust-booking-service       (Port 3002, /booking/*)
 ├── rust-tracking-service      (Port 3003, /ws/track + /tracking/*)
@@ -98,7 +98,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This starts all 12 containers. The web admin portal is available at `http://localhost/pguard-app`.
+This starts all 12 containers. The web admin portal is available at `http://localhost/p-guard-app`.
 
 ### 3. Run Database Migrations (if developing locally outside Docker)
 
@@ -134,7 +134,7 @@ All services are accessed through the Nginx gateway. Direct access to internal p
 | Notification | `/notification/*` | -- | `/notification/swagger-ui/` |
 | Chat | `/chat/*` | `/ws/chat` | `/chat/swagger-ui/` |
 | MediaSoup | `/call/*` | -- | -- |
-| Web Admin | `/pguard-app` | -- | -- |
+| Web Admin | `/p-guard-app` | -- | -- |
 
 Swagger UI is available for each Rust service during development. Access via `http://localhost/<service>/swagger-ui/`.
 
