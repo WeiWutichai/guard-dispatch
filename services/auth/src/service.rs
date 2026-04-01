@@ -19,6 +19,13 @@ use shared::sms::{self, SmsConfig};
 
 use shared::models::ApprovalStatus;
 
+/// Escape ILIKE special characters to prevent wildcard injection / ReDoS.
+fn escape_ilike(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 use crate::models::{
     AuthResponse, GuardProfileFormData, GuardProfileResponse, GuardProfileRow,
     ListUsersQuery, LoginRequest, OtpRow, PaginatedUsers, PhoneLoginRequest, RegisterRequest,
@@ -178,6 +185,9 @@ pub async fn login(
     ip_address: Option<String>,
     device_info: Option<String>,
 ) -> Result<AuthResponse, AppError> {
+    // Always run password verification to prevent timing-based user enumeration.
+    // If user not found, verify against a dummy hash (constant time).
+    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let user = sqlx::query_as::<_, UserRow>(
         r#"
         SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
@@ -187,10 +197,22 @@ pub async fn login(
     )
     .bind(&req.email)
     .fetch_optional(db)
-    .await?
-    .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
+    .await?;
 
-    let valid = verify_password(&req.password, &user.password_hash).await?;
+    let (found_user, valid) = match user {
+        Some(u) => {
+            let v = verify_password(&req.password, &u.password_hash).await?;
+            (Some(u), v)
+        }
+        None => {
+            let _ = verify_password(&req.password, dummy_hash).await;
+            (None, false)
+        }
+    };
+
+    let user = found_user
+        .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
+
     if !valid || !user.is_active || user.approval_status != ApprovalStatus::Approved {
         // Combine inactive, pending/rejected, and wrong-password into same error to prevent user enumeration
         return Err(AppError::Unauthorized("Invalid email or password".to_string()));
@@ -331,6 +353,9 @@ pub async fn login_with_phone(
     ip_address: Option<String>,
     device_info: Option<String>,
 ) -> Result<AuthResponse, AppError> {
+    // Always run password verification to prevent timing-based user enumeration.
+    // If user not found, verify against a dummy hash (constant time).
+    let dummy_hash = "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let user = sqlx::query_as::<_, UserRow>(
         r#"
         SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
@@ -340,10 +365,22 @@ pub async fn login_with_phone(
     )
     .bind(&req.phone)
     .fetch_optional(db)
-    .await?
-    .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
+    .await?;
 
-    let valid = verify_password(&req.password, &user.password_hash).await?;
+    let (found_user, valid) = match user {
+        Some(u) => {
+            let v = verify_password(&req.password, &u.password_hash).await?;
+            (Some(u), v)
+        }
+        None => {
+            let _ = verify_password(&req.password, dummy_hash).await;
+            (None, false)
+        }
+    };
+
+    let user = found_user
+        .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
+
     if !valid || !user.is_active {
         return Err(AppError::Unauthorized("Invalid phone or password".to_string()));
     }
@@ -1009,7 +1046,7 @@ pub async fn list_users(
     let search_pattern = query.search
         .as_ref()
         .filter(|s| !s.is_empty())
-        .map(|s| format!("%{s}%"));
+        .map(|s| format!("%{}%", escape_ilike(s)));
 
     let role_filter = query.role.as_ref().filter(|s| !s.is_empty()).cloned();
     let status_filter = query.approval_status.as_ref().filter(|s| !s.is_empty()).cloned();
@@ -1421,6 +1458,35 @@ pub async fn submit_guard_profile(
 }
 
 // =============================================================================
+// Authorization: check if a customer has an active booking with a guard
+// =============================================================================
+
+pub async fn has_active_booking_with_guard(
+    db: &PgPool,
+    customer_id: Uuid,
+    guard_id: Uuid,
+) -> Result<bool, AppError> {
+    let exists: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM booking.assignments a
+            INNER JOIN booking.guard_requests r ON r.id = a.request_id
+            WHERE r.customer_id = $1
+              AND a.guard_id = $2
+              AND a.status NOT IN ('cancelled', 'declined', 'completed')
+        )
+        "#,
+    )
+    .bind(customer_id)
+    .bind(guard_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(exists)
+}
+
+// =============================================================================
 // Get Guard Profile (Admin)
 // =============================================================================
 
@@ -1699,7 +1765,7 @@ pub async fn list_customer_applicants(
     let search_pattern = query.search
         .as_ref()
         .filter(|s| !s.is_empty())
-        .map(|s| format!("%{s}%"));
+        .map(|s| format!("%{}%", escape_ilike(s)));
 
     let status_filter = query.approval_status.as_ref().filter(|s| !s.is_empty()).cloned();
 

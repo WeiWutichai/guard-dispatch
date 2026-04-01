@@ -228,14 +228,14 @@ services:
     expose:
       - "5432"
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-guard_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-guard_pass}
-      - POSTGRES_DB=${POSTGRES_DB:-guard_dispatch_db}
+      - POSTGRES_USER=${POSTGRES_USER:?POSTGRES_USER is required}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=${POSTGRES_DB:?POSTGRES_DB is required}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./database/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-guard_user} -d ${POSTGRES_DB:-guard_dispatch_db}" ]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -253,11 +253,11 @@ services:
     # No host ports — only backend network services can connect
     expose:
       - "6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-redis_secret_pass}
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     volumes:
       - redis_cache_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret_pass}", "ping" ]
+      test: [ "CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -274,11 +274,11 @@ services:
     # No host ports — only backend network services can connect
     expose:
       - "6379"
-    command: redis-server --maxmemory 128mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:-redis_secret_pass}
+    command: redis-server --maxmemory 128mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     volumes:
       - redis_pubsub_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret_pass}", "ping" ]
+      test: [ "CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping" ]
       interval: 10s
       timeout: 5s
       retries: 5

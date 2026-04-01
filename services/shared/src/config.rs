@@ -123,6 +123,11 @@ impl RedisConfig {
 impl JwtConfig {
     pub fn from_env() -> Result<Self, AppError> {
         let secret = require_env("JWT_SECRET")?;
+        if secret.len() < 32 {
+            return Err(AppError::Internal(
+                "JWT_SECRET must be at least 32 characters".to_string(),
+            ));
+        }
         let encoding_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
         let decoding_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
         Ok(Self {

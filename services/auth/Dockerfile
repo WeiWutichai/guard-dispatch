@@ -38,7 +38,7 @@ COPY services/auth/src services/auth/src
 RUN find services/shared/src services/auth/src -name '*.rs' | xargs touch && cargo build --release -p auth-service
 
 # Stage 2: Runtime — must match the GLIBC version of the rust:1-slim builder
-FROM debian:trixie-slim AS runtime
+FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
   && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser

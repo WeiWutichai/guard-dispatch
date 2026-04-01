@@ -646,9 +646,20 @@ pub async fn get_guard_profile(
 )]
 pub async fn get_public_guard_profile(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(user_id): Path<Uuid>,
 ) -> Result<Json<shared::models::ApiResponse<PublicGuardProfileResponse>>, AppError> {
+    // Authorization: only the guard themselves, admins, or customers with active bookings
+    if user.role != "admin" && user.user_id != user_id {
+        let has_booking = crate::service::has_active_booking_with_guard(
+            &state.db, user.user_id, user_id,
+        ).await?;
+        if !has_booking {
+            return Err(AppError::Forbidden(
+                "You don't have permission to view this guard's profile".to_string(),
+            ));
+        }
+    }
     let full_profile = crate::service::get_guard_profile(
         &state.db,
         &state.s3_client,
