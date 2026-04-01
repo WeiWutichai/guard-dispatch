@@ -240,6 +240,7 @@ where
         };
 
         // Strategy 2: access_token cookie
+        let from_bearer = token.is_some();
         let token = token.or_else(|| {
             parts
                 .headers
@@ -251,6 +252,22 @@ where
 
         let token = token
             .ok_or_else(|| AppError::Unauthorized("Missing authentication token".to_string()))?;
+
+        // CSRF protection: when auth comes from cookies (not Bearer header),
+        // require X-Requested-With header on state-changing methods.
+        // Browsers block cross-origin custom headers, so forms/links can't forge this.
+        if !from_bearer {
+            let method = &parts.method;
+            let is_state_changing = method == axum::http::Method::POST
+                || method == axum::http::Method::PUT
+                || method == axum::http::Method::PATCH
+                || method == axum::http::Method::DELETE;
+            if is_state_changing && !parts.headers.contains_key("x-requested-with") {
+                return Err(AppError::Forbidden(
+                    "Missing X-Requested-With header".to_string(),
+                ));
+            }
+        }
 
         let claims = decode_jwt_with_key(&token, state.decoding_key())?;
 

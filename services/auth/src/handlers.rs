@@ -90,7 +90,7 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
-) -> Result<(HeaderMap, Json<ApiResponse<AuthResponse>>), AppError> {
+) -> Result<(HeaderMap, Json<ApiResponse<crate::models::WebAuthResponse>>), AppError> {
     let ip_address = headers
         .get("X-Real-IP")
         .and_then(|v| v.to_str().ok())
@@ -111,7 +111,9 @@ pub async fn login(
     .await?;
 
     let cookie_headers = auth_cookie_headers(&auth);
-    Ok((cookie_headers, Json(ApiResponse::success(auth))))
+    // Return WebAuthResponse (no tokens in body) — tokens are in httpOnly cookies.
+    let web_response: crate::models::WebAuthResponse = (&auth).into();
+    Ok((cookie_headers, Json(ApiResponse::success(web_response))))
 }
 
 /// Check user status by phone + password without issuing tokens.
@@ -147,7 +149,7 @@ pub async fn phone_login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<PhoneLoginRequest>,
-) -> Result<(HeaderMap, Json<ApiResponse<AuthResponse>>), AppError> {
+) -> Result<(HeaderMap, Json<ApiResponse<crate::models::WebAuthResponse>>), AppError> {
     let ip_address = headers
         .get("X-Real-IP")
         .and_then(|v| v.to_str().ok())
@@ -168,7 +170,9 @@ pub async fn phone_login(
     .await?;
 
     let cookie_headers = auth_cookie_headers(&auth);
-    Ok((cookie_headers, Json(ApiResponse::success(auth))))
+    // Return WebAuthResponse (no tokens in body) — tokens are in httpOnly cookies.
+    let web_response: crate::models::WebAuthResponse = (&auth).into();
+    Ok((cookie_headers, Json(ApiResponse::success(web_response))))
 }
 
 #[utoipa::path(
@@ -186,7 +190,7 @@ pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<RefreshRequest>,
-) -> Result<(HeaderMap, Json<ApiResponse<AuthResponse>>), AppError> {
+) -> Result<(HeaderMap, Json<ApiResponse<crate::models::WebAuthResponse>>), AppError> {
     // Accept refresh_token from body or cookie
     let refresh_tok = if req.refresh_token.is_empty() {
         // Try to read from cookie
@@ -219,7 +223,9 @@ pub async fn refresh_token(
             .await?;
 
     let cookie_headers = auth_cookie_headers(&auth);
-    Ok((cookie_headers, Json(ApiResponse::success(auth))))
+    // Return WebAuthResponse (no tokens in body) — tokens are in httpOnly cookies.
+    let web_response: crate::models::WebAuthResponse = (&auth).into();
+    Ok((cookie_headers, Json(ApiResponse::success(web_response))))
 }
 
 #[utoipa::path(

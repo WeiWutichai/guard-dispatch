@@ -53,9 +53,50 @@ pub async fn ws_handler(
 async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
     tracing::info!("Chat WebSocket connected: user_id={}", user.user_id);
 
-    while let Some(msg) = socket.recv().await {
+    // Rate limiting: max 5 messages per second per connection
+    let mut last_message_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    let min_interval = std::time::Duration::from_millis(200); // 5 msg/s
+
+    // Ping/pong: detect zombie connections (same pattern as GPS WebSocket)
+    let ping_interval = std::time::Duration::from_secs(30);
+    let pong_timeout = std::time::Duration::from_secs(10);
+    let mut last_activity = std::time::Instant::now();
+    let mut ping_sent_at: Option<std::time::Instant> = None;
+
+    loop {
+        let wait_duration = if let Some(sent) = ping_sent_at {
+            pong_timeout.saturating_sub(sent.elapsed())
+        } else {
+            ping_interval.saturating_sub(last_activity.elapsed())
+        };
+
+        let msg = match tokio::time::timeout(wait_duration, socket.recv()).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => break,
+            Err(_) => {
+                if ping_sent_at.is_some() {
+                    tracing::warn!("Chat WS pong timeout: user_id={}", user.user_id);
+                    break;
+                }
+                if socket.send(Message::Ping(vec![].into())).await.is_err() {
+                    break;
+                }
+                ping_sent_at = Some(std::time::Instant::now());
+                continue;
+            }
+        };
+
         let text = match msg {
-            Ok(Message::Text(text)) => text,
+            Ok(Message::Text(text)) => {
+                last_activity = std::time::Instant::now();
+                ping_sent_at = None;
+                text
+            }
+            Ok(Message::Pong(_)) => {
+                last_activity = std::time::Instant::now();
+                ping_sent_at = None;
+                continue;
+            }
             Ok(Message::Close(_)) => break,
             Err(e) => {
                 tracing::warn!("WebSocket recv error: {e}");
@@ -63,6 +104,13 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
             }
             _ => continue,
         };
+
+        // Rate limit: drop messages that arrive too fast
+        let now = std::time::Instant::now();
+        if now.duration_since(last_message_at) < min_interval {
+            continue;
+        }
+        last_message_at = now;
 
         let incoming: IncomingChatMessage = match serde_json::from_str(&text) {
             Ok(m) => m,

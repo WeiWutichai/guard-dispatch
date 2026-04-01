@@ -22,6 +22,13 @@ use shared::sms::{self, SmsConfig};
 
 use shared::models::ApprovalStatus;
 
+/// SHA-256 hash a value and return hex string.
+/// Used for refresh tokens and OTP codes — prevents exposure from DB compromise.
+fn sha256_hex(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(input.as_bytes()))
+}
+
 /// Escape ILIKE special characters to prevent wildcard injection / ReDoS.
 fn escape_ilike(s: &str) -> String {
     s.replace('\\', "\\\\")
@@ -257,8 +264,10 @@ pub async fn login(
     .await?;
 
     let refresh_token = Uuid::new_v4().to_string();
+    let refresh_token_hash = sha256_hex(&refresh_token);
     let expires_at = Utc::now() + chrono::TimeDelta::days(REFRESH_TOKEN_DAYS);
 
+    // Store SHA-256 hash of refresh token — prevents token reuse from DB dump
     sqlx::query(
         r#"
         INSERT INTO auth.sessions (user_id, refresh_token, device_info, ip_address, expires_at)
@@ -266,7 +275,7 @@ pub async fn login(
         "#,
     )
     .bind(user.id)
-    .bind(&refresh_token)
+    .bind(&refresh_token_hash)
     .bind(&device_info)
     .bind(&ip_address)
     .bind(expires_at)
@@ -446,8 +455,10 @@ pub async fn login_with_phone(
     .await?;
 
     let refresh_token = Uuid::new_v4().to_string();
+    let refresh_token_hash = sha256_hex(&refresh_token);
     let expires_at = Utc::now() + chrono::TimeDelta::days(REFRESH_TOKEN_DAYS);
 
+    // Store SHA-256 hash of refresh token — prevents token reuse from DB dump
     sqlx::query(
         r#"
         INSERT INTO auth.sessions (user_id, refresh_token, device_info, ip_address, expires_at)
@@ -455,7 +466,7 @@ pub async fn login_with_phone(
         "#,
     )
     .bind(user.id)
-    .bind(&refresh_token)
+    .bind(&refresh_token_hash)
     .bind(&device_info)
     .bind(&ip_address)
     .bind(expires_at)
@@ -485,9 +496,10 @@ pub async fn refresh_token(
     jwt_config: &JwtConfig,
     refresh_token: &str,
 ) -> Result<AuthResponse, AppError> {
-    // Atomic rotation: consume the old refresh token and issue a new one in a single UPDATE.
-    // This prevents race conditions where two concurrent requests could both use the same token.
+    // Hash incoming token to match stored hash, then atomically rotate.
+    let incoming_hash = sha256_hex(refresh_token);
     let new_refresh_token = Uuid::new_v4().to_string();
+    let new_refresh_hash = sha256_hex(&new_refresh_token);
     let new_expires_at = Utc::now() + chrono::TimeDelta::days(REFRESH_TOKEN_DAYS);
 
     let session = sqlx::query_as::<_, SessionRow>(
@@ -498,8 +510,8 @@ pub async fn refresh_token(
         RETURNING id, user_id, refresh_token, expires_at
         "#,
     )
-    .bind(refresh_token)
-    .bind(&new_refresh_token)
+    .bind(&incoming_hash)
+    .bind(&new_refresh_hash)
     .bind(new_expires_at)
     .fetch_optional(db)
     .await?
@@ -802,9 +814,7 @@ pub async fn request_otp(
     let expires_at = Utc::now() + chrono::TimeDelta::minutes(otp_config.expiry_minutes);
 
     // Hash OTP before storing — prevents exposure from DB compromise/backup leak.
-    // SHA-256 is sufficient here (short-lived codes with attempt limits).
-    use sha2::{Digest, Sha256};
-    let code_hash = format!("{:x}", Sha256::digest(code.as_bytes()));
+    let code_hash = sha256_hex(&code);
 
     // Store hash in DB (never store plaintext OTP)
     sqlx::query(
@@ -882,8 +892,7 @@ pub async fn verify_otp(
     }
 
     // Hash the submitted code to compare against stored hash.
-    use sha2::{Digest, Sha256};
-    let submitted_hash = format!("{:x}", Sha256::digest(code.as_bytes()));
+    let submitted_hash = sha256_hex(code);
 
     // Constant-time comparison to prevent timing side-channel attacks.
     use subtle::ConstantTimeEq;
