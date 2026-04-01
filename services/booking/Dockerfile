@@ -30,7 +30,7 @@ COPY services/booking/src services/booking/src
 
 RUN find services/shared/src services/booking/src -name '*.rs' | xargs touch && cargo build --release -p booking-service
 
-FROM debian:trixie-slim AS runtime
+FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
     && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
