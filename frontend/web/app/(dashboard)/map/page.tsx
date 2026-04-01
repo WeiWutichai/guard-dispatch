@@ -126,10 +126,17 @@ export default function MapPage() {
   }, []);
 
   useEffect(() => {
-    void fetchLocations();
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(() => void fetchLocations(), 30_000);
-    return () => clearInterval(interval);
+    // Initial fetch + auto-refresh every 30 seconds
+    let cancelled = false;
+    const load = async () => {
+      if (!cancelled) await fetchLocations();
+    };
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [fetchLocations]);
 
   const displayGuards = useMemo(() => guards, [guards]);

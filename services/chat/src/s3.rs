@@ -145,6 +145,7 @@ pub async fn get_signed_url(
 }
 
 /// Delete file from S3/MinIO
+#[allow(dead_code)]
 pub async fn delete_file(
     client: &aws_sdk_s3::Client,
     bucket: &str,

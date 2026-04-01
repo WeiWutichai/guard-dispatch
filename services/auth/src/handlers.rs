@@ -858,6 +858,7 @@ mod tests {
             refresh_token: "refresh-uuid-token".to_string(),
             token_type: "Bearer".to_string(),
             expires_in: 86400, // 24 hours
+            role: "guard".to_string(),
         }
     }
 

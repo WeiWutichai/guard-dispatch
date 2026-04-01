@@ -962,7 +962,7 @@ pub async fn register_with_otp(
     // None means the user hasn't selected a role yet (shows as "ยังไม่ได้ระบุ" in admin).
     // Capture both checks before consuming the Option via .map().
     let is_guard = req.role == Some(UserRole::Guard);
-    let is_role_none = req.role.is_none();
+    let _is_role_none = req.role.is_none();
     let role_str: Option<String> = req.role.map(|r| r.to_string());
 
     // Create or re-register user account with pending approval status.

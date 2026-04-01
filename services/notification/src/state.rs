@@ -34,7 +34,9 @@ pub struct AppState {
     // NOTE: Notification service currently uses redis::Client.
     // TODO: Convert to redis::aio::MultiplexedConnection per CLAUDE.md pattern
     // when implementing Redis caching for notification queries.
+    #[allow(dead_code)]
     pub redis_cache: redis::Client,
+    #[allow(dead_code)]
     pub redis_pubsub: redis::Client,
     pub jwt_config: JwtConfig,
     pub fcm_config: FcmConfig,

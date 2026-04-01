@@ -57,6 +57,16 @@ pub fn validate_upload(mime_type: &str, file_size: usize, data: &[u8]) -> Result
     Ok(())
 }
 
+/// Detect MIME type from magic bytes (public wrapper).
+pub fn detect_mime(data: &[u8]) -> Option<&'static str> {
+    detect_mime_from_bytes(data)
+}
+
+/// Check if a MIME type is a video format.
+pub fn is_video_mime(mime: &str) -> bool {
+    mime.starts_with("video/")
+}
+
 /// Get file extension from MIME type
 pub fn mime_to_extension(mime_type: &str) -> &str {
     match mime_type {

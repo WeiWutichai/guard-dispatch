@@ -440,7 +440,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         let token = encode_jwt(user_id, "guard", TEST_SECRET, 24).unwrap();
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .body(())
             .unwrap();
@@ -458,7 +458,7 @@ mod tests {
         let user_id = Uuid::new_v4();
         let token = encode_jwt(user_id, "admin", TEST_SECRET, 24).unwrap();
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header(header::COOKIE, format!("access_token={token}; other=val"))
             .body(())
             .unwrap();
@@ -478,7 +478,7 @@ mod tests {
         let bearer_token = encode_jwt(bearer_id, "guard", TEST_SECRET, 24).unwrap();
         let cookie_token = encode_jwt(cookie_id, "admin", TEST_SECRET, 24).unwrap();
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header(header::AUTHORIZATION, format!("Bearer {bearer_token}"))
             .header(
                 header::COOKIE,
@@ -498,7 +498,7 @@ mod tests {
     async fn auth_user_fails_with_no_token() {
         let state = Arc::new(TestState::new(TEST_SECRET));
 
-        let mut request = Request::builder().body(()).unwrap();
+        let request = Request::builder().body(()).unwrap();
 
         let result =
             AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
@@ -509,7 +509,7 @@ mod tests {
     async fn auth_user_fails_with_invalid_bearer() {
         let state = Arc::new(TestState::new(TEST_SECRET));
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header(header::AUTHORIZATION, "Bearer garbage.token.here")
             .body(())
             .unwrap();
@@ -524,7 +524,7 @@ mod tests {
         let state = Arc::new(TestState::new(TEST_SECRET));
         let token = encode_jwt(Uuid::new_v4(), "admin", "different-secret-key!!", 24).unwrap();
 
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header(header::COOKIE, format!("access_token={token}"))
             .body(())
             .unwrap();

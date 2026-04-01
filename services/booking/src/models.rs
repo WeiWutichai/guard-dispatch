@@ -852,5 +852,30 @@ pub struct ProgressReportResponse {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub photo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<Vec<ProgressReportMediaItem>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A single media attachment in a progress report.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProgressReportMediaItem {
+    pub id: Uuid,
+    pub url: String,
+    pub mime_type: String,
+    pub file_size: i32,
+    pub sort_order: i32,
+}
+
+/// Database row for progress report media.
+#[allow(dead_code)]
+#[derive(Debug, sqlx::FromRow)]
+pub struct ProgressReportMediaRow {
+    pub id: Uuid,
+    pub report_id: Uuid,
+    pub file_key: String,
+    pub mime_type: String,
+    pub file_size: Option<i32>,
+    pub sort_order: i32,
     pub created_at: DateTime<Utc>,
 }

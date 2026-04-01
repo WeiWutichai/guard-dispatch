@@ -77,7 +77,7 @@ where
 
     let decoding_key = state.decoding_key();
     let user_id = token.and_then(|t| {
-        decode_jwt_with_key(&t, &decoding_key)
+        decode_jwt_with_key(&t, decoding_key)
             .ok()
             .map(|claims| claims.sub)
     });

@@ -148,25 +148,19 @@ pub async fn create_request(
     }
 
     // Validate coordinates
-    if let Some(lat) = req.location_lat {
-        if !(-90.0..=90.0).contains(&lat) {
-            return Err(AppError::BadRequest("Latitude must be between -90 and 90".to_string()));
-        }
+    if !(-90.0..=90.0).contains(&req.location_lat) {
+        return Err(AppError::BadRequest("Latitude must be between -90 and 90".to_string()));
     }
-    if let Some(lng) = req.location_lng {
-        if !(-180.0..=180.0).contains(&lng) {
-            return Err(AppError::BadRequest("Longitude must be between -180 and 180".to_string()));
-        }
+    if !(-180.0..=180.0).contains(&req.location_lng) {
+        return Err(AppError::BadRequest("Longitude must be between -180 and 180".to_string()));
     }
-    if let (Some(lat), Some(lng)) = (req.location_lat, req.location_lng) {
-        if lat == 0.0 && lng == 0.0 {
-            return Err(AppError::BadRequest("Invalid coordinates (0,0)".to_string()));
-        }
+    if req.location_lat == 0.0 && req.location_lng == 0.0 {
+        return Err(AppError::BadRequest("Invalid coordinates (0,0)".to_string()));
     }
 
     // Validate booked_hours
     if let Some(hours) = req.booked_hours {
-        if hours < 1 || hours > 720 {
+        if !(1..=720).contains(&hours) {
             return Err(AppError::BadRequest("Booked hours must be between 1 and 720".to_string()));
         }
     }
@@ -2411,6 +2405,7 @@ struct ProgressAssignmentCheck {
 /// Submit an hourly progress report (guard only).
 /// Uses runtime queries (sqlx::query) because progress_reports table is new and
 /// not available at compile-time without a running DB.
+#[allow(clippy::too_many_arguments)]
 pub async fn submit_progress_report(
     db: &PgPool,
     s3_client: &aws_sdk_s3::Client,
@@ -2580,12 +2575,13 @@ pub async fn submit_progress_report(
         hour_number: inserted.hour_number,
         message: inserted.message,
         photo_url,
-        media,
+        media: Some(media),
         created_at: inserted.created_at,
     })
 }
 
 /// List progress reports for an assignment (guard, customer, or admin).
+#[allow(clippy::too_many_arguments)]
 pub async fn list_progress_reports(
     db: &PgPool,
     s3_client: &aws_sdk_s3::Client,
@@ -2676,7 +2672,7 @@ pub async fn list_progress_reports(
                     id: m.id,
                     url,
                     mime_type: m.mime_type,
-                    file_size: m.file_size,
+                    file_size: m.file_size.unwrap_or(0),
                     sort_order: m.sort_order,
                 });
             }
@@ -2712,7 +2708,7 @@ pub async fn list_progress_reports(
             hour_number: row.hour_number,
             message: row.message,
             photo_url,
-            media,
+            media: Some(media),
             created_at: row.created_at,
         });
     }

@@ -11,6 +11,7 @@ use shared::models::ApiResponse;
 
 /// Schema-only struct for documenting multipart upload in Swagger UI.
 /// Not used in code — Axum uses `Multipart` extractor directly.
+#[allow(dead_code)]
 #[derive(utoipa::ToSchema)]
 pub struct AttachmentUploadForm {
     /// UUID of the conversation

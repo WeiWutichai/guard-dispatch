@@ -124,6 +124,7 @@ pub struct UserResponse {
 // Database row types
 // =============================================================================
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct UserRow {
     pub id: Uuid,
@@ -164,6 +165,7 @@ impl From<UserRow> for UserResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct SessionRow {
     pub id: Uuid,
@@ -435,6 +437,7 @@ pub struct SubmitCustomerProfileRequest {
 }
 
 /// Customer profile as stored in `auth.customer_profiles`.
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct CustomerProfileRow {
     pub user_id: Uuid,
@@ -464,6 +467,7 @@ pub struct CustomerProfileResponse {
 // OTP Database row types
 // =============================================================================
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct OtpRow {
     pub id: Uuid,
