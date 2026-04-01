@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
       })
       .finally(() => setIsLoading(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run once on mount only; redirect effect handles subsequent navigation
   }, []);
 
   // Redirect to login if not authenticated (except on login page)

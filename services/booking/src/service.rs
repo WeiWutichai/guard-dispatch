@@ -189,7 +189,11 @@ pub async fn create_request(
 
     let price = req
         .offered_price
-        .map(|p| rust_decimal::Decimal::try_from(p).unwrap_or_default());
+        .map(|p| {
+            rust_decimal::Decimal::try_from(p)
+                .map_err(|_| AppError::BadRequest("Invalid offered price value".to_string()))
+        })
+        .transpose()?;
 
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
