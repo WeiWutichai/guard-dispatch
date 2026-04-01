@@ -229,19 +229,34 @@ mod tests {
 
     #[test]
     fn jwt_config_reads_from_env() {
-        with_env_vars(&[("JWT_SECRET", "super-secret-key")], || {
-            let cfg = JwtConfig::from_env().unwrap();
-            assert_eq!(cfg.secret, "super-secret-key");
-            assert_eq!(cfg.expiry_hours, 24); // default
-        });
+        with_env_vars(
+            &[(
+                "JWT_SECRET",
+                "super-secret-key-that-is-at-least-32-chars-long!",
+            )],
+            || {
+                let cfg = JwtConfig::from_env().unwrap();
+                assert_eq!(
+                    cfg.secret,
+                    "super-secret-key-that-is-at-least-32-chars-long!"
+                );
+                assert_eq!(cfg.expiry_hours, 24); // default
+            },
+        );
     }
 
     #[test]
     fn jwt_config_custom_expiry() {
-        with_env_vars(&[("JWT_SECRET", "key"), ("JWT_EXPIRY_HOURS", "48")], || {
-            let cfg = JwtConfig::from_env().unwrap();
-            assert_eq!(cfg.expiry_hours, 48);
-        });
+        with_env_vars(
+            &[
+                ("JWT_SECRET", "a]strong-secret-that-is-at-least-32-chars!"),
+                ("JWT_EXPIRY_HOURS", "48"),
+            ],
+            || {
+                let cfg = JwtConfig::from_env().unwrap();
+                assert_eq!(cfg.expiry_hours, 48);
+            },
+        );
     }
 
     #[test]
@@ -250,6 +265,14 @@ mod tests {
         clear_env_vars(&["JWT_SECRET"]);
         let result = JwtConfig::from_env();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn jwt_config_fails_with_short_secret() {
+        with_env_vars(&[("JWT_SECRET", "too-short")], || {
+            let result = JwtConfig::from_env();
+            assert!(result.is_err());
+        });
     }
 
     #[test]
