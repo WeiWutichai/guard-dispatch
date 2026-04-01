@@ -278,10 +278,10 @@ pub async fn list_all_locations(
     user: AuthUser,
     Query(params): Query<LocationsQuery>,
 ) -> Result<Json<ApiResponse<Vec<GuardLocationWithName>>>, AppError> {
-    // Only admins and customers can view the admin map overview
-    if user.role == "guard" {
+    // Only admins can view bulk guard locations
+    if user.role != "admin" {
         return Err(AppError::Forbidden(
-            "Guards cannot access bulk location data".to_string(),
+            "Only admins can access bulk location data".to_string(),
         ));
     }
 

@@ -193,6 +193,17 @@ pub async fn mark_read(
     Path(id): Path<Uuid>,
     Query(query): Query<ListConversationsQuery>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
+    // Authorization: only participants or admins can mark conversations as read
+    if user.role != "admin" {
+        let is_participant = crate::service::is_conversation_participant_by_conversation(
+            &state.db, id, user.user_id,
+        ).await?;
+        if !is_participant {
+            return Err(AppError::Forbidden(
+                "You are not a participant of this conversation".to_string(),
+            ));
+        }
+    }
     let acting_role = query.role.as_deref().unwrap_or(&user.role);
     crate::service::mark_read(&state.db, id, user.user_id, acting_role).await?;
     Ok(Json(ApiResponse::success(())))

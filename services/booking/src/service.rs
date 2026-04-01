@@ -147,6 +147,37 @@ pub async fn create_request(
         return Err(AppError::BadRequest("Address is required".to_string()));
     }
 
+    // Validate coordinates
+    if let Some(lat) = req.location_lat {
+        if !(-90.0..=90.0).contains(&lat) {
+            return Err(AppError::BadRequest("Latitude must be between -90 and 90".to_string()));
+        }
+    }
+    if let Some(lng) = req.location_lng {
+        if !(-180.0..=180.0).contains(&lng) {
+            return Err(AppError::BadRequest("Longitude must be between -180 and 180".to_string()));
+        }
+    }
+    if let (Some(lat), Some(lng)) = (req.location_lat, req.location_lng) {
+        if lat == 0.0 && lng == 0.0 {
+            return Err(AppError::BadRequest("Invalid coordinates (0,0)".to_string()));
+        }
+    }
+
+    // Validate booked_hours
+    if let Some(hours) = req.booked_hours {
+        if hours < 1 || hours > 720 {
+            return Err(AppError::BadRequest("Booked hours must be between 1 and 720".to_string()));
+        }
+    }
+
+    // Validate offered_price
+    if let Some(price) = req.offered_price {
+        if price < 0.0 {
+            return Err(AppError::BadRequest("Offered price cannot be negative".to_string()));
+        }
+    }
+
     let urgency_str = serde_json::to_value(&req.urgency)
         .map_err(|e| AppError::Internal(format!("Failed to serialize urgency: {e}")))?
         .as_str()

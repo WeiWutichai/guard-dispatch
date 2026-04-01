@@ -39,6 +39,12 @@ pub async fn create_request(
     user: AuthUser,
     Json(req): Json<CreateRequestDto>,
 ) -> Result<Json<ApiResponse<GuardRequestResponse>>, AppError> {
+    // Only customers (and admins) can create booking requests
+    if user.role == "guard" {
+        return Err(AppError::Forbidden(
+            "Guards cannot create booking requests".to_string(),
+        ));
+    }
     let request = crate::service::create_request(&state.db, user.user_id, req).await?;
     Ok(Json(ApiResponse::success(request)))
 }
@@ -585,9 +591,15 @@ pub async fn get_customer_active_job(
 )]
 pub async fn available_guards(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Query(query): Query<AvailableGuardsQuery>,
 ) -> Result<Json<ApiResponse<Vec<AvailableGuardResponse>>>, AppError> {
+    // Only customers and admins can search for available guards
+    if user.role == "guard" {
+        return Err(AppError::Forbidden(
+            "Guards cannot search for available guards".to_string(),
+        ));
+    }
     let guards = crate::service::list_available_guards(&state.db, query).await?;
     Ok(Json(ApiResponse::success(guards)))
 }
