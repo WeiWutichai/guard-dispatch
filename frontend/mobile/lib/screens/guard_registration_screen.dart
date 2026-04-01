@@ -274,6 +274,18 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
             ? null
             : _accountNameController.text.trim(),
         files: filesToUpload,
+        documentExpiry: {
+          if (_documentExpiry['idCard'] != null)
+            'id_card_expiry': _documentExpiry['idCard']!.toIso8601String().split('T').first,
+          if (_documentExpiry['securityLicense'] != null)
+            'security_license_expiry': _documentExpiry['securityLicense']!.toIso8601String().split('T').first,
+          if (_documentExpiry['trainingCert'] != null)
+            'training_cert_expiry': _documentExpiry['trainingCert']!.toIso8601String().split('T').first,
+          if (_documentExpiry['criminalCheck'] != null)
+            'criminal_check_expiry': _documentExpiry['criminalCheck']!.toIso8601String().split('T').first,
+          if (_documentExpiry['driverLicense'] != null)
+            'driver_license_expiry': _documentExpiry['driverLicense']!.toIso8601String().split('T').first,
+        },
       );
 
       await AuthService.clearPhoneVerifiedData();

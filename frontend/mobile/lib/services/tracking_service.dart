@@ -201,6 +201,14 @@ class TrackingService {
   void _startGpsStream() {
     _positionSub?.cancel();
 
+    // Send initial position immediately (don't wait for distanceFilter delta)
+    Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+    ).then((position) {
+      onPositionUpdate?.call(position);
+      _sendGpsUpdate(position);
+    }).catchError((_) {});
+
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: 10, // meters — only send when moved ≥10m

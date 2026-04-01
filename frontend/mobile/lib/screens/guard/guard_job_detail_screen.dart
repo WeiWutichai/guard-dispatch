@@ -1345,7 +1345,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                       TileLayer(
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.pguard.app',
+                        userAgentPackageName: 'com.p-guard.app',
                       ),
                       MarkerLayer(
                         markers: [
@@ -1450,9 +1450,24 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
         Expanded(
           flex: 2,
           child: ElevatedButton(
-            onPressed: () {
-              context.read<BookingProvider>().acceptAssignment(assignmentId);
-              Navigator.pop(context);
+            onPressed: () async {
+              try {
+                await context.read<BookingProvider>().acceptAssignment(assignmentId);
+                if (!mounted) return;
+                final updatedJob = Map<String, dynamic>.from(_job);
+                updatedJob['assignment_status'] = 'awaiting_payment';
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => GuardJobDetailScreen(job: updatedJob),
+                  ),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('$e')),
+                );
+              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
@@ -1577,6 +1592,8 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                   MaterialPageRoute(
                     builder: (_) => ActiveJobScreen(
                       assignmentId: assignmentId,
+                      requestId: _job['request_id'] as String? ?? _job['id'] as String?,
+                      customerId: _job['customer_id'] as String?,
                       customerName: _job['customer_name'] as String?,
                       address: _job['address'] as String?,
                       bookedHours:
@@ -1617,6 +1634,8 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                 MaterialPageRoute(
                   builder: (_) => ActiveJobScreen(
                     assignmentId: assignmentId,
+                    requestId: _job['request_id'] as String? ?? _job['id'] as String?,
+                    customerId: _job['customer_id'] as String?,
                     customerName: _job['customer_name'] as String?,
                     address: _job['address'] as String?,
                     bookedHours:
@@ -1784,7 +1803,7 @@ class _FullscreenMapScreenState extends State<_FullscreenMapScreen> {
               TileLayer(
                 urlTemplate:
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.pguard.app',
+                userAgentPackageName: 'com.p-guard.app',
               ),
               MarkerLayer(
                 markers: [

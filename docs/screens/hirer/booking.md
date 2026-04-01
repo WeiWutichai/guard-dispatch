@@ -19,7 +19,7 @@ Customer (Hirer)
 ## UI Elements
 
 ### Header (primary color, rounded bottom)
-- Back button, PGuard branding, notifications icon, person icon
+- Back button, P-Guard branding, notifications icon, person icon
 
 ### Form Sections
 

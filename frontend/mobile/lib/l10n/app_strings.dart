@@ -73,11 +73,17 @@ class RoleSelectionStrings {
   final String footerTitle;
   final String footerTerms;
 
+  final String settingsTitle;
+  final String changePin;
+  final String notifications;
+  final String helpSupport;
+  final String language;
+
   RoleSelectionStrings({required bool isThai})
     : roleTitle = isThai ? 'เลือกบทบาทของคุณ' : 'Choose Your Role',
       roleSubtitle = isThai
           ? 'Choose Your Role'
-          : 'Select how you want to use PGuard',
+          : 'Select how you want to use P-Guard',
       hireTitle = isThai ? 'ฉันต้องการจ้าง รปภ.' : 'I Want to Hire a Guard',
       hireDesc = isThai
           ? 'จ้างเจ้าหน้าที่รักษาความปลอดภัยระดับมืออาชีพ'
@@ -93,7 +99,12 @@ class RoleSelectionStrings {
           : 'PROFESSIONAL SECURITY SOLUTIONS',
       footerTerms = isThai
           ? 'ดำเนินการต่อ หมายถึง คุณยอมรับข้อกำหนดและนโยบายความเป็นส่วนตัว'
-          : 'By continuing, you agree to our Terms and Privacy Policy';
+          : 'By continuing, you agree to our Terms and Privacy Policy',
+      settingsTitle = isThai ? 'ตั้งค่า' : 'Settings',
+      changePin = isThai ? 'เปลี่ยนรหัส PIN' : 'Change PIN',
+      notifications = isThai ? 'การแจ้งเตือน' : 'Notifications',
+      helpSupport = isThai ? 'ช่วยเหลือและสนับสนุน' : 'Help & Support',
+      language = isThai ? 'ภาษา' : 'Language';
 }
 
 // ──────────────────────────────────────────────
@@ -174,7 +185,7 @@ class RegistrationRoleStrings {
     : title = isThai ? 'เลือกบทบาทของคุณ' : 'Choose Your Role',
       subtitle = isThai
           ? 'คุณต้องการใช้งานในบทบาทใด?'
-          : 'How would you like to use PGuard?',
+          : 'How would you like to use P-Guard?',
       customerTitle = isThai ? 'ผู้เรียกใช้บริการ' : 'Hire a Guard',
       customerDesc = isThai
           ? 'จ้างเจ้าหน้าที่รักษาความปลอดภัยมืออาชีพ'
@@ -1302,12 +1313,12 @@ class ContactSupportStrings {
           ? 'เปิดให้บริการ จ.-ศ. 08:00-20:00'
           : 'Available Mon-Fri 08:00-20:00',
       lineChat = isThai ? 'แชท LINE' : 'LINE Chat',
-      lineChatId = '@pguard',
+      lineChatId = '@p-guard',
       lineChatDesc = isThai
           ? 'ตอบกลับภายใน 30 นาที ในเวลาทำการ'
           : 'Replies within 30 min during business hours',
       emailSupport = isThai ? 'อีเมล' : 'Email',
-      emailAddress = 'support@pguard.co.th',
+      emailAddress = 'support@p-guard.co.th',
       emailDesc = isThai
           ? 'ตอบกลับภายใน 24 ชั่วโมง'
           : 'Response within 24 hours',
@@ -1481,7 +1492,7 @@ class HirerProfileStrings {
       memberSince = isThai ? 'เดือน' : 'Months',
       contactInfo = isThai ? 'ข้อมูลติดต่อ' : 'Contact Info',
       samplePhone = '081-234-5678',
-      sampleEmail = 'mana@pguard.co.th',
+      sampleEmail = 'mana@p-guard.co.th',
       menuTitle = isThai ? 'เมนู' : 'Menu',
       sampleHirerCode = isThai ? 'รหัส: HR005678' : 'ID: HR005678',
       verified = isThai ? 'ยืนยันแล้ว' : 'Verified';

@@ -936,9 +936,9 @@ pub async fn submit_progress_report(
                     .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
                     .to_vec();
                 // Use magic-byte detected MIME, fallback to declared
-                let mime = crate::s3::detect_mime(&data).unwrap_or(&declared_mime);
-                crate::s3::validate_upload(mime, data.len(), &data)?;
-                files.push((data, mime.to_string()));
+                let mime = crate::s3::detect_mime(&data).unwrap_or_else(|| declared_mime.clone());
+                crate::s3::validate_upload(&mime, data.len(), &data)?;
+                files.push((data, mime));
             }
             _ => {}
         }

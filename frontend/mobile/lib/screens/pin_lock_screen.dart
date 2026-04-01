@@ -159,7 +159,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
                   _buildLogo(),
                   const SizedBox(height: 12),
                   Text(
-                    'PGuard',
+                    'P-Guard',
                     style: GoogleFonts.inter(
                       fontSize: 24,
                       fontWeight: FontWeight.w700,
@@ -225,7 +225,7 @@ class _PinLockScreenState extends State<PinLockScreen> {
                   const SizedBox(height: 20),
                   // Footer
                   Text(
-                    'PGUARD MOBILE',
+                    'P-GUARD MOBILE',
                     style: GoogleFonts.inter(
                       fontSize: 10,
                       fontWeight: FontWeight.w500,

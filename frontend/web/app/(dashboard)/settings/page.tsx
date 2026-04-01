@@ -123,7 +123,7 @@ export default function SettingsPage() {
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                     <input
                       type="email"
-                      defaultValue="admin@pguard.com"
+                      defaultValue="admin@p-guard.com"
                       className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
                     />
                   </div>
@@ -344,7 +344,7 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium text-slate-700 mb-2">Company Name</label>
                   <input
                     type="text"
-                    defaultValue="PGuard Co., Ltd."
+                    defaultValue="P-Guard Co., Ltd."
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
                   />
                 </div>

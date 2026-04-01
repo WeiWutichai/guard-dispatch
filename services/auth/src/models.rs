@@ -318,6 +318,11 @@ pub struct GuardProfileFormData {
     pub bank_name: Option<String>,
     pub account_number: Option<String>,
     pub account_name: Option<String>,
+    pub id_card_expiry: Option<String>,
+    pub security_license_expiry: Option<String>,
+    pub training_cert_expiry: Option<String>,
+    pub criminal_check_expiry: Option<String>,
+    pub driver_license_expiry: Option<String>,
 }
 
 /// Guard profile as stored in `auth.guard_profiles`.
@@ -403,6 +408,16 @@ pub struct PublicGuardProfileResponse {
     pub training_cert_url: Option<String>,
     pub criminal_check_url: Option<String>,
     pub driver_license_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_card_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_license_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub training_cert_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub criminal_check_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver_license_expiry: Option<String>,
 }
 
 impl From<GuardProfileResponse> for PublicGuardProfileResponse {
@@ -417,6 +432,11 @@ impl From<GuardProfileResponse> for PublicGuardProfileResponse {
             training_cert_url: full.training_cert_url,
             criminal_check_url: full.criminal_check_url,
             driver_license_url: full.driver_license_url,
+            id_card_expiry: full.id_card_expiry,
+            security_license_expiry: full.security_license_expiry,
+            training_cert_expiry: full.training_cert_expiry,
+            criminal_check_expiry: full.criminal_check_expiry,
+            driver_license_expiry: full.driver_license_expiry,
         }
     }
 }

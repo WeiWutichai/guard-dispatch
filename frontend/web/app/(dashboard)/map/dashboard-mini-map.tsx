@@ -9,7 +9,8 @@ import { trackingApi, type GuardLocationWithName } from "@/lib/api";
 const statusHex: Record<string, string> = {
   active: "#10b981",
   idle: "#f59e0b",
-  alert: "#ef4444",
+  alert: "#94a3b8",
+  offline: "#ef4444",
 };
 
 function createDotIcon(status: string): L.DivIcon {
@@ -42,13 +43,15 @@ const icons: Record<string, L.DivIcon> = {
   active: createDotIcon("active"),
   idle: createDotIcon("idle"),
   alert: createDotIcon("alert"),
+  offline: createDotIcon("offline"),
 };
 
-function getStatus(recordedAt: string): string {
+function getStatus(recordedAt: string, isOnline: boolean, hasActiveJob: boolean): string {
+  if (!isOnline) return "offline";
   const minutesAgo =
     (Date.now() - new Date(recordedAt).getTime()) / 60000;
-  if (minutesAgo > 30) return "alert";
-  if (minutesAgo > 10) return "idle";
+  if (minutesAgo > 5) return "alert";
+  if (hasActiveJob) return "idle";
   return "active";
 }
 
@@ -64,11 +67,11 @@ export default function DashboardMiniMap() {
       .getAllLocations()
       .then((locations: GuardLocationWithName[]) => {
         setGuards(
-          locations.map((loc) => ({
+          locations.filter((l) => !(l.lat === 0 && l.lng === 0)).map((loc) => ({
             id: loc.guard_id,
             lat: loc.lat,
             lng: loc.lng,
-            status: getStatus(loc.recorded_at),
+            status: getStatus(loc.recorded_at, loc.is_online, loc.has_active_job),
           }))
         );
       })

@@ -16,6 +16,7 @@ interface MapAreaProps {
   activeLabel: string;
   idleLabel: string;
   alertLabel: string;
+  offlineLabel: string;
   flyToRef: MutableRefObject<((lat: number, lng: number) => void) | null>;
   invalidateSizeRef?: MutableRefObject<(() => void) | null>;
   height?: string;
@@ -28,7 +29,8 @@ interface MapAreaProps {
 const statusHex: Record<string, string> = {
   active: "#10b981",
   idle: "#f59e0b",
-  alert: "#ef4444",
+  alert: "#94a3b8",
+  offline: "#ef4444",
 };
 
 // ─── Custom SVG marker icon ─────────────────────────────────────────────────
@@ -187,6 +189,7 @@ export default function MapArea({
   activeLabel,
   idleLabel,
   alertLabel,
+  offlineLabel,
   flyToRef,
   invalidateSizeRef,
   height,
@@ -230,7 +233,8 @@ export default function MapArea({
         <div className="space-y-1.5">
           <LegendItem color="#10b981" label={activeLabel} />
           <LegendItem color="#f59e0b" label={idleLabel} />
-          <LegendItem color="#ef4444" label={alertLabel} />
+          <LegendItem color="#94a3b8" label={alertLabel} />
+          <LegendItem color="#ef4444" label={offlineLabel} />
         </div>
       </div>
     </div>

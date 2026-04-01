@@ -247,7 +247,12 @@ pub async fn get_all_locations(
             r#"
             SELECT gl.guard_id, u.full_name,
                    gl.lat, gl.lng, gl.accuracy, gl.heading, gl.speed,
-                   gl.recorded_at, gl.is_online
+                   gl.recorded_at, gl.is_online,
+                   EXISTS(
+                       SELECT 1 FROM booking.assignments ba
+                       WHERE ba.guard_id = gl.guard_id
+                         AND ba.status IN ('pending_acceptance','accepted','en_route','arrived','pending_completion')
+                   ) AS has_active_job
             FROM tracking.guard_locations gl
             INNER JOIN auth.users u ON u.id = gl.guard_id
             WHERE u.role = 'guard' AND u.is_active = true AND u.approval_status = 'approved'
@@ -262,7 +267,12 @@ pub async fn get_all_locations(
             r#"
             SELECT gl.guard_id, u.full_name,
                    gl.lat, gl.lng, gl.accuracy, gl.heading, gl.speed,
-                   gl.recorded_at, gl.is_online
+                   gl.recorded_at, gl.is_online,
+                   EXISTS(
+                       SELECT 1 FROM booking.assignments ba
+                       WHERE ba.guard_id = gl.guard_id
+                         AND ba.status IN ('pending_acceptance','accepted','en_route','arrived','pending_completion')
+                   ) AS has_active_job
             FROM tracking.guard_locations gl
             INNER JOIN auth.users u ON u.id = gl.guard_id
             WHERE u.role = 'guard' AND u.is_active = true AND u.approval_status = 'approved'

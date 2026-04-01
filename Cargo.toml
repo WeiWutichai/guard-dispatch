@@ -43,6 +43,10 @@ utoipa           = { version = "5", features = ["axum_extras", "uuid", "chrono"]
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 # Decimal type for NUMERIC/DECIMAL columns
 rust_decimal    = { version = "1", features = ["serde-float"] }
+# Image processing (watermark)
+image           = "0.25"
+imageproc       = "0.25"
+ab_glyph        = "0.2"
 # Shared library
 shared          = { path = "services/shared" }
 

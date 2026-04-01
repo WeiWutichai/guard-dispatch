@@ -17,7 +17,7 @@ Both (Guard and Customer)
 
 ## UI Elements
 - Language toggle (top right, LanguageToggle widget)
-- PGuard logo and brand name with accent line
+- P-Guard logo and brand name with accent line
 - Role selection title and subtitle (animated on language change)
 - Hire Guard card: home_work icon, primary color, filled CTA button
 - Guard Login card: badge icon, teal color, outlined CTA button

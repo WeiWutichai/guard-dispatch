@@ -12,12 +12,17 @@ import 'package:provider/provider.dart';
 import 'package:web_socket_channel/io.dart';
 import '../../l10n/app_strings.dart';
 import '../../theme/colors.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/booking_provider.dart';
+import '../../providers/chat_provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/language_service.dart';
+import '../chat_screen.dart';
 
 class ActiveJobScreen extends StatefulWidget {
   final String assignmentId;
+  final String? requestId;
+  final String? customerId;
   final String? customerName;
   final String? address;
   final int bookedHours;
@@ -27,6 +32,8 @@ class ActiveJobScreen extends StatefulWidget {
   const ActiveJobScreen({
     super.key,
     required this.assignmentId,
+    this.requestId,
+    this.customerId,
     this.customerName,
     this.address,
     required this.bookedHours,
@@ -84,6 +91,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
   IOWebSocketChannel? _wsChannel;
   StreamSubscription<dynamic>? _wsSub;
   String? _requestId;
+  String? _customerId;
 
   /// Calculate remaining seconds from a started_at timestamp string.
   /// Uses same speed multiplier as debug fast timer so both screens match.
@@ -114,6 +122,8 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
   @override
   void initState() {
     super.initState();
+    _requestId = widget.requestId;
+    _customerId = widget.customerId;
     // Use startedAt for accurate initial value; fall back to passed-in value
     if (widget.startedAt != null) {
       _remaining = _calcRemainingFromStartedAt(widget.startedAt!);
@@ -225,6 +235,10 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     if (reqId != null && _requestId == null) {
       _requestId = reqId;
       _connectAssignmentWs(reqId);
+    }
+    final custId = data['customer_id'] as String?;
+    if (custId != null && _customerId == null) {
+      _customerId = custId;
     }
 
     // Check if status changed (customer approved or held)
@@ -493,6 +507,54 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _openChat(BuildContext context, bool isThai) async {
+    final requestId = _requestId ?? '';
+    final customerId = _customerId ?? '';
+    final customerName = widget.customerName ?? '-';
+    final authProvider = context.read<AuthProvider>();
+    final chatProvider = context.read<ChatProvider>();
+    var myUserId = authProvider.userId;
+    if (myUserId == null) {
+      await authProvider.fetchProfile();
+      myUserId = authProvider.userId;
+    }
+
+    if (myUserId == null || requestId.isEmpty || customerId.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isThai ? 'ไม่สามารถเปิดแชทได้' : 'Cannot open chat'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      final conversationId = await chatProvider
+          .getOrCreateConversation(requestId, myUserId, customerId);
+      if (!context.mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversationId: conversationId,
+            requestId: requestId,
+            userName: customerName,
+            userRole: isThai ? 'ลูกค้า' : 'Client',
+            actingRole: 'guard',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), behavior: SnackBarBehavior.floating),
+      );
+    }
   }
 
   void _showSuccessAndPop(bool isThai) {
@@ -1327,6 +1389,34 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
             ),
           ),
 
+          // Chat button
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+            child: SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton.icon(
+                onPressed: () => _openChat(context, isThai),
+                icon: const Icon(Icons.chat_rounded, size: 20),
+                label: Text(
+                  isThai ? 'แชทกับลูกค้า' : 'Chat with Customer',
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: AppColors.primary,
+                  elevation: 0,
+                  side: const BorderSide(color: AppColors.primary),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+          ),
+
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
             child: SizedBox(
@@ -1742,6 +1832,21 @@ class _ProgressReportSheetState extends State<_ProgressReportSheet> {
   }
 
   Future<void> _submit() async {
+    if (_files.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.isThai
+                ? 'กรุณาแนบรูปภาพหรือวิดีโออย่างน้อย 1 รายการ'
+                : 'Please attach at least 1 photo or video',
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red.shade600,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+      return;
+    }
     debugPrint('[ProgressReport] submit hour=${widget.hourNumber} files=${_files.length}');
     setState(() => _isSubmitting = true);
     try {

@@ -707,7 +707,7 @@ class _GuardMapLayer extends StatelessWidget {
       children: [
         TileLayer(
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.pguard.mobile',
+          userAgentPackageName: 'com.p-guard.mobile',
           // TODO: Switch to a commercial tile provider (Mapbox / Stadia / Thunderforest)
           // for production — OSM tile servers are not for heavy mobile app usage.
           // TODO: Add CachedTileProvider for disk caching to save bandwidth/battery.

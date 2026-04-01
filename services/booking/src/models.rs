@@ -224,6 +224,7 @@ pub struct PaymentResponse {
 pub struct ActiveJobResponse {
     pub assignment_id: Uuid,
     pub request_id: Uuid,
+    pub customer_id: Uuid,
     pub customer_name: String,
     pub address: String,
     pub booked_hours: i32,
@@ -841,23 +842,20 @@ pub struct ProgressReportRow {
     pub created_at: DateTime<Utc>,
 }
 
-/// API response for progress reports
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ProgressReportResponse {
+/// DB row for progress_report_media table
+#[allow(dead_code)]
+#[derive(Debug, sqlx::FromRow)]
+pub struct ProgressReportMediaRow {
     pub id: Uuid,
-    pub assignment_id: Uuid,
-    pub guard_id: Uuid,
-    pub hour_number: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub photo_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub media: Option<Vec<ProgressReportMediaItem>>,
+    pub report_id: Uuid,
+    pub file_key: String,
+    pub mime_type: String,
+    pub file_size: i32,
+    pub sort_order: i32,
     pub created_at: DateTime<Utc>,
 }
 
-/// A single media attachment in a progress report.
+/// A single media item in the API response
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProgressReportMediaItem {
     pub id: Uuid,
@@ -867,15 +865,19 @@ pub struct ProgressReportMediaItem {
     pub sort_order: i32,
 }
 
-/// Database row for progress report media.
-#[allow(dead_code)]
-#[derive(Debug, sqlx::FromRow)]
-pub struct ProgressReportMediaRow {
+/// API response for progress reports
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProgressReportResponse {
     pub id: Uuid,
-    pub report_id: Uuid,
-    pub file_key: String,
-    pub mime_type: String,
-    pub file_size: Option<i32>,
-    pub sort_order: i32,
+    pub assignment_id: Uuid,
+    pub guard_id: Uuid,
+    pub hour_number: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Legacy single photo URL (backward compat — first image in media)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photo_url: Option<String>,
+    /// All media items (photos + videos) for this report
+    pub media: Vec<ProgressReportMediaItem>,
     pub created_at: DateTime<Utc>,
 }

@@ -91,7 +91,7 @@ class _WorkHistoryScreenState extends State<WorkHistoryScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'PGuard',
+                            'P-Guard',
                             style: GoogleFonts.inter(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,

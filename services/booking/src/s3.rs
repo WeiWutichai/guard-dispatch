@@ -6,11 +6,23 @@ use shared::error::AppError;
 
 const SIGNED_URL_EXPIRY_SECS: u64 = 3600; // 1 hour per CLAUDE.md
 const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB for images
+const MAX_VIDEO_SIZE: usize = 50 * 1024 * 1024; // 50MB for videos
 
-/// Allowed MIME types: images only (JPEG, PNG, WEBP)
-const ALLOWED_MIME_TYPES: &[&str] = &["image/jpeg", "image/png", "image/webp"];
+/// Allowed MIME types: images (JPEG, PNG, WEBP) + videos (MP4, QuickTime)
+const ALLOWED_MIME_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "video/mp4",
+    "video/quicktime",
+];
 
 /// Detect actual file type from magic bytes, ignoring the client-declared MIME type.
+/// Public so handlers can use magic-byte detection to override unreliable declared MIME.
+pub fn detect_mime(data: &[u8]) -> Option<String> {
+    detect_mime_from_bytes(data).map(|s| s.to_string())
+}
+
 fn detect_mime_from_bytes(data: &[u8]) -> Option<&'static str> {
     if data.len() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
         return Some("image/jpeg");
@@ -21,7 +33,22 @@ fn detect_mime_from_bytes(data: &[u8]) -> Option<&'static str> {
     if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         return Some("image/webp");
     }
+    // MP4/MOV: bytes 4-7 = "ftyp" (ISO base media file format)
+    if data.len() >= 8 && &data[4..8] == b"ftyp" {
+        if data.len() >= 12 {
+            let brand = &data[8..12];
+            if brand == b"qt  " {
+                return Some("video/quicktime");
+            }
+        }
+        return Some("video/mp4");
+    }
     None
+}
+
+/// Check if MIME type is a video type
+pub fn is_video_mime(mime_type: &str) -> bool {
+    mime_type.starts_with("video/")
 }
 
 /// Validate file upload constraints.
@@ -29,26 +56,40 @@ fn detect_mime_from_bytes(data: &[u8]) -> Option<&'static str> {
 pub fn validate_upload(mime_type: &str, file_size: usize, data: &[u8]) -> Result<(), AppError> {
     if !ALLOWED_MIME_TYPES.contains(&mime_type) {
         return Err(AppError::BadRequest(format!(
-            "Unsupported file type: {mime_type}. Allowed: JPEG, PNG, WEBP"
+            "Unsupported file type: {mime_type}. Allowed: JPEG, PNG, WEBP, MP4, MOV"
         )));
     }
 
     // Size check before magic bytes (prevent large allocation before reject)
-    if file_size > MAX_IMAGE_SIZE {
+    let max_size = if is_video_mime(mime_type) {
+        MAX_VIDEO_SIZE
+    } else {
+        MAX_IMAGE_SIZE
+    };
+    if file_size > max_size {
         return Err(AppError::BadRequest(format!(
-            "File too large: {} bytes. Maximum: {} bytes (10MB)",
-            file_size, MAX_IMAGE_SIZE
+            "File too large: {} bytes. Maximum: {} bytes ({})",
+            file_size,
+            max_size,
+            if is_video_mime(mime_type) {
+                "50MB"
+            } else {
+                "10MB"
+            }
         )));
     }
 
     // Verify actual file content matches the declared MIME type
     let detected = detect_mime_from_bytes(data).ok_or_else(|| {
         AppError::BadRequest(
-            "File content does not match any allowed format (JPEG, PNG, WEBP)".to_string(),
+            "File content does not match any allowed format (image or video)".to_string(),
         )
     })?;
 
-    if detected != mime_type {
+    // For video: allow mp4/quicktime interchangeably since container format is the same
+    let is_match = detected == mime_type || (is_video_mime(detected) && is_video_mime(mime_type));
+
+    if !is_match {
         return Err(AppError::BadRequest(format!(
             "MIME type mismatch: declared {mime_type} but file content is {detected}"
         )));
@@ -57,22 +98,14 @@ pub fn validate_upload(mime_type: &str, file_size: usize, data: &[u8]) -> Result
     Ok(())
 }
 
-/// Detect MIME type from magic bytes (public wrapper).
-pub fn detect_mime(data: &[u8]) -> Option<&'static str> {
-    detect_mime_from_bytes(data)
-}
-
-/// Check if a MIME type is a video format.
-pub fn is_video_mime(mime: &str) -> bool {
-    mime.starts_with("video/")
-}
-
 /// Get file extension from MIME type
 pub fn mime_to_extension(mime_type: &str) -> &str {
     match mime_type {
         "image/jpeg" => "jpg",
         "image/png" => "png",
         "image/webp" => "webp",
+        "video/mp4" => "mp4",
+        "video/quicktime" => "mov",
         _ => "bin",
     }
 }

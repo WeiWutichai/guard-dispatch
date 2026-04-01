@@ -154,7 +154,7 @@ class _CustomerRegistrationScreenState
         backgroundColor: AppColors.surface,
         body: Column(
           children: [
-            // PGuard green header
+            // P-Guard green header
             Container(
               padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
               decoration: const BoxDecoration(
@@ -190,7 +190,7 @@ class _CustomerRegistrationScreenState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'PGuard',
+                          'P-Guard',
                           style: GoogleFonts.inter(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,

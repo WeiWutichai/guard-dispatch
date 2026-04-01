@@ -152,6 +152,8 @@ export interface GuardLocationWithName {
   heading: number | null;
   speed: number | null;
   recorded_at: string;
+  is_online: boolean;
+  has_active_job: boolean;
 }
 
 // Notification types

@@ -7,9 +7,9 @@ import '../providers/auth_provider.dart';
 import '../services/language_service.dart';
 import '../services/auth_service.dart';
 import '../l10n/app_strings.dart';
-import '../widgets/language_toggle.dart';
 import 'guard/guard_dashboard_screen.dart';
 import 'hirer/hirer_dashboard_screen.dart';
+import 'app_settings_screen.dart';
 import 'phone_input_screen.dart';
 import 'registration_pending_screen.dart';
 import 'guard_registration_screen.dart';
@@ -233,12 +233,31 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Column(
                 children: [
-                  // Language toggle
-                  const Align(
+                  // Settings gear (top-right)
+                  Align(
                     alignment: Alignment.topRight,
                     child: Padding(
-                      padding: EdgeInsets.only(top: 4),
-                      child: LanguageToggle(),
+                      padding: const EdgeInsets.only(top: 4),
+                      child: GestureDetector(
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const AppSettingsScreen()),
+                        ),
+                        child: Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(
+                            Icons.settings_rounded,
+                            color: AppColors.primary,
+                            size: 20,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -339,7 +358,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     return Column(
       children: [
         Text(
-          'PGuard',
+          'P-Guard',
           style: GoogleFonts.inter(
             fontSize: 24,
             fontWeight: FontWeight.w700,

@@ -8,7 +8,6 @@ import '../../../l10n/app_strings.dart';
 import '../profile_settings_screen.dart';
 import '../ratings_reviews_screen.dart';
 import '../work_history_screen.dart';
-import '../contact_support_screen.dart';
 
 
 class GuardProfileTab extends StatelessWidget {
@@ -24,7 +23,7 @@ class GuardProfileTab extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // PGuard green header
+            // P-Guard green header
             Container(
               padding: const EdgeInsets.fromLTRB(12, 60, 24, 30),
               decoration: const BoxDecoration(
@@ -49,7 +48,7 @@ class GuardProfileTab extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'PGuard',
+                          'P-Guard',
                           style: GoogleFonts.inter(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -95,17 +94,6 @@ class GuardProfileTab extends StatelessWidget {
                 iconBg: AppColors.primary,
                 title: strings.menuHistory,
                 onTap: () => _navigateTo(context, const WorkHistoryScreen()),
-              ),
-            ]),
-            const SizedBox(height: 24),
-
-            // Support
-            _buildSettingsGroup(context, [
-              _SettingsItem(
-                icon: Icons.help_rounded,
-                iconBg: const Color(0xFF34C759),
-                title: strings.menuSupport,
-                onTap: () => _navigateTo(context, const ContactSupportScreen()),
               ),
             ]),
             const SizedBox(height: 40),
