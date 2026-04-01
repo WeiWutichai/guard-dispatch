@@ -801,7 +801,12 @@ pub async fn request_otp(
     let code = otp::generate_otp(otp_config.length);
     let expires_at = Utc::now() + chrono::TimeDelta::minutes(otp_config.expiry_minutes);
 
-    // Store in DB
+    // Hash OTP before storing — prevents exposure from DB compromise/backup leak.
+    // SHA-256 is sufficient here (short-lived codes with attempt limits).
+    use sha2::{Digest, Sha256};
+    let code_hash = format!("{:x}", Sha256::digest(code.as_bytes()));
+
+    // Store hash in DB (never store plaintext OTP)
     sqlx::query(
         r#"
         INSERT INTO auth.otp_codes (phone, code, purpose, expires_at)
@@ -809,7 +814,7 @@ pub async fn request_otp(
         "#,
     )
     .bind(&phone)
-    .bind(&code)
+    .bind(&code_hash)
     .bind(expires_at)
     .execute(db)
     .await?;
@@ -876,10 +881,17 @@ pub async fn verify_otp(
         ));
     }
 
+    // Hash the submitted code to compare against stored hash.
+    use sha2::{Digest, Sha256};
+    let submitted_hash = format!("{:x}", Sha256::digest(code.as_bytes()));
+
     // Constant-time comparison to prevent timing side-channel attacks.
-    // Both slices have the same length (validated above), so ct_eq is safe.
     use subtle::ConstantTimeEq;
-    let code_matches: bool = otp_row.code.as_bytes().ct_eq(code.as_bytes()).into();
+    let code_matches: bool = otp_row
+        .code
+        .as_bytes()
+        .ct_eq(submitted_hash.as_bytes())
+        .into();
 
     if !code_matches {
         return Err(AppError::BadRequest("OTP ไม่ถูกต้อง".to_string()));
@@ -1175,8 +1187,10 @@ pub async fn reissue_profile_token(
         .fetch_optional(db)
         .await?;
 
-    let (user_id,) =
-        user.ok_or_else(|| AppError::NotFound("No registration found for this phone".to_string()))?;
+    let (user_id,) = user.ok_or_else(|| {
+        // Generic error to prevent phone enumeration
+        AppError::BadRequest("Unable to process request".to_string())
+    })?;
 
     // Determine purpose from role (default: guard for backward compatibility)
     let purpose = match role {
@@ -1241,8 +1255,10 @@ pub async fn update_user_role(
         .await
         .map_err(AppError::Database)?;
 
-    let (user_id,) =
-        user.ok_or_else(|| AppError::BadRequest("No user found for this phone".to_string()))?;
+    let (user_id,) = user.ok_or_else(|| {
+        // Generic error to prevent phone enumeration
+        AppError::BadRequest("Unable to process request".to_string())
+    })?;
 
     // Invalidate user cache
     invalidate_user_cache(redis, &user_id).await?;

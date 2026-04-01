@@ -793,13 +793,51 @@ async fn handle_assignment_ws(mut socket: WebSocket, state: Arc<AppState>, user:
         }
     };
 
+    // Step 2: Validate request_id format and authorize user
+    let request_uuid = match uuid::Uuid::parse_str(&request_id) {
+        Ok(id) => id,
+        Err(_) => {
+            let _ = socket
+                .send(Message::Text("Invalid request_id format".into()))
+                .await;
+            return;
+        }
+    };
+
+    // Authorization: only request owner, assigned guard, or admin can subscribe
+    if user.role != "admin" {
+        let is_authorized: bool = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM booking.guard_requests
+                WHERE id = $1 AND customer_id = $2
+                UNION ALL
+                SELECT 1 FROM booking.assignments
+                WHERE request_id = $1 AND guard_id = $2
+            )
+            "#,
+        )
+        .bind(request_uuid)
+        .bind(user.user_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+        if !is_authorized {
+            let _ = socket
+                .send(Message::Text("Not authorized for this request".into()))
+                .await;
+            return;
+        }
+    }
+
     tracing::info!(
         "Assignment WS subscribing: request_id={}, user_id={}",
         request_id,
         user.user_id
     );
 
-    // Step 2: Subscribe to Redis channel for this request's assignment updates
+    // Step 3: Subscribe to Redis channel for this request's assignment updates
     let channel = format!("assignment_status:{request_id}");
 
     let mut pubsub = match state.redis_client.get_async_pubsub().await {

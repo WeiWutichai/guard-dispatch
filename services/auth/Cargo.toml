@@ -26,6 +26,7 @@ anyhow          = { workspace = true }
 dotenvy         = { workspace = true }
 argon2          = { workspace = true }
 subtle          = { workspace = true }
+sha2            = "0.10"
 reqwest         = { workspace = true }
 utoipa          = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
