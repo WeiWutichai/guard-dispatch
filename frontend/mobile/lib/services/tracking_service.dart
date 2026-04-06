@@ -212,7 +212,12 @@ class TrackingService {
     ).then((position) {
       onPositionUpdate?.call(position);
       _sendGpsUpdate(position);
-    }).catchError((_) {});
+    }).catchError((e) {
+      // Log error but continue — the position stream below will still work
+      // when the device eventually gets a GPS fix
+      // ignore: avoid_print
+      print('[TrackingService] getCurrentPosition failed: $e — waiting for stream');
+    });
 
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,

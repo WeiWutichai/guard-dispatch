@@ -1,12 +1,14 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use chrono::Utc;
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::AppError;
+
+const JWT_ISSUER: &str = "guard-dispatch";
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct JwtClaims {
@@ -14,6 +16,7 @@ pub struct JwtClaims {
     pub role: String,
     pub exp: i64,
     pub iat: i64,
+    pub iss: String,
 }
 
 pub fn encode_jwt(
@@ -40,6 +43,7 @@ pub fn encode_jwt_with_key(
         role: role.to_string(),
         exp: (now + chrono::TimeDelta::hours(expiry_hours)).timestamp(),
         iat: now.timestamp(),
+        iss: JWT_ISSUER.to_string(),
     };
 
     jsonwebtoken::encode(&Header::default(), &claims, key)
@@ -55,12 +59,9 @@ pub fn decode_jwt(token: &str, secret: &str) -> Result<JwtClaims, AppError> {
 /// Avoids re-deriving the key on every call.
 pub fn decode_jwt_with_key(token: &str, key: &DecodingKey) -> Result<JwtClaims, AppError> {
     let mut validation = Validation::default();
-    // Require exp claim (already default), disable iss/aud for now
-    // since we don't include them in the token yet. When adding
-    // iss/aud to JwtClaims + encode, uncomment:
-    // validation.set_issuer(&["guard-dispatch"]);
-    // validation.set_audience(&["guard-dispatch"]);
+    validation.algorithms = vec![Algorithm::HS256];
     validation.validate_exp = true;
+    validation.set_issuer(&[JWT_ISSUER]);
 
     let token_data = jsonwebtoken::decode::<JwtClaims>(token, key, &validation)
         .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
@@ -110,6 +111,7 @@ pub fn decode_phone_verify_token(
     key: &DecodingKey,
 ) -> Result<(String, String), AppError> {
     let mut validation = Validation::default();
+    validation.algorithms = vec![Algorithm::HS256];
     validation.validate_exp = true;
     validation.set_required_spec_claims(&["exp"]);
 
@@ -173,6 +175,7 @@ pub fn decode_profile_token(
     expected_purpose: &str,
 ) -> Result<(Uuid, String), AppError> {
     let mut validation = Validation::default();
+    validation.algorithms = vec![Algorithm::HS256];
     validation.validate_exp = true;
     validation.set_required_spec_claims(&["exp"]);
 

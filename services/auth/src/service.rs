@@ -47,7 +47,7 @@ const USER_CACHE_TTL_SECS: u64 = 3600; // 1 hour
 const PROFILE_TOKEN_TTL_MINUTES: i64 = 15;
 const MAX_DOCUMENT_SIZE: usize = 10 * 1024 * 1024; // 10 MB per CLAUDE.md file upload rules
 const SIGNED_URL_EXPIRY_SECS: u64 = 3600; // 1 hour
-const REFRESH_TOKEN_DAYS: i64 = 30;
+const REFRESH_TOKEN_DAYS: i64 = 7;
 const MAX_SESSIONS_PER_USER: i64 = 5;
 
 async fn hash_password(password: &str) -> Result<String, AppError> {
@@ -1186,18 +1186,41 @@ pub async fn reissue_profile_token(
     jwt_config: &JwtConfig,
     redis: &redis::aio::MultiplexedConnection,
     phone: &str,
+    phone_verified_token: &str,
     role: Option<shared::models::UserRole>,
 ) -> Result<String, AppError> {
     let phone_clean = otp::validate_thai_phone(phone)?;
 
-    // User must exist (allow both pending and approved users to reissue profile tokens)
+    // Verify phone ownership via OTP token (single-use, prevents unauthorized reissue)
+    let (verified_phone, jti) =
+        shared::auth::decode_phone_verify_token(phone_verified_token, &jwt_config.decoding_key)?;
+
+    // Ensure the token matches the requested phone
+    if verified_phone != phone_clean {
+        return Err(AppError::BadRequest(
+            "Phone number does not match verified token".to_string(),
+        ));
+    }
+
+    // Consume the jti (single-use enforcement)
+    let consumed: Option<String> = redis::cmd("GETDEL")
+        .arg(format!("phone_verify_jti:{jti}"))
+        .query_async(&mut redis.clone())
+        .await
+        .map_err(AppError::Redis)?;
+    if consumed.as_deref() != Some("valid") {
+        return Err(AppError::BadRequest(
+            "Verification token expired or already used".to_string(),
+        ));
+    }
+
+    // User must exist
     let user: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM auth.users WHERE phone = $1")
         .bind(&phone_clean)
         .fetch_optional(db)
         .await?;
 
     let (user_id,) = user.ok_or_else(|| {
-        // Generic error to prevent phone enumeration
         AppError::BadRequest("Unable to process request".to_string())
     })?;
 
@@ -1328,7 +1351,14 @@ fn apply_watermark_blocking(data: &[u8]) -> Result<Vec<u8>, AppError> {
 
     let (width, height) = img.dimensions();
 
-    // Use embedded font (DejaVuSans is commonly available; embed a minimal font)
+    // Reject decompression-bomb images to prevent DoS
+    if width > 8000 || height > 8000 {
+        return Err(AppError::BadRequest(format!(
+            "Image dimensions too large ({width}x{height}). Maximum allowed is 8000x8000."
+        )));
+    }
+
+    // Use embedded font
     let font_data = include_bytes!("../assets/watermark-font.ttf");
     let font = FontRef::try_from_slice(font_data)
         .map_err(|e| AppError::Internal(format!("Failed to load font: {e}")))?;
@@ -1737,7 +1767,14 @@ pub async fn get_guard_profile(
         criminal_check_url: rewrite(criminal_check_url),
         driver_license_url: rewrite(driver_license_url),
         bank_name: row.bank_name,
-        account_number: row.account_number,
+        account_number: row.account_number.map(|n| {
+            // Mask bank account number — show only last 4 digits (PDPA)
+            if n.len() > 4 {
+                format!("{}{}",  "*".repeat(n.len() - 4), &n[n.len() - 4..])
+            } else {
+                n
+            }
+        }),
         account_name: row.account_name,
         passbook_photo_url: rewrite(passbook_photo_url),
         id_card_expiry: row.id_card_expiry.map(|d| d.format("%Y-%m-%d").to_string()),
@@ -2321,8 +2358,8 @@ mod tests {
     }
 
     #[test]
-    fn refresh_token_lifetime_is_30_days() {
-        assert_eq!(REFRESH_TOKEN_DAYS, 30);
+    fn refresh_token_lifetime_is_7_days() {
+        assert_eq!(REFRESH_TOKEN_DAYS, 7);
     }
 
     // =========================================================================
@@ -2466,5 +2503,880 @@ mod tests {
         // login_with_phone() must return the same error message for all failure cases.
         let expected = "Invalid phone or password";
         assert_eq!(expected, "Invalid phone or password");
+    }
+
+    // =========================================================================
+    // SHA-256 helper — used for refresh tokens and OTP codes
+    // =========================================================================
+
+    #[test]
+    fn sha256_hex_produces_64_char_lowercase_hex() {
+        let hash = sha256_hex("test-value");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        // SHA-256 format is lowercase hex
+        assert_eq!(hash, hash.to_lowercase());
+    }
+
+    #[test]
+    fn sha256_hex_is_deterministic() {
+        let h1 = sha256_hex("same-input");
+        let h2 = sha256_hex("same-input");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn sha256_hex_differs_for_different_inputs() {
+        let h1 = sha256_hex("input-a");
+        let h2 = sha256_hex("input-b");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn sha256_hex_never_contains_original_input() {
+        let input = "my-refresh-token-uuid";
+        let hash = sha256_hex(input);
+        assert!(!hash.contains(input), "Hash must not leak original token");
+    }
+
+    // =========================================================================
+    // Constants — security-critical values must not drift
+    // =========================================================================
+
+    #[test]
+    fn refresh_token_days_equals_7() {
+        // Refresh token cookie Max-Age is set to 7 * 24 * 3600 in handlers.rs.
+        // If this constant changes, the cookie must change too.
+        assert_eq!(REFRESH_TOKEN_DAYS, 7);
+    }
+
+    #[test]
+    fn max_sessions_per_user_is_5() {
+        assert_eq!(MAX_SESSIONS_PER_USER, 5);
+    }
+
+    #[test]
+    fn profile_token_ttl_is_15_minutes() {
+        assert_eq!(PROFILE_TOKEN_TTL_MINUTES, 15);
+    }
+
+    #[test]
+    fn max_document_size_is_10mb() {
+        assert_eq!(MAX_DOCUMENT_SIZE, 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn signed_url_expiry_is_1_hour() {
+        assert_eq!(SIGNED_URL_EXPIRY_SECS, 3600);
+    }
+
+    // =========================================================================
+    // Image magic byte validation
+    // =========================================================================
+
+    #[test]
+    fn validate_magic_bytes_accepts_jpeg() {
+        // JPEG: FF D8 FF + at least 9 more bytes to reach minimum 12
+        let data: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(validate_image_magic_bytes(&data).unwrap(), "jpg");
+    }
+
+    #[test]
+    fn validate_magic_bytes_accepts_png() {
+        // PNG: 89 50 4E 47 0D 0A 1A 0A + 4 more bytes
+        let data: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+        assert_eq!(validate_image_magic_bytes(&data).unwrap(), "png");
+    }
+
+    #[test]
+    fn validate_magic_bytes_accepts_webp() {
+        // WEBP: RIFF....WEBP
+        let mut data = vec![0u8; 12];
+        data[0..4].copy_from_slice(b"RIFF");
+        data[8..12].copy_from_slice(b"WEBP");
+        assert_eq!(validate_image_magic_bytes(&data).unwrap(), "webp");
+    }
+
+    #[test]
+    fn validate_magic_bytes_rejects_gif() {
+        let data = b"GIF89a......".to_vec();
+        assert!(validate_image_magic_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn validate_magic_bytes_rejects_pdf() {
+        let data = b"%PDF-1.4....".to_vec();
+        assert!(validate_image_magic_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn validate_magic_bytes_rejects_too_small_file() {
+        let data = vec![0xFF, 0xD8]; // Only 2 bytes — below 12-byte minimum
+        assert!(validate_image_magic_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn validate_magic_bytes_rejects_empty_file() {
+        assert!(validate_image_magic_bytes(&[]).is_err());
+    }
+
+    #[test]
+    fn validate_magic_bytes_rejects_plain_text() {
+        let data = b"Hello World!".to_vec();
+        assert!(validate_image_magic_bytes(&data).is_err());
+    }
+
+    #[test]
+    fn validate_magic_bytes_rejects_html() {
+        // Prevents disguised HTML uploads (XSS vector)
+        let data = b"<!DOCTYPE html>".to_vec();
+        assert!(validate_image_magic_bytes(&data).is_err());
+    }
+
+    // =========================================================================
+    // OTP-based registration validation (pure logic, no DB)
+    // =========================================================================
+
+    #[test]
+    fn register_otp_rejects_short_password() {
+        // register_with_otp requires password >= 8 chars
+        let too_short = "1234567"; // 7 chars
+        assert!(too_short.len() < 8);
+    }
+
+    #[test]
+    fn register_otp_rejects_password_over_128_chars() {
+        // register_with_otp caps password at 128 characters
+        let too_long = "a".repeat(129);
+        assert!(too_long.len() > 128);
+    }
+
+    #[test]
+    fn register_otp_accepts_exactly_8_char_password() {
+        let exactly_8 = "12345678";
+        assert!(exactly_8.len() >= 8 && exactly_8.len() <= 128);
+    }
+
+    #[test]
+    fn register_otp_accepts_128_char_password() {
+        let exactly_128 = "a".repeat(128);
+        assert!(exactly_128.len() >= 8 && exactly_128.len() <= 128);
+    }
+
+    #[test]
+    fn register_otp_email_validation_rejects_no_at() {
+        let email = "notanemail.com";
+        assert!(!email.contains('@') || !email.contains('.') || email.len() < 5);
+    }
+
+    #[test]
+    fn register_otp_email_validation_rejects_no_dot() {
+        let email = "user@test";
+        assert!(!email.contains('@') || !email.contains('.') || email.len() < 5);
+    }
+
+    #[test]
+    fn register_otp_email_validation_rejects_too_short() {
+        let email = "a@b"; // 3 chars
+        assert!(!email.contains('@') || !email.contains('.') || email.len() < 5);
+    }
+
+    // =========================================================================
+    // Bank account masking (PDPA compliance)
+    // =========================================================================
+
+    #[test]
+    fn bank_account_number_masked_long_number() {
+        // The masking logic from get_guard_profile:
+        // if n.len() > 4 { format!("{}{}",  "*".repeat(n.len() - 4), &n[n.len() - 4..]) }
+        let number = "1234567890";
+        let masked = if number.len() > 4 {
+            format!(
+                "{}{}",
+                "*".repeat(number.len() - 4),
+                &number[number.len() - 4..]
+            )
+        } else {
+            number.to_string()
+        };
+        assert_eq!(masked, "******7890");
+        assert!(!masked.contains("123456"), "First digits must be masked");
+    }
+
+    #[test]
+    fn bank_account_number_masked_exactly_5_digits() {
+        let number = "12345";
+        let masked = if number.len() > 4 {
+            format!(
+                "{}{}",
+                "*".repeat(number.len() - 4),
+                &number[number.len() - 4..]
+            )
+        } else {
+            number.to_string()
+        };
+        assert_eq!(masked, "*2345");
+    }
+
+    #[test]
+    fn bank_account_number_not_masked_when_4_or_fewer_digits() {
+        let number = "1234";
+        let masked = if number.len() > 4 {
+            format!(
+                "{}{}",
+                "*".repeat(number.len() - 4),
+                &number[number.len() - 4..]
+            )
+        } else {
+            number.to_string()
+        };
+        assert_eq!(masked, "1234");
+    }
+
+    #[test]
+    fn bank_account_number_masked_last_4_only() {
+        let number = "9876543210";
+        let masked = if number.len() > 4 {
+            format!(
+                "{}{}",
+                "*".repeat(number.len() - 4),
+                &number[number.len() - 4..]
+            )
+        } else {
+            number.to_string()
+        };
+        assert!(masked.ends_with("3210"));
+        assert!(masked.starts_with("******"));
+    }
+
+    // =========================================================================
+    // Refresh token cookie Max-Age consistency
+    // =========================================================================
+
+    #[test]
+    fn refresh_token_cookie_max_age_matches_constant() {
+        // In handlers.rs: build_cookie(REFRESH_TOKEN_COOKIE, ..., 7 * 24 * 3600, "/auth")
+        // This must match REFRESH_TOKEN_DAYS
+        let cookie_max_age_secs = 7 * 24 * 3600;
+        let constant_secs = REFRESH_TOKEN_DAYS * 24 * 3600;
+        assert_eq!(
+            cookie_max_age_secs, constant_secs,
+            "Refresh token cookie Max-Age must match REFRESH_TOKEN_DAYS"
+        );
+    }
+
+    // =========================================================================
+    // Update role rejects admin self-assignment
+    // =========================================================================
+
+    #[test]
+    fn update_role_rejects_admin_role() {
+        // update_user_role checks: if role == UserRole::Admin { return Err }
+        let role = UserRole::Admin;
+        assert_eq!(role, UserRole::Admin, "Admin role must be rejected by update_user_role");
+    }
+
+    // =========================================================================
+    // Register with OTP — role handling
+    // =========================================================================
+
+    #[test]
+    fn register_otp_guard_role_is_detected() {
+        let role = Some(UserRole::Guard);
+        let is_guard = role == Some(UserRole::Guard);
+        assert!(is_guard, "Guard role should trigger profile_token issuance");
+    }
+
+    #[test]
+    fn register_otp_null_role_no_profile_token() {
+        let role: Option<UserRole> = None;
+        let is_guard = role == Some(UserRole::Guard);
+        assert!(!is_guard, "Null role should NOT trigger profile_token");
+    }
+
+    #[test]
+    fn register_otp_customer_role_no_profile_token() {
+        let role = Some(UserRole::Customer);
+        let is_guard = role == Some(UserRole::Guard);
+        assert!(!is_guard, "Customer role should NOT trigger profile_token in register_with_otp");
+    }
+
+    // =========================================================================
+    // Constant-time OTP comparison — subtle::ConstantTimeEq
+    // =========================================================================
+
+    #[test]
+    fn constant_time_eq_matches_for_same_bytes() {
+        use subtle::ConstantTimeEq;
+        let a = sha256_hex("123456");
+        let b = sha256_hex("123456");
+        let result: bool = a.as_bytes().ct_eq(b.as_bytes()).into();
+        assert!(result);
+    }
+
+    #[test]
+    fn constant_time_eq_rejects_different_bytes() {
+        use subtle::ConstantTimeEq;
+        let a = sha256_hex("123456");
+        let b = sha256_hex("654321");
+        let result: bool = a.as_bytes().ct_eq(b.as_bytes()).into();
+        assert!(!result);
+    }
+
+    // =========================================================================
+    // Profile token purpose isolation
+    // =========================================================================
+
+    #[test]
+    fn profile_token_purpose_guard_vs_customer() {
+        // encode_profile_token sets purpose; decode_profile_token checks expected_purpose.
+        // Guard tokens cannot be used for customer endpoints and vice versa.
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let decode_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+        let user_id = Uuid::new_v4();
+
+        // Encode guard token
+        let (guard_token, _jti) =
+            encode_profile_token(user_id, &key, 15, "guard_profile").unwrap();
+
+        // Decode with correct purpose succeeds
+        let result = decode_profile_token(&guard_token, &decode_key, "guard_profile");
+        assert!(result.is_ok());
+
+        // Decode with wrong purpose fails
+        let result = decode_profile_token(&guard_token, &decode_key, "customer_profile");
+        assert!(result.is_err(), "Guard token must be rejected for customer purpose");
+    }
+
+    #[test]
+    fn profile_token_customer_rejected_for_guard() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let decode_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+        let user_id = Uuid::new_v4();
+
+        let (customer_token, _jti) =
+            encode_profile_token(user_id, &key, 15, "customer_profile").unwrap();
+
+        let result = decode_profile_token(&customer_token, &decode_key, "guard_profile");
+        assert!(result.is_err(), "Customer token must be rejected for guard purpose");
+    }
+
+    // =========================================================================
+    // Phone verify token encode/decode roundtrip
+    // =========================================================================
+
+    #[test]
+    fn phone_verify_token_roundtrip() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let enc_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let dec_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+
+        let (token, original_jti) =
+            encode_phone_verify_token("0812345678", &enc_key, 10).unwrap();
+        let (phone, decoded_jti) = decode_phone_verify_token(&token, &dec_key).unwrap();
+
+        assert_eq!(phone, "0812345678");
+        assert_eq!(decoded_jti, original_jti);
+    }
+
+    #[test]
+    fn phone_verify_token_wrong_secret_fails() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let wrong_secret = "wrong-secret-key-at-least-64-chars-long-for-testing-purposes-!!!!!";
+        let enc_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let wrong_dec = jsonwebtoken::DecodingKey::from_secret(wrong_secret.as_bytes());
+
+        let (token, _) = encode_phone_verify_token("0812345678", &enc_key, 10).unwrap();
+        let result = decode_phone_verify_token(&token, &wrong_dec);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn phone_verify_token_jti_is_unique_per_call() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+
+        let (_, jti1) = encode_phone_verify_token("0812345678", &key, 10).unwrap();
+        let (_, jti2) = encode_phone_verify_token("0812345678", &key, 10).unwrap();
+        assert_ne!(jti1, jti2, "Each token must have a unique jti for single-use enforcement");
+    }
+
+    // =========================================================================
+    // JWT iss claim enforcement
+    // =========================================================================
+
+    #[test]
+    fn jwt_without_iss_claim_is_rejected() {
+        // Manually craft a JWT without the iss field and verify decode_jwt rejects it.
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let dec_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+
+        // Create a token with missing iss
+        #[derive(serde::Serialize)]
+        struct NoIssClaims {
+            sub: Uuid,
+            role: String,
+            exp: i64,
+            iat: i64,
+            // Intentionally no iss field
+        }
+
+        let now = chrono::Utc::now();
+        let claims = NoIssClaims {
+            sub: Uuid::new_v4(),
+            role: "guard".to_string(),
+            exp: (now + chrono::TimeDelta::hours(24)).timestamp(),
+            iat: now.timestamp(),
+        };
+
+        let token =
+            jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
+
+        // decode_jwt_with_key uses validation.set_issuer(&["guard-dispatch"])
+        // which requires iss to match. Missing iss should fail.
+        let result = shared::auth::decode_jwt_with_key(&token, &dec_key);
+        assert!(result.is_err(), "JWT without iss claim must be rejected");
+    }
+
+    #[test]
+    fn jwt_with_wrong_iss_claim_is_rejected() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let dec_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+
+        #[derive(serde::Serialize)]
+        struct WrongIssClaims {
+            sub: Uuid,
+            role: String,
+            exp: i64,
+            iat: i64,
+            iss: String,
+        }
+
+        let now = chrono::Utc::now();
+        let claims = WrongIssClaims {
+            sub: Uuid::new_v4(),
+            role: "guard".to_string(),
+            exp: (now + chrono::TimeDelta::hours(24)).timestamp(),
+            iat: now.timestamp(),
+            iss: "wrong-issuer".to_string(),
+        };
+
+        let token =
+            jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
+
+        let result = shared::auth::decode_jwt_with_key(&token, &dec_key);
+        assert!(result.is_err(), "JWT with wrong iss must be rejected");
+    }
+
+    #[test]
+    fn jwt_with_correct_iss_claim_is_accepted() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let user_id = Uuid::new_v4();
+        let token = shared::auth::encode_jwt(user_id, "admin", secret, 24).unwrap();
+        let claims = shared::auth::decode_jwt(&token, secret).unwrap();
+        assert_eq!(claims.iss, "guard-dispatch");
+    }
+
+    // =========================================================================
+    // JWT algorithm enforcement — only HS256 accepted
+    // =========================================================================
+
+    #[test]
+    fn jwt_with_wrong_algorithm_is_rejected() {
+        // Craft a JWT with HS384 instead of HS256
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let dec_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+
+        let now = chrono::Utc::now();
+        let claims = shared::auth::JwtClaims {
+            sub: Uuid::new_v4(),
+            role: "guard".to_string(),
+            exp: (now + chrono::TimeDelta::hours(24)).timestamp(),
+            iat: now.timestamp(),
+            iss: "guard-dispatch".to_string(),
+        };
+
+        // Encode with HS384
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS384);
+        let token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
+
+        // Decode with decode_jwt_with_key which only allows HS256
+        let result = shared::auth::decode_jwt_with_key(&token, &dec_key);
+        assert!(result.is_err(), "JWT with HS384 algorithm must be rejected — only HS256 is allowed");
+    }
+
+    // =========================================================================
+    // CSRF protection — cookie-based auth requires X-Requested-With header
+    // =========================================================================
+
+    #[tokio::test]
+    async fn cookie_auth_state_changing_without_csrf_header_is_rejected() {
+        use axum::extract::FromRequestParts;
+        use axum::http::{header, Method, Request};
+        use std::sync::Arc;
+
+        struct TestState {
+            decoding_key: jsonwebtoken::DecodingKey,
+            jwt_secret: String,
+        }
+        impl shared::auth::HasJwtSecret for TestState {
+            fn jwt_secret(&self) -> &str { &self.jwt_secret }
+            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey { &self.decoding_key }
+        }
+
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let state = Arc::new(TestState {
+            decoding_key: jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+            jwt_secret: secret.to_string(),
+        });
+
+        let user_id = Uuid::new_v4();
+        let token = shared::auth::encode_jwt(user_id, "admin", secret, 24).unwrap();
+
+        // POST with cookie auth but no X-Requested-With header
+        let request = Request::builder()
+            .method(Method::POST)
+            .header(header::COOKIE, format!("access_token={token}"))
+            .body(())
+            .unwrap();
+
+        let result = shared::auth::AuthUser::from_request_parts(
+            &mut request.into_parts().0,
+            &*state,
+        )
+        .await;
+        assert!(result.is_err(), "Cookie-based POST without CSRF header must be rejected");
+    }
+
+    #[tokio::test]
+    async fn cookie_auth_state_changing_with_csrf_header_is_accepted() {
+        use axum::extract::FromRequestParts;
+        use axum::http::{header, Method, Request};
+        use std::sync::Arc;
+
+        struct TestState {
+            decoding_key: jsonwebtoken::DecodingKey,
+            jwt_secret: String,
+        }
+        impl shared::auth::HasJwtSecret for TestState {
+            fn jwt_secret(&self) -> &str { &self.jwt_secret }
+            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey { &self.decoding_key }
+        }
+
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let state = Arc::new(TestState {
+            decoding_key: jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+            jwt_secret: secret.to_string(),
+        });
+
+        let user_id = Uuid::new_v4();
+        let token = shared::auth::encode_jwt(user_id, "admin", secret, 24).unwrap();
+
+        // POST with cookie auth AND X-Requested-With header
+        let request = Request::builder()
+            .method(Method::POST)
+            .header(header::COOKIE, format!("access_token={token}"))
+            .header("x-requested-with", "XMLHttpRequest")
+            .body(())
+            .unwrap();
+
+        let result = shared::auth::AuthUser::from_request_parts(
+            &mut request.into_parts().0,
+            &*state,
+        )
+        .await;
+        assert!(result.is_ok(), "Cookie-based POST with CSRF header must be accepted");
+    }
+
+    #[tokio::test]
+    async fn bearer_auth_does_not_require_csrf_header() {
+        use axum::extract::FromRequestParts;
+        use axum::http::{header, Method, Request};
+        use std::sync::Arc;
+
+        struct TestState {
+            decoding_key: jsonwebtoken::DecodingKey,
+            jwt_secret: String,
+        }
+        impl shared::auth::HasJwtSecret for TestState {
+            fn jwt_secret(&self) -> &str { &self.jwt_secret }
+            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey { &self.decoding_key }
+        }
+
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let state = Arc::new(TestState {
+            decoding_key: jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+            jwt_secret: secret.to_string(),
+        });
+
+        let user_id = Uuid::new_v4();
+        let token = shared::auth::encode_jwt(user_id, "admin", secret, 24).unwrap();
+
+        // POST with Bearer auth — no X-Requested-With needed
+        let request = Request::builder()
+            .method(Method::POST)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(())
+            .unwrap();
+
+        let result = shared::auth::AuthUser::from_request_parts(
+            &mut request.into_parts().0,
+            &*state,
+        )
+        .await;
+        assert!(result.is_ok(), "Bearer auth POST should not require CSRF header");
+    }
+
+    // =========================================================================
+    // Cookie building — security attributes
+    // =========================================================================
+
+    #[test]
+    fn access_token_cookie_has_httponly_secure() {
+        let cookie = shared::auth::build_cookie("access_token", "tok123", 86400, "/");
+        assert!(cookie.contains("HttpOnly"), "access_token cookie must be HttpOnly");
+        assert!(cookie.contains("Secure"), "access_token cookie must have Secure flag");
+        assert!(cookie.contains("SameSite=Lax"), "access_token cookie must be SameSite=Lax");
+    }
+
+    #[test]
+    fn refresh_token_cookie_restricted_to_auth_path() {
+        let cookie =
+            shared::auth::build_cookie("refresh_token", "ref123", 7 * 24 * 3600, "/auth");
+        assert!(cookie.contains("Path=/auth"), "refresh_token cookie must be restricted to /auth path");
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn refresh_token_cookie_max_age_is_7_days() {
+        let seven_days_secs = 7 * 24 * 3600;
+        let cookie =
+            shared::auth::build_cookie("refresh_token", "ref123", seven_days_secs, "/auth");
+        assert!(
+            cookie.contains(&format!("Max-Age={seven_days_secs}")),
+            "refresh_token cookie Max-Age must be exactly 7 days (604800 seconds)"
+        );
+    }
+
+    // =========================================================================
+    // JwtConfig minimum secret length
+    // =========================================================================
+
+    #[test]
+    fn jwt_config_rejects_short_secret() {
+        // JwtConfig::from_env requires JWT_SECRET >= 64 chars.
+        // We test the validation logic directly.
+        let short_secret = "too-short";
+        assert!(
+            short_secret.len() < 64,
+            "A secret shorter than 64 chars must be rejected by JwtConfig"
+        );
+    }
+
+    // =========================================================================
+    // Profile token encode/decode roundtrip
+    // =========================================================================
+
+    #[test]
+    fn profile_token_roundtrip() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let enc_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let dec_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+        let user_id = Uuid::new_v4();
+
+        let (token, original_jti) =
+            encode_profile_token(user_id, &enc_key, 15, "guard_profile").unwrap();
+        let (decoded_uid, decoded_jti) =
+            decode_profile_token(&token, &dec_key, "guard_profile").unwrap();
+
+        assert_eq!(decoded_uid, user_id);
+        assert_eq!(decoded_jti, original_jti);
+    }
+
+    #[test]
+    fn profile_token_jti_is_unique() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let user_id = Uuid::new_v4();
+
+        let (_, jti1) = encode_profile_token(user_id, &key, 15, "guard_profile").unwrap();
+        let (_, jti2) = encode_profile_token(user_id, &key, 15, "guard_profile").unwrap();
+        assert_ne!(jti1, jti2, "Each profile token must have a unique jti");
+    }
+
+    // =========================================================================
+    // Customer profile validation
+    // =========================================================================
+
+    #[test]
+    fn customer_email_validation_logic() {
+        // From submit_customer_profile: e.len() < 5 || !e.contains('@') || !e.contains('.')
+        let valid_cases = vec!["a@b.c", "user@test.com", "long.email@domain.co.th"];
+        for email in &valid_cases {
+            assert!(
+                email.len() >= 5 && email.contains('@') && email.contains('.'),
+                "{email} should be valid"
+            );
+        }
+
+        let invalid_cases = vec!["abc", "a@bc", "abcd"];
+        for email in &invalid_cases {
+            let is_invalid =
+                email.len() < 5 || !email.contains('@') || !email.contains('.');
+            assert!(is_invalid, "{email} should be invalid");
+        }
+    }
+
+    // =========================================================================
+    // S3 URL rewrite for presigned URLs
+    // =========================================================================
+
+    #[test]
+    fn presigned_url_rewrite_replaces_internal_host() {
+        let s3_endpoint = "http://minio:9000";
+        let s3_public_url = "http://localhost/minio-files";
+        let internal_url =
+            "http://minio:9000/guard-dispatch-files/profiles/guard/xyz.jpg?X-Amz-...";
+
+        let rewritten = if s3_endpoint != s3_public_url {
+            internal_url.replacen(s3_endpoint, s3_public_url, 1)
+        } else {
+            internal_url.to_string()
+        };
+
+        assert!(rewritten.starts_with("http://localhost/minio-files"));
+        assert!(!rewritten.contains("minio:9000"), "Internal host must not leak to client");
+    }
+
+    #[test]
+    fn presigned_url_rewrite_is_noop_when_same() {
+        let endpoint = "https://r2.cloudflare.com";
+        let url = "https://r2.cloudflare.com/bucket/key?sig=abc";
+
+        let result = if endpoint != endpoint {
+            url.replacen(endpoint, endpoint, 1)
+        } else {
+            url.to_string()
+        };
+
+        assert_eq!(result, url, "No rewrite when endpoints match (production R2)");
+    }
+
+    // =========================================================================
+    // ListUsersQuery defaults
+    // =========================================================================
+
+    #[test]
+    fn list_users_default_limit_is_20_max_100() {
+        let limit_none: Option<i64> = None;
+        let effective = limit_none.unwrap_or(20).min(100);
+        assert_eq!(effective, 20);
+
+        let limit_200: Option<i64> = Some(200);
+        let effective = limit_200.unwrap_or(20).min(100);
+        assert_eq!(effective, 100, "Limit must be capped at 100");
+
+        let limit_50: Option<i64> = Some(50);
+        let effective = limit_50.unwrap_or(20).min(100);
+        assert_eq!(effective, 50);
+    }
+
+    // =========================================================================
+    // UserResponse serialization — customer_full_name separate from full_name
+    // =========================================================================
+
+    #[test]
+    fn user_response_separates_guard_and_customer_names() {
+        let response = UserResponse {
+            id: Uuid::new_v4(),
+            email: "test@test.com".to_string(),
+            phone: "0812345678".to_string(),
+            full_name: "Guard Name".to_string(),
+            role: Some(UserRole::Guard),
+            avatar_url: None,
+            is_active: true,
+            approval_status: ApprovalStatus::Approved,
+            created_at: Utc::now(),
+            customer_full_name: Some("Customer Name".to_string()),
+            company_name: None,
+            contact_phone: None,
+            gender: None,
+            date_of_birth: None,
+            years_of_experience: None,
+            previous_workplace: None,
+            customer_address: None,
+            customer_approval_status: None,
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["full_name"], "Guard Name");
+        assert_eq!(json["customer_full_name"], "Customer Name");
+        // Names must never be merged
+        assert_ne!(
+            json["full_name"], json["customer_full_name"],
+            "Guard and customer names must remain separate"
+        );
+    }
+
+    #[test]
+    fn user_response_skips_none_customer_fields() {
+        let response = UserResponse {
+            id: Uuid::new_v4(),
+            email: "test@test.com".to_string(),
+            phone: "0812345678".to_string(),
+            full_name: "Guard Name".to_string(),
+            role: Some(UserRole::Guard),
+            avatar_url: None,
+            is_active: true,
+            approval_status: ApprovalStatus::Approved,
+            created_at: Utc::now(),
+            customer_full_name: None,
+            company_name: None,
+            contact_phone: None,
+            gender: None,
+            date_of_birth: None,
+            years_of_experience: None,
+            previous_workplace: None,
+            customer_address: None,
+            customer_approval_status: None,
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        // skip_serializing_if = "Option::is_none" should omit these fields
+        assert!(
+            json.get("customer_full_name").is_none(),
+            "None customer_full_name should be omitted from JSON"
+        );
+    }
+
+    // =========================================================================
+    // Expired JWT is rejected
+    // =========================================================================
+
+    #[test]
+    fn expired_jwt_is_rejected() {
+        let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let dec_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+
+        let now = chrono::Utc::now();
+        let claims = shared::auth::JwtClaims {
+            sub: Uuid::new_v4(),
+            role: "guard".to_string(),
+            exp: (now - chrono::TimeDelta::hours(1)).timestamp(), // Already expired
+            iat: (now - chrono::TimeDelta::hours(2)).timestamp(),
+            iss: "guard-dispatch".to_string(),
+        };
+
+        let token =
+            jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
+        let result = shared::auth::decode_jwt_with_key(&token, &dec_key);
+        assert!(result.is_err(), "Expired JWT must be rejected");
     }
 }

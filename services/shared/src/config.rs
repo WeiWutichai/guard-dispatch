@@ -120,9 +120,9 @@ impl RedisConfig {
 impl JwtConfig {
     pub fn from_env() -> Result<Self, AppError> {
         let secret = require_env("JWT_SECRET")?;
-        if secret.len() < 32 {
+        if secret.len() < 64 {
             return Err(AppError::Internal(
-                "JWT_SECRET must be at least 32 characters".to_string(),
+                "JWT_SECRET must be at least 64 characters".to_string(),
             ));
         }
         let encoding_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
@@ -232,13 +232,13 @@ mod tests {
         with_env_vars(
             &[(
                 "JWT_SECRET",
-                "super-secret-key-that-is-at-least-32-chars-long!",
+                "super-secret-key-that-is-at-least-64-characters-long-for-hs256-security!",
             )],
             || {
                 let cfg = JwtConfig::from_env().unwrap();
                 assert_eq!(
                     cfg.secret,
-                    "super-secret-key-that-is-at-least-32-chars-long!"
+                    "super-secret-key-that-is-at-least-64-characters-long-for-hs256-security!"
                 );
                 assert_eq!(cfg.expiry_hours, 24); // default
             },

@@ -147,6 +147,28 @@ async fn main() -> anyhow::Result<()> {
         .build();
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
+    // Ensure bucket exists (dev convenience — production bucket is pre-created)
+    if s3_client.head_bucket().bucket(&s3_bucket).send().await.is_err() {
+        tracing::info!("Bucket '{}' not found, creating...", s3_bucket);
+        let _ = s3_client.create_bucket().bucket(&s3_bucket).send().await;
+        // Set private-only bucket policy (deny anonymous/public access to guard documents)
+        let policy = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": format!("arn:aws:s3:::{}/*", s3_bucket),
+                "Condition": { "StringEquals": { "aws:PrincipalType": "Anonymous" } }
+            }]
+        });
+        let _ = s3_client.put_bucket_policy()
+            .bucket(&s3_bucket)
+            .policy(policy.to_string())
+            .send()
+            .await;
+    }
+
     let state = Arc::new(AppState {
         db,
         redis,
@@ -167,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             interval.tick().await;
             match sqlx::query(
-                "DELETE FROM auth.otp_codes WHERE expires_at < NOW() - INTERVAL '1 hour'",
+                "DELETE FROM auth.otp_codes WHERE expires_at < NOW()",
             )
             .execute(&cleanup_db)
             .await

@@ -33,7 +33,7 @@ COPY services/chat/src services/chat/src
 RUN find services/shared/src services/chat/src -name '*.rs' | xargs touch && cargo build --release -p chat-service
 
 # Runtime
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
   && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser

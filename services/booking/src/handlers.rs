@@ -38,11 +38,21 @@ pub async fn create_request(
     user: AuthUser,
     Json(req): Json<CreateRequestDto>,
 ) -> Result<Json<ApiResponse<GuardRequestResponse>>, AppError> {
-    // Only customers (and admins) can create booking requests
-    if user.role == "guard" {
-        return Err(AppError::Forbidden(
-            "Guards cannot create booking requests".to_string(),
-        ));
+    // Only users with an approved customer profile (or admins) can create booking requests.
+    // A guard who also registered as a customer has role='guard' in auth.users but has
+    // an approved customer_profiles entry — they should be allowed to book.
+    if user.role != "admin" {
+        let has_customer_profile: Option<bool> = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM auth.customer_profiles WHERE user_id = $1 AND approval_status = 'approved')",
+        )
+        .bind(user.user_id)
+        .fetch_one(&state.db)
+        .await?;
+        if !has_customer_profile.unwrap_or(false) {
+            return Err(AppError::Forbidden(
+                "Only approved customers can create booking requests".to_string(),
+            ));
+        }
     }
     let request = crate::service::create_request(&state.db, user.user_id, req).await?;
     Ok(Json(ApiResponse::success(request)))
@@ -618,11 +628,19 @@ pub async fn available_guards(
     user: AuthUser,
     Query(query): Query<AvailableGuardsQuery>,
 ) -> Result<Json<ApiResponse<Vec<AvailableGuardResponse>>>, AppError> {
-    // Only customers and admins can search for available guards
-    if user.role == "guard" {
-        return Err(AppError::Forbidden(
-            "Guards cannot search for available guards".to_string(),
-        ));
+    // Only users with an approved customer profile (or admins) can search for guards.
+    if user.role != "admin" {
+        let has_customer_profile: Option<bool> = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM auth.customer_profiles WHERE user_id = $1 AND approval_status = 'approved')",
+        )
+        .bind(user.user_id)
+        .fetch_one(&state.db)
+        .await?;
+        if !has_customer_profile.unwrap_or(false) {
+            return Err(AppError::Forbidden(
+                "Only approved customers can search for available guards".to_string(),
+            ));
+        }
     }
     let guards = crate::service::list_available_guards(&state.db, query).await?;
     Ok(Json(ApiResponse::success(guards)))

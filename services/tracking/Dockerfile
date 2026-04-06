@@ -30,7 +30,7 @@ COPY services/tracking/src services/tracking/src
 
 RUN find services/shared/src services/tracking/src -name '*.rs' | xargs touch && cargo build --release -p tracking-service
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
     && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser

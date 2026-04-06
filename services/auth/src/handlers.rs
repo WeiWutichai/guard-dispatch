@@ -40,7 +40,7 @@ fn auth_cookie_headers(auth: &AuthResponse) -> HeaderMap {
     let refresh_cookie = build_cookie(
         REFRESH_TOKEN_COOKIE,
         &auth.refresh_token,
-        30 * 24 * 3600,
+        7 * 24 * 3600,
         "/auth",
     );
     headers.append(SET_COOKIE, refresh_cookie.parse().expect("valid cookie"));
@@ -149,7 +149,7 @@ pub async fn phone_login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<PhoneLoginRequest>,
-) -> Result<(HeaderMap, Json<ApiResponse<crate::models::WebAuthResponse>>), AppError> {
+) -> Result<(HeaderMap, Json<ApiResponse<serde_json::Value>>), AppError> {
     let ip_address = headers
         .get("X-Real-IP")
         .and_then(|v| v.to_str().ok())
@@ -170,9 +170,19 @@ pub async fn phone_login(
     .await?;
 
     let cookie_headers = auth_cookie_headers(&auth);
-    // Return WebAuthResponse (no tokens in body) — tokens are in httpOnly cookies.
-    let web_response: crate::models::WebAuthResponse = (&auth).into();
-    Ok((cookie_headers, Json(ApiResponse::success(web_response))))
+    // Mobile clients (no cookie support) → return full tokens in JSON body.
+    // Web clients → tokens only in httpOnly cookies, body has role/expiry only.
+    let is_mobile = headers.get("X-Client-Type")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == "mobile")
+        .unwrap_or(false);
+    let body = if is_mobile {
+        serde_json::to_value(&auth).unwrap_or_default()
+    } else {
+        let web_response: crate::models::WebAuthResponse = (&auth).into();
+        serde_json::to_value(&web_response).unwrap_or_default()
+    };
+    Ok((cookie_headers, Json(ApiResponse::success(body))))
 }
 
 #[utoipa::path(
@@ -613,6 +623,7 @@ pub async fn reissue_profile_token(
         &state.jwt_config,
         &state.redis,
         &req.phone,
+        &req.phone_verified_token,
         req.role,
     )
     .await?;
@@ -1068,10 +1079,10 @@ mod tests {
             .iter()
             .find(|c| c.starts_with("refresh_token="))
             .unwrap();
-        let expected_max_age = 30 * 24 * 3600;
+        let expected_max_age = 7 * 24 * 3600;
         assert!(
             refresh.contains(&format!("Max-Age={expected_max_age}")),
-            "refresh_token must have 30-day Max-Age"
+            "refresh_token must have 7-day Max-Age"
         );
     }
 }

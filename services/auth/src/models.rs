@@ -288,6 +288,8 @@ pub struct PaginatedUsers {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ReissueProfileTokenRequest {
     pub phone: String,
+    /// OTP-verified token — proves phone ownership before reissuing profile token.
+    pub phone_verified_token: String,
     /// Optional role to determine profile token purpose. Defaults to guard.
     pub role: Option<UserRole>,
 }

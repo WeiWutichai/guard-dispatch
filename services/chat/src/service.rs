@@ -24,10 +24,10 @@ fn spawn_chat_notification(
 ) {
     tokio::spawn(async move {
         let title = format!("ข้อความจาก {sender_name}");
-        let body = if message_preview.len() > 100 {
-            format!("{}...", &message_preview[..100])
+        let body = if message_preview.is_empty() {
+            "📎 ไฟล์แนบ".to_string()
         } else {
-            message_preview
+            message_preview.chars().take(100).collect::<String>()
         };
         let payload = serde_json::json!({
             "conversation_id": conversation_id.to_string(),
