@@ -43,8 +43,9 @@ pub async fn ws_handler(
 async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
     tracing::info!("GPS WebSocket connected: guard_id={}", user.user_id);
 
-    // Mark guard as online immediately (before any GPS data arrives).
-    // This ensures stationary guards (no GPS delta) are still discoverable.
+    // Mark existing guard location row as online (if any).
+    // The guard won't appear on the map until the first real GPS update
+    // creates the row via upsert_location().
     if let Err(e) = crate::service::set_online(&state.db, user.user_id).await {
         tracing::error!("Failed to set guard online: {e}");
     }
@@ -97,9 +98,9 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             Ok(Message::Pong(_)) => {
                 last_activity = std::time::Instant::now();
                 ping_sent_at = None;
-                // Refresh recorded_at so stationary guards (no GPS delta)
-                // don't fall off the 30-min filter in available-guards query
-                let _ = crate::service::set_online(&state.db, user.user_id).await;
+                // Don't refresh recorded_at here — only real GPS updates should.
+                // The 30s client-side periodic re-send of cached position handles
+                // keep-alive for stationary guards via actual GPS data.
                 continue;
             }
             Ok(Message::Close(_)) => break,
