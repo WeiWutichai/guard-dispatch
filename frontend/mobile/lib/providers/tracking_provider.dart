@@ -14,7 +14,6 @@ class TrackingProvider extends ChangeNotifier {
   bool _isConnecting = false;
   bool _isConnected = false;
   Position? _lastPosition;
-  bool _serverConfirmed = false;
   String? _error;
 
   TrackingProvider(this._service) {
@@ -22,7 +21,6 @@ class TrackingProvider extends ChangeNotifier {
       ..onConnected = _handleConnected
       ..onDisconnected = _handleDisconnected
       ..onPositionUpdate = _handlePositionUpdate
-      ..onAck = _handleAck
       ..onError = _handleError;
   }
 
@@ -34,16 +32,11 @@ class TrackingProvider extends ChangeNotifier {
   Position? get lastPosition => _lastPosition;
   String? get error => _error;
 
-  /// True when server has confirmed receiving at least one GPS update.
-  /// This matches admin map logic: both green only when backend has
-  /// a fresh recorded_at from upsert_location().
-  ///
-  /// Lifecycle:
-  /// - toggle on → false (gray)
-  /// - GPS sent → server ACK {"status":"ok"} → true (green)
-  /// - WS disconnects → false (gray)
-  /// - toggle off → false (gray)
-  bool get hasRecentGps => _isConnected && _serverConfirmed;
+  /// Green when we have GPS data and are either connected or reconnecting.
+  /// Uses _isOnline (toggle state) not _isConnected (WS state) so brief
+  /// reconnect gaps don't flash gray. The 30s periodic re-send ensures
+  /// backend stays fresh while _lastPosition persists across reconnects.
+  bool get hasRecentGps => _isOnline && _lastPosition != null;
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
@@ -79,7 +72,6 @@ class TrackingProvider extends ChangeNotifier {
     _isConnecting = false;
     _isConnected = false;
     _lastPosition = null;
-    _serverConfirmed = false;
     _error = null;
     notifyListeners();
   }
@@ -117,21 +109,14 @@ class TrackingProvider extends ChangeNotifier {
 
   void _handleDisconnected() {
     _isConnected = false;
-    _serverConfirmed = false;
+    // Don't clear _lastPosition — it persists across reconnects
+    // so hasRecentGps stays green during brief reconnect gaps.
     notifyListeners();
   }
 
   void _handlePositionUpdate(Position position) {
     _lastPosition = position;
     notifyListeners();
-  }
-
-  void _handleAck(Map<String, dynamic> ack) {
-    // Only trust ACKs that include recorded_at (proves a real GPS upsert happened)
-    if (ack['status'] == 'ok' && ack['recorded_at'] != null && !_serverConfirmed) {
-      _serverConfirmed = true;
-      notifyListeners();
-    }
   }
 
   void _handleError(String message) {
