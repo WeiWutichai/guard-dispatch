@@ -50,9 +50,13 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
         tracing::error!("Failed to set guard online: {e}");
     }
 
-    // Server-side rate limiting: max 1 update per second per connection
+    // Server-side rate limiting: max 1 GPS update per second per connection
     let mut last_update = std::time::Instant::now() - std::time::Duration::from_secs(1);
     let min_interval = std::time::Duration::from_secs(1);
+
+    // Heartbeat rate limiting: max 1 heartbeat per 10 seconds
+    let mut last_heartbeat = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    let min_heartbeat_interval = std::time::Duration::from_secs(10);
 
     // Ping/pong: detect zombie connections (e.g. guard killed app, lost signal)
     let ping_interval = std::time::Duration::from_secs(30);
@@ -111,9 +115,15 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             _ => continue,
         };
 
-        // Skip heartbeat messages first (before rate limit check)
-        // so they don't consume the rate limit slot
+        // Skip heartbeat messages (before GPS rate limit check).
+        // Rate-limited separately to prevent DoS via heartbeat spam.
         if msg.contains("\"type\":\"heartbeat\"") {
+            let now_hb = std::time::Instant::now();
+            if now_hb.duration_since(last_heartbeat) < min_heartbeat_interval {
+                // Too many heartbeats — silently drop
+                continue;
+            }
+            last_heartbeat = now_hb;
             continue;
         }
 

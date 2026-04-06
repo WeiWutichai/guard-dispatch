@@ -127,7 +127,8 @@ class TrackingProvider extends ChangeNotifier {
   }
 
   void _handleAck(Map<String, dynamic> ack) {
-    if (ack['status'] == 'ok' && !_serverConfirmed) {
+    // Only trust ACKs that include recorded_at (proves a real GPS upsert happened)
+    if (ack['status'] == 'ok' && ack['recorded_at'] != null && !_serverConfirmed) {
       _serverConfirmed = true;
       notifyListeners();
     }
