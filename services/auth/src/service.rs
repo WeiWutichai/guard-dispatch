@@ -1220,9 +1220,8 @@ pub async fn reissue_profile_token(
         .fetch_optional(db)
         .await?;
 
-    let (user_id,) = user.ok_or_else(|| {
-        AppError::BadRequest("Unable to process request".to_string())
-    })?;
+    let (user_id,) =
+        user.ok_or_else(|| AppError::BadRequest("Unable to process request".to_string()))?;
 
     // Determine purpose from role (default: guard for backward compatibility)
     let purpose = match role {
@@ -1770,7 +1769,7 @@ pub async fn get_guard_profile(
         account_number: row.account_number.map(|n| {
             // Mask bank account number — show only last 4 digits (PDPA)
             if n.len() > 4 {
-                format!("{}{}",  "*".repeat(n.len() - 4), &n[n.len() - 4..])
+                format!("{}{}", "*".repeat(n.len() - 4), &n[n.len() - 4..])
             } else {
                 n
             }
@@ -2773,7 +2772,11 @@ mod tests {
     fn update_role_rejects_admin_role() {
         // update_user_role checks: if role == UserRole::Admin { return Err }
         let role = UserRole::Admin;
-        assert_eq!(role, UserRole::Admin, "Admin role must be rejected by update_user_role");
+        assert_eq!(
+            role,
+            UserRole::Admin,
+            "Admin role must be rejected by update_user_role"
+        );
     }
 
     // =========================================================================
@@ -2798,7 +2801,10 @@ mod tests {
     fn register_otp_customer_role_no_profile_token() {
         let role = Some(UserRole::Customer);
         let is_guard = role == Some(UserRole::Guard);
-        assert!(!is_guard, "Customer role should NOT trigger profile_token in register_with_otp");
+        assert!(
+            !is_guard,
+            "Customer role should NOT trigger profile_token in register_with_otp"
+        );
     }
 
     // =========================================================================
@@ -2837,8 +2843,7 @@ mod tests {
         let user_id = Uuid::new_v4();
 
         // Encode guard token
-        let (guard_token, _jti) =
-            encode_profile_token(user_id, &key, 15, "guard_profile").unwrap();
+        let (guard_token, _jti) = encode_profile_token(user_id, &key, 15, "guard_profile").unwrap();
 
         // Decode with correct purpose succeeds
         let result = decode_profile_token(&guard_token, &decode_key, "guard_profile");
@@ -2846,7 +2851,10 @@ mod tests {
 
         // Decode with wrong purpose fails
         let result = decode_profile_token(&guard_token, &decode_key, "customer_profile");
-        assert!(result.is_err(), "Guard token must be rejected for customer purpose");
+        assert!(
+            result.is_err(),
+            "Guard token must be rejected for customer purpose"
+        );
     }
 
     #[test]
@@ -2860,7 +2868,10 @@ mod tests {
             encode_profile_token(user_id, &key, 15, "customer_profile").unwrap();
 
         let result = decode_profile_token(&customer_token, &decode_key, "guard_profile");
-        assert!(result.is_err(), "Customer token must be rejected for guard purpose");
+        assert!(
+            result.is_err(),
+            "Customer token must be rejected for guard purpose"
+        );
     }
 
     // =========================================================================
@@ -2873,8 +2884,7 @@ mod tests {
         let enc_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
         let dec_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
 
-        let (token, original_jti) =
-            encode_phone_verify_token("0812345678", &enc_key, 10).unwrap();
+        let (token, original_jti) = encode_phone_verify_token("0812345678", &enc_key, 10).unwrap();
         let (phone, decoded_jti) = decode_phone_verify_token(&token, &dec_key).unwrap();
 
         assert_eq!(phone, "0812345678");
@@ -2900,7 +2910,10 @@ mod tests {
 
         let (_, jti1) = encode_phone_verify_token("0812345678", &key, 10).unwrap();
         let (_, jti2) = encode_phone_verify_token("0812345678", &key, 10).unwrap();
-        assert_ne!(jti1, jti2, "Each token must have a unique jti for single-use enforcement");
+        assert_ne!(
+            jti1, jti2,
+            "Each token must have a unique jti for single-use enforcement"
+        );
     }
 
     // =========================================================================
@@ -2932,8 +2945,7 @@ mod tests {
             iat: now.timestamp(),
         };
 
-        let token =
-            jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
+        let token = jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
 
         // decode_jwt_with_key uses validation.set_issuer(&["guard-dispatch"])
         // which requires iss to match. Missing iss should fail.
@@ -2965,8 +2977,7 @@ mod tests {
             iss: "wrong-issuer".to_string(),
         };
 
-        let token =
-            jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
+        let token = jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
 
         let result = shared::auth::decode_jwt_with_key(&token, &dec_key);
         assert!(result.is_err(), "JWT with wrong iss must be rejected");
@@ -3007,7 +3018,10 @@ mod tests {
 
         // Decode with decode_jwt_with_key which only allows HS256
         let result = shared::auth::decode_jwt_with_key(&token, &dec_key);
-        assert!(result.is_err(), "JWT with HS384 algorithm must be rejected — only HS256 is allowed");
+        assert!(
+            result.is_err(),
+            "JWT with HS384 algorithm must be rejected — only HS256 is allowed"
+        );
     }
 
     // =========================================================================
@@ -3025,8 +3039,12 @@ mod tests {
             jwt_secret: String,
         }
         impl shared::auth::HasJwtSecret for TestState {
-            fn jwt_secret(&self) -> &str { &self.jwt_secret }
-            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey { &self.decoding_key }
+            fn jwt_secret(&self) -> &str {
+                &self.jwt_secret
+            }
+            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
+                &self.decoding_key
+            }
         }
 
         let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
@@ -3045,12 +3063,12 @@ mod tests {
             .body(())
             .unwrap();
 
-        let result = shared::auth::AuthUser::from_request_parts(
-            &mut request.into_parts().0,
-            &*state,
-        )
-        .await;
-        assert!(result.is_err(), "Cookie-based POST without CSRF header must be rejected");
+        let result =
+            shared::auth::AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        assert!(
+            result.is_err(),
+            "Cookie-based POST without CSRF header must be rejected"
+        );
     }
 
     #[tokio::test]
@@ -3064,8 +3082,12 @@ mod tests {
             jwt_secret: String,
         }
         impl shared::auth::HasJwtSecret for TestState {
-            fn jwt_secret(&self) -> &str { &self.jwt_secret }
-            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey { &self.decoding_key }
+            fn jwt_secret(&self) -> &str {
+                &self.jwt_secret
+            }
+            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
+                &self.decoding_key
+            }
         }
 
         let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
@@ -3085,12 +3107,12 @@ mod tests {
             .body(())
             .unwrap();
 
-        let result = shared::auth::AuthUser::from_request_parts(
-            &mut request.into_parts().0,
-            &*state,
-        )
-        .await;
-        assert!(result.is_ok(), "Cookie-based POST with CSRF header must be accepted");
+        let result =
+            shared::auth::AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        assert!(
+            result.is_ok(),
+            "Cookie-based POST with CSRF header must be accepted"
+        );
     }
 
     #[tokio::test]
@@ -3104,8 +3126,12 @@ mod tests {
             jwt_secret: String,
         }
         impl shared::auth::HasJwtSecret for TestState {
-            fn jwt_secret(&self) -> &str { &self.jwt_secret }
-            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey { &self.decoding_key }
+            fn jwt_secret(&self) -> &str {
+                &self.jwt_secret
+            }
+            fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
+                &self.decoding_key
+            }
         }
 
         let secret = "test-secret-key-at-least-64-chars-long-for-testing-purposes-only!!";
@@ -3124,12 +3150,12 @@ mod tests {
             .body(())
             .unwrap();
 
-        let result = shared::auth::AuthUser::from_request_parts(
-            &mut request.into_parts().0,
-            &*state,
-        )
-        .await;
-        assert!(result.is_ok(), "Bearer auth POST should not require CSRF header");
+        let result =
+            shared::auth::AuthUser::from_request_parts(&mut request.into_parts().0, &*state).await;
+        assert!(
+            result.is_ok(),
+            "Bearer auth POST should not require CSRF header"
+        );
     }
 
     // =========================================================================
@@ -3139,16 +3165,27 @@ mod tests {
     #[test]
     fn access_token_cookie_has_httponly_secure() {
         let cookie = shared::auth::build_cookie("access_token", "tok123", 86400, "/");
-        assert!(cookie.contains("HttpOnly"), "access_token cookie must be HttpOnly");
-        assert!(cookie.contains("Secure"), "access_token cookie must have Secure flag");
-        assert!(cookie.contains("SameSite=Lax"), "access_token cookie must be SameSite=Lax");
+        assert!(
+            cookie.contains("HttpOnly"),
+            "access_token cookie must be HttpOnly"
+        );
+        assert!(
+            cookie.contains("Secure"),
+            "access_token cookie must have Secure flag"
+        );
+        assert!(
+            cookie.contains("SameSite=Lax"),
+            "access_token cookie must be SameSite=Lax"
+        );
     }
 
     #[test]
     fn refresh_token_cookie_restricted_to_auth_path() {
-        let cookie =
-            shared::auth::build_cookie("refresh_token", "ref123", 7 * 24 * 3600, "/auth");
-        assert!(cookie.contains("Path=/auth"), "refresh_token cookie must be restricted to /auth path");
+        let cookie = shared::auth::build_cookie("refresh_token", "ref123", 7 * 24 * 3600, "/auth");
+        assert!(
+            cookie.contains("Path=/auth"),
+            "refresh_token cookie must be restricted to /auth path"
+        );
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("Secure"));
     }
@@ -3227,8 +3264,7 @@ mod tests {
 
         let invalid_cases = vec!["abc", "a@bc", "abcd"];
         for email in &invalid_cases {
-            let is_invalid =
-                email.len() < 5 || !email.contains('@') || !email.contains('.');
+            let is_invalid = email.len() < 5 || !email.contains('@') || !email.contains('.');
             assert!(is_invalid, "{email} should be invalid");
         }
     }
@@ -3251,7 +3287,10 @@ mod tests {
         };
 
         assert!(rewritten.starts_with("http://localhost/minio-files"));
-        assert!(!rewritten.contains("minio:9000"), "Internal host must not leak to client");
+        assert!(
+            !rewritten.contains("minio:9000"),
+            "Internal host must not leak to client"
+        );
     }
 
     #[test]
@@ -3265,7 +3304,10 @@ mod tests {
             url.to_string()
         };
 
-        assert_eq!(result, url, "No rewrite when endpoints match (production R2)");
+        assert_eq!(
+            result, url,
+            "No rewrite when endpoints match (production R2)"
+        );
     }
 
     // =========================================================================
@@ -3374,8 +3416,7 @@ mod tests {
             iss: "guard-dispatch".to_string(),
         };
 
-        let token =
-            jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
+        let token = jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &key).unwrap();
         let result = shared::auth::decode_jwt_with_key(&token, &dec_key);
         assert!(result.is_err(), "Expired JWT must be rejected");
     }

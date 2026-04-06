@@ -148,7 +148,13 @@ async fn main() -> anyhow::Result<()> {
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
     // Ensure bucket exists (dev convenience — production bucket is pre-created)
-    if s3_client.head_bucket().bucket(&s3_bucket).send().await.is_err() {
+    if s3_client
+        .head_bucket()
+        .bucket(&s3_bucket)
+        .send()
+        .await
+        .is_err()
+    {
         tracing::info!("Bucket '{}' not found, creating...", s3_bucket);
         let _ = s3_client.create_bucket().bucket(&s3_bucket).send().await;
         // Set private-only bucket policy (deny anonymous/public access to guard documents)
@@ -162,7 +168,8 @@ async fn main() -> anyhow::Result<()> {
                 "Condition": { "StringEquals": { "aws:PrincipalType": "Anonymous" } }
             }]
         });
-        let _ = s3_client.put_bucket_policy()
+        let _ = s3_client
+            .put_bucket_policy()
             .bucket(&s3_bucket)
             .policy(policy.to_string())
             .send()
@@ -188,11 +195,9 @@ async fn main() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
             interval.tick().await;
-            match sqlx::query(
-                "DELETE FROM auth.otp_codes WHERE expires_at < NOW()",
-            )
-            .execute(&cleanup_db)
-            .await
+            match sqlx::query("DELETE FROM auth.otp_codes WHERE expires_at < NOW()")
+                .execute(&cleanup_db)
+                .await
             {
                 Ok(result) => {
                     if result.rows_affected() > 0 {

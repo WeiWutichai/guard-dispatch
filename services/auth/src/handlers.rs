@@ -172,7 +172,8 @@ pub async fn phone_login(
     let cookie_headers = auth_cookie_headers(&auth);
     // Mobile clients (no cookie support) → return full tokens in JSON body.
     // Web clients → tokens only in httpOnly cookies, body has role/expiry only.
-    let is_mobile = headers.get("X-Client-Type")
+    let is_mobile = headers
+        .get("X-Client-Type")
         .and_then(|v| v.to_str().ok())
         .map(|v| v == "mobile")
         .unwrap_or(false);
