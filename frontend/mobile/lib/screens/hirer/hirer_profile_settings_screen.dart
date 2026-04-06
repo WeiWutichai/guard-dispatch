@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../providers/auth_provider.dart';
@@ -26,6 +27,12 @@ class _HirerProfileSettingsScreenState
   bool _smsNotif = false;
   bool _bookingAlerts = true;
 
+  // Guard info controllers (for dual-role users)
+  final _genderController = TextEditingController();
+  final _dobController = TextEditingController();
+  final _experienceController = TextEditingController();
+  final _workplaceController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +41,19 @@ class _HirerProfileSettingsScreenState
     _phoneController.text = auth.phone ?? '';
     _companyController.text = auth.companyName ?? '';
     _addressController.text = auth.customerAddress ?? '';
+
+    // Populate guard fields if dual-role user
+    _genderController.text = auth.gender ?? '';
+    _dobController.text = auth.dateOfBirth ?? '';
+    _experienceController.text = auth.yearsOfExperience?.toString() ?? '';
+    _workplaceController.text = auth.previousWorkplace ?? '';
+
+    // Fetch guard document URLs if user has guard data
+    if (auth.gender != null || auth.fullName != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        context.read<AuthProvider>().fetchGuardDocs(force: true);
+      });
+    }
   }
 
   @override
@@ -43,6 +63,10 @@ class _HirerProfileSettingsScreenState
     _emailController.dispose();
     _companyController.dispose();
     _addressController.dispose();
+    _genderController.dispose();
+    _dobController.dispose();
+    _experienceController.dispose();
+    _workplaceController.dispose();
     super.dispose();
   }
 
@@ -111,6 +135,8 @@ class _HirerProfileSettingsScreenState
                   _buildProfilePhotoSection(strings),
                   const SizedBox(height: 20),
                   _buildPersonalInfoSection(strings),
+                  // Guard info & documents for dual-role users
+                  ..._buildGuardSections(context),
                   const SizedBox(height: 20),
                   _buildNotificationsSection(strings),
                   const SizedBox(height: 24),
@@ -229,6 +255,271 @@ class _HirerProfileSettingsScreenState
           maxLines: 2,
         ),
       ],
+    );
+  }
+
+  // ─── Guard Info & Documents (dual-role users only) ───────────────────────
+
+  List<Widget> _buildGuardSections(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final hasGuardData = auth.gender != null ||
+        auth.dateOfBirth != null ||
+        auth.yearsOfExperience != null ||
+        auth.guardDocUrls.isNotEmpty;
+    if (!hasGuardData) return [];
+
+    final isThai = LanguageProvider.of(context).isThai;
+
+    // Format date_of_birth for display
+    if (_dobController.text.isNotEmpty && _dobController.text.contains('-')) {
+      try {
+        final dt = DateTime.parse(_dobController.text);
+        _dobController.text = DateFormat('d MMM yyyy').format(dt);
+      } catch (_) {}
+    }
+    // Translate gender for display
+    if (_genderController.text.isNotEmpty) {
+      final g = _genderController.text.toLowerCase();
+      if (g == 'male' || g == 'ชาย') {
+        _genderController.text = isThai ? 'ชาย' : 'Male';
+      } else if (g == 'female' || g == 'หญิง') {
+        _genderController.text = isThai ? 'หญิง' : 'Female';
+      }
+    }
+
+    return [
+      const SizedBox(height: 20),
+      _buildSection(
+        title: isThai ? 'ข้อมูลเจ้าหน้าที่ รปภ.' : 'Guard Information',
+        icon: Icons.shield_outlined,
+        children: [
+          _buildReadOnlyField(isThai ? 'เพศ' : 'Gender', _genderController),
+          const SizedBox(height: 16),
+          _buildReadOnlyField(isThai ? 'วันเกิด' : 'Date of Birth', _dobController),
+          const SizedBox(height: 16),
+          _buildReadOnlyField(
+            isThai ? 'ประสบการณ์ (ปี)' : 'Years of Experience',
+            _experienceController,
+          ),
+          const SizedBox(height: 16),
+          _buildReadOnlyField(
+            isThai ? 'สถานที่ทำงานเดิม' : 'Previous Workplace',
+            _workplaceController,
+          ),
+        ],
+      ),
+      const SizedBox(height: 20),
+      _buildGuardDocumentsSection(context),
+    ];
+  }
+
+  Widget _buildGuardDocumentsSection(BuildContext context) {
+    final isThai = LanguageProvider.of(context).isThai;
+    final auth = context.watch<AuthProvider>();
+    final docs = auth.guardDocUrls;
+
+    final docItems = <_DocItem>[
+      _DocItem(
+        key: 'id_card',
+        label: isThai ? 'บัตรประชาชน' : 'ID Card',
+        icon: Icons.badge_rounded,
+      ),
+      _DocItem(
+        key: 'security_license',
+        label: isThai ? 'ใบอนุญาตรักษาความปลอดภัย' : 'Security License',
+        icon: Icons.verified_user_rounded,
+      ),
+      _DocItem(
+        key: 'training_cert',
+        label: isThai ? 'ใบรับรองการฝึกอบรม' : 'Training Certificate',
+        icon: Icons.school_rounded,
+      ),
+      _DocItem(
+        key: 'criminal_check',
+        label: isThai ? 'ใบผ่านการตรวจสอบประวัติอาชญากรรม' : 'Criminal Background Check',
+        icon: Icons.policy_rounded,
+      ),
+      _DocItem(
+        key: 'driver_license',
+        label: isThai ? 'ใบขับขี่' : "Driver's License",
+        icon: Icons.drive_eta_rounded,
+      ),
+    ];
+
+    return _buildSection(
+      title: isThai ? 'เอกสารเจ้าหน้าที่' : 'Guard Documents',
+      icon: Icons.folder_rounded,
+      children: [
+        if (!auth.docsLoaded)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+              ),
+            ),
+          )
+        else
+          ...docItems.map((item) {
+            final url = docs[item.key];
+            final hasDoc = url != null && url.isNotEmpty;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Icon(item.icon, size: 20, color: hasDoc ? AppColors.primary : AppColors.disabled),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          item.label,
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: hasDoc ? AppColors.textPrimary : AppColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                      if (hasDoc)
+                        GestureDetector(
+                          onTap: () => _showDocumentPreview(context, item.label, url),
+                          child: Text(
+                            isThai ? 'ดูเอกสาร' : 'View',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        )
+                      else
+                        Text(
+                          isThai ? 'ยังไม่ได้อัพโหลด' : 'Not uploaded',
+                          style: GoogleFonts.inter(fontSize: 12, color: AppColors.disabled),
+                        ),
+                    ],
+                  ),
+                  if (hasDoc) const Divider(height: 12, color: AppColors.border),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
+  Widget _buildReadOnlyField(String label, TextEditingController controller) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: controller,
+          readOnly: true,
+          style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: const Color(0xFFEEEEEE),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: AppColors.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: AppColors.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: AppColors.border),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showDocumentPreview(BuildContext context, String title, String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 8, 16),
+              decoration: const BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.5,
+              ),
+              width: double.infinity,
+              child: Image.network(
+                url,
+                fit: BoxFit.contain,
+                loadingBuilder: (_, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return const SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: CircularProgressIndicator(color: AppColors.primary),
+                    ),
+                  );
+                },
+                errorBuilder: (_, error, stackTrace) => SizedBox(
+                  height: 200,
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.broken_image_rounded, size: 48, color: AppColors.disabled),
+                        const SizedBox(height: 8),
+                        Text(
+                          LanguageProvider.of(context).isThai
+                              ? 'ไม่สามารถโหลดรูปภาพได้'
+                              : 'Unable to load image',
+                          style: GoogleFonts.inter(color: AppColors.textSecondary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
     );
   }
 
@@ -419,4 +710,11 @@ class _HirerProfileSettingsScreenState
       ),
     );
   }
+}
+
+class _DocItem {
+  final String key;
+  final String label;
+  final IconData icon;
+  const _DocItem({required this.key, required this.label, required this.icon});
 }
