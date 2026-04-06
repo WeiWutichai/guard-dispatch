@@ -9,7 +9,6 @@ import { trackingApi, type GuardLocationWithName } from "@/lib/api";
 const statusHex: Record<string, string> = {
   active: "#10b981",
   idle: "#f59e0b",
-  alert: "#94a3b8",
   offline: "#ef4444",
 };
 
@@ -38,11 +37,10 @@ function createDotIcon(status: string): L.DivIcon {
   });
 }
 
-// Pre-create icons (only 3 variants)
+// Pre-create icons (3 statuses only)
 const icons: Record<string, L.DivIcon> = {
   active: createDotIcon("active"),
   idle: createDotIcon("idle"),
-  alert: createDotIcon("alert"),
   offline: createDotIcon("offline"),
 };
 
@@ -50,7 +48,7 @@ function getStatus(recordedAt: string, isOnline: boolean, hasActiveJob: boolean)
   if (!isOnline) return "offline";
   const minutesAgo =
     (Date.now() - new Date(recordedAt).getTime()) / 60000;
-  if (minutesAgo > 5) return "alert";
+  if (minutesAgo > 5) return "offline";
   if (hasActiveJob) return "idle";
   return "active";
 }

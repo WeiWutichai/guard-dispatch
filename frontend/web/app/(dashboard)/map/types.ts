@@ -1,7 +1,7 @@
 export interface DisplayGuard {
   id: string;
   name: string;
-  status: "active" | "idle" | "alert" | "offline";
+  status: "active" | "idle" | "offline";
   location: string;
   lat: number;
   lng: number;

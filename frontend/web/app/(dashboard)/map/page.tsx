@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import {
   MapPin,
   Users,
-  AlertTriangle,
   CheckCircle2,
   Clock,
   Maximize2,
@@ -27,6 +26,10 @@ import { type DisplayGuard } from "./types";
 // Lazy-load the map component (Leaflet requires window/DOM)
 const MapArea = dynamic(() => import("./map-area"), { ssr: false });
 
+// 3 statuses matching mobile app:
+// 🟢 active  = ว่าง พร้อมรับงาน (online + GPS fresh + no job)
+// 🟡 idle    = กำลังดำเนินงาน (online + GPS fresh + has job)
+// 🔴 offline = ไม่พร้อมรับงาน / ไม่รับงาน (offline OR GPS stale)
 const statusConfig = {
   active: {
     label: "Active",
@@ -40,12 +43,6 @@ const statusConfig = {
     ring: "ring-amber-200",
     hex: "#f59e0b",
   },
-  alert: {
-    label: "Alert",
-    color: "bg-slate-400",
-    ring: "ring-slate-200",
-    hex: "#94a3b8",
-  },
   offline: {
     label: "Offline",
     color: "bg-red-500",
@@ -54,13 +51,11 @@ const statusConfig = {
   },
 };
 
-function getGuardStatus(recordedAt: string, isOnline: boolean, hasActiveJob: boolean): "active" | "idle" | "alert" | "offline" {
+function getGuardStatus(recordedAt: string, isOnline: boolean, hasActiveJob: boolean): "active" | "idle" | "offline" {
   if (!isOnline) return "offline";
   const minutesAgo =
     (Date.now() - new Date(recordedAt).getTime()) / 60000;
-  if (minutesAgo > 5) return "alert";
-  // active (emerald) = "ว่าง" (available, no job)
-  // idle (amber) = "กำลังดำเนินงาน" (busy, has active job)
+  if (minutesAgo > 5) return "offline";
   if (hasActiveJob) return "idle";
   return "active";
 }
@@ -91,7 +86,7 @@ export default function MapPage() {
   const [guards, setGuards] = useState<DisplayGuard[]>([]);
   const [selectedGuard, setSelectedGuard] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<
-    "all" | "active" | "idle" | "alert" | "offline"
+    "all" | "active" | "idle" | "offline"
   >("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -166,15 +161,13 @@ export default function MapPage() {
   const stats = useMemo(() => {
     let active = 0,
       idle = 0,
-      alerts = 0,
       offline = 0;
     for (const g of guards) {
       if (g.status === "active") active++;
       else if (g.status === "idle") idle++;
-      else if (g.status === "offline") offline++;
-      else alerts++;
+      else offline++;
     }
-    return { total: guards.length, active, idle, alerts, offline };
+    return { total: guards.length, active, idle, offline };
   }, [guards]);
 
   const handleGuardSelect = useCallback(
@@ -195,7 +188,6 @@ export default function MapPage() {
     all: t.map.allFilter,
     active: t.map.active,
     idle: t.map.idle,
-    alert: t.map.alerts,
     offline: t.map.offline,
   };
 
@@ -228,7 +220,7 @@ export default function MapPage() {
           <div className="flex items-center gap-4">
             <h2 className="font-semibold text-slate-900">{t.map.bangkokArea}</h2>
             <div className="flex items-center gap-2">
-              {(["all", "active", "idle", "alert", "offline"] as const).map((status) => (
+              {(["all", "active", "idle", "offline"] as const).map((status) => (
                 <button
                   key={status}
                   onClick={() => setFilterStatus(status)}
@@ -282,7 +274,7 @@ export default function MapPage() {
             legendLabel={t.map.legend}
             activeLabel={t.map.active}
             idleLabel={t.map.idle}
-            alertLabel={t.map.alerts}
+
             offlineLabel={t.map.offline}
             flyToRef={flyToRef}
             invalidateSizeRef={invalidateSizeRef}
@@ -320,7 +312,7 @@ export default function MapPage() {
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-200">
           <div className="flex items-center justify-between">
             <div>
@@ -355,17 +347,6 @@ export default function MapPage() {
             </div>
             <div className="p-2 bg-amber-50 rounded-lg">
               <Clock className="h-5 w-5 text-amber-600" />
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-slate-500">{stats.alerts}</p>
-              <p className="text-sm text-slate-500">{t.map.alerts}</p>
-            </div>
-            <div className="p-2 bg-slate-100 rounded-lg">
-              <AlertTriangle className="h-5 w-5 text-slate-400" />
             </div>
           </div>
         </div>
@@ -413,7 +394,7 @@ export default function MapPage() {
                 {t.map.bangkokArea}
               </h2>
               <div className="flex items-center gap-2">
-                {(["all", "active", "idle", "alert"] as const).map(
+                {(["all", "active", "idle", "offline"] as const).map(
                   (status) => (
                     <button
                       key={status}
@@ -450,7 +431,7 @@ export default function MapPage() {
             legendLabel={t.map.legend}
             activeLabel={t.map.active}
             idleLabel={t.map.idle}
-            alertLabel={t.map.alerts}
+
             offlineLabel={t.map.offline}
             flyToRef={flyToRef}
             invalidateSizeRef={invalidateSizeRef}
