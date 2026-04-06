@@ -29,6 +29,7 @@ class TrackingService {
   IOWebSocketChannel? _channel;
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<dynamic>? _wsSub;
+  Timer? _heartbeatTimer;
   bool _isConnected = false;
   bool _isStopping = false;
   int _retryCount = 0;
@@ -73,6 +74,8 @@ class TrackingService {
     _isStopping = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
 
     await _positionSub?.cancel();
     _positionSub = null;
@@ -146,6 +149,20 @@ class TrackingService {
       _isConnected = true;
       _retryCount = 0;
       onConnected?.call();
+
+      // Application-level heartbeat: send a lightweight JSON message every 20s.
+      // This keeps the connection alive even when GPS is stationary (no updates).
+      // The server treats any Text message as activity, resetting its ping timer.
+      // This is needed because dart:io WebSocket on iOS may not auto-respond
+      // to server-sent Ping frames with Pong at the protocol level.
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+        if (_isConnected && _channel != null) {
+          try {
+            _channel!.sink.add(jsonEncode({'type': 'heartbeat'}));
+          } catch (_) {}
+        }
+      });
 
       // Listen for server messages (acks / errors).
       // Note: Ping/Pong frames are handled automatically at the dart:io

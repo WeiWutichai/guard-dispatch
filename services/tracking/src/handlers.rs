@@ -117,6 +117,11 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
         }
         last_update = now;
 
+        // Skip heartbeat messages (client sends these to keep connection alive)
+        if msg.contains("\"type\":\"heartbeat\"") {
+            continue;
+        }
+
         let update: GpsUpdate = match serde_json::from_str(&msg) {
             Ok(u) => u,
             Err(e) => {
