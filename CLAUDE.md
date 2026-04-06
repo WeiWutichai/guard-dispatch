@@ -801,7 +801,7 @@ RegistrationPendingScreen({role})
 **Booking Service — Available Guards Endpoint (main.rs):**
 - `GET /available-guards` → `handlers::available_guards` (JWT) — list nearby available guards for customer
   - Query params: `lat` (required), `lng` (required), `radius_km` (optional, default 50, max 200), `limit` (optional, default 20, max 50), `offset` (optional, default 0)
-  - Returns `Vec<AvailableGuardResponse>` — guards with `role='guard'`, `is_active=true`, `approval_status='approved'`, `is_online=true`, GPS location within last 30 minutes, within radius_km
+  - Returns `Vec<AvailableGuardResponse>` — guards with `role='guard'`, `is_active=true`, `approval_status='approved'`, `is_online=true`, GPS location within last 5 minutes, within radius_km
   - **Haversine distance:** Calculated in SQL using `6371 * acos(...)` with `LEAST/GREATEST` clamping to prevent NaN from floating-point rounding
   - **Models:** `AvailableGuardsQuery` (query params), `AvailableGuardRow` (sqlx::FromRow), `AvailableGuardResponse` (API response — includes `id`, `full_name`, `avatar_url`, `experience_years`, `lat`, `lng`, `distance_km`, `last_seen_at`, `completed_jobs`, `rating`, `review_count`)
   - **Real ratings:** JOINs `reviews.guard_reviews` — `AVG(overall_rating)` + `COUNT(*)` for actual review data
@@ -1248,7 +1248,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม accept ราคาติดลบใน service rates — `validate_prices()` ต้องตรวจ `min_price >= 0`, `max_price >= 0`, `base_fee >= 0`
 - ❌ ห้าม accept `min_price > max_price` — ต้อง validate ทั้ง create และ update (update ต้อง merge กับค่าเดิมก่อน validate)
 - ❌ ห้าม return inactive service rates จาก public GET endpoints — ต้อง filter `WHERE is_active = true` เสมอ
-- ❌ ห้าม query `available-guards` โดยไม่ filter `gl.is_online = true AND recorded_at > NOW() - INTERVAL '30 minutes'` — guards ที่ปิดให้บริการ (WebSocket disconnected → `is_online=false`) หรือไม่มี GPS update ภายใน 30 นาทีต้องไม่แสดง
+- ❌ ห้าม query `available-guards` โดยไม่ filter `gl.is_online = true AND recorded_at > NOW() - INTERVAL '5 minutes'` — guards ที่ปิดให้บริการ (WebSocket disconnected → `is_online=false`) หรือไม่มี GPS update ภายใน 5 นาทีต้องไม่แสดง — ตรงกับ threshold สีเทาของ admin map และ mobile
 - ❌ ห้าม GPS WebSocket disconnect โดยไม่เรียก `set_offline()` — ต้อง UPDATE `tracking.guard_locations SET is_online = false` ทุกครั้งที่ guard disconnect เพื่อให้ `available-guards` query exclude ทันที
 - ❌ ห้ามใช้ `acos()` โดยไม่ clamp ด้วย `LEAST(1.0, GREATEST(-1.0, ...))` ใน Haversine calculation — floating-point rounding อาจทำให้ค่าเกิน [-1,1] → NaN
 - ❌ ห้ามให้ non-admin, non-owner assign guard — `assign_guard` handler ต้องตรวจ `request.customer_id == user.user_id` สำหรับ non-admin users

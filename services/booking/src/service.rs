@@ -2393,7 +2393,7 @@ pub async fn list_available_guards(
           AND u.is_active = true
           AND u.approval_status = 'approved'
           AND gl.is_online = true
-          AND gl.recorded_at > NOW() - INTERVAL '30 minutes'
+          AND gl.recorded_at > NOW() - INTERVAL '5 minutes'
           AND NOT EXISTS (
               SELECT 1 FROM booking.assignments ba
               WHERE ba.guard_id = u.id
