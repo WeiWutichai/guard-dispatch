@@ -31,6 +31,7 @@ class TrackingService {
   StreamSubscription<dynamic>? _wsSub;
   Timer? _heartbeatTimer;
   Timer? _positionRefreshTimer;
+  Position? _lastKnownPosition;
   bool _isConnected = false;
   bool _isStopping = false;
   int _retryCount = 0;
@@ -91,6 +92,7 @@ class TrackingService {
 
     _isConnected = false;
     _assignmentId = null;
+    _lastKnownPosition = null;
     onDisconnected?.call();
   }
 
@@ -231,11 +233,14 @@ class TrackingService {
     _sendCurrentPosition();
 
     // Periodic refresh every 30s for stationary guards.
-    // distanceFilter=10 won't fire if the guard hasn't moved,
-    // so this ensures the backend always has a fresh recorded_at
+    // Re-sends the last known position so the backend refreshes recorded_at
     // and the guard doesn't fall off the 30-min available-guards filter.
+    // Uses cached _lastKnownPosition instead of getCurrentPosition() to avoid
+    // repeated GPS permission prompts on iOS.
     _positionRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _sendCurrentPosition();
+      if (_lastKnownPosition != null) {
+        _sendGpsUpdate(_lastKnownPosition!);
+      }
     });
 
     const locationSettings = LocationSettings(
@@ -247,6 +252,7 @@ class TrackingService {
       locationSettings: locationSettings,
     ).listen(
       (position) {
+        _lastKnownPosition = position;
         onPositionUpdate?.call(position);
         _sendGpsUpdate(position);
       },
@@ -260,6 +266,7 @@ class TrackingService {
     Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
     ).then((position) {
+      _lastKnownPosition = position;
       onPositionUpdate?.call(position);
       _sendGpsUpdate(position);
     }).catchError((e) {
