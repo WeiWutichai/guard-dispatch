@@ -136,7 +136,8 @@ class TrackingService {
       _channel = IOWebSocketChannel.connect(
         uri,
         headers: {'Authorization': 'Bearer $token'},
-        pingInterval: const Duration(seconds: 30),
+        // Let the server handle ping/pong (30s interval, 10s timeout).
+        // Don't set client-side pingInterval to avoid conflict.
       );
 
       // Wait for the connection to be ready
@@ -146,11 +147,15 @@ class TrackingService {
       _retryCount = 0;
       onConnected?.call();
 
-      // Listen for server messages (acks / errors)
+      // Listen for server messages (acks / errors).
+      // Note: Ping/Pong frames are handled automatically at the dart:io
+      // WebSocket layer and never appear in the stream — only Text/Binary
+      // data frames reach this listener.
       _wsSub = _channel!.stream.listen(
         (data) {
+          if (data is! String) return; // Skip non-text frames
           try {
-            final msg = jsonDecode(data as String) as Map<String, dynamic>;
+            final msg = jsonDecode(data) as Map<String, dynamic>;
             if (msg.containsKey('error')) {
               onError?.call(msg['error'] as String);
             } else {
