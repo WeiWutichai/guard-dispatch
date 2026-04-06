@@ -229,23 +229,29 @@ class TrackingService {
     _positionSub?.cancel();
     _positionRefreshTimer?.cancel();
 
-    // Send initial position immediately (don't wait for distanceFilter delta)
-    _sendCurrentPosition();
+    // 1. Send cached OS position instantly (no GPS hardware delay).
+    //    This ensures the guard appears on the map immediately, even indoors.
+    _sendCachedPosition();
 
-    // Periodic refresh every 30s for stationary guards.
-    // Re-sends the last known position so the backend refreshes recorded_at
-    // and the guard doesn't fall off the 30-min available-guards filter.
-    // Uses cached _lastKnownPosition instead of getCurrentPosition() to avoid
-    // repeated GPS permission prompts on iOS.
+    // 2. Then get a fresh high-accuracy fix (may take a few seconds).
+    _sendFreshPosition();
+
+    // 3. Periodic refresh every 30s for stationary guards.
+    //    Re-sends cached _lastKnownPosition so backend refreshes recorded_at
+    //    and the guard doesn't fall off the 30-min available-guards filter.
     _positionRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (_lastKnownPosition != null) {
         _sendGpsUpdate(_lastKnownPosition!);
+      } else {
+        // Still no position after 30s — retry fresh fix
+        _sendFreshPosition();
       }
     });
 
+    // 4. Stream movement-based updates (distanceFilter ≥ 10m).
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 10, // meters — only send when moved ≥10m
+      distanceFilter: 10,
     );
 
     _positionSub = Geolocator.getPositionStream(
@@ -262,7 +268,22 @@ class TrackingService {
     );
   }
 
-  void _sendCurrentPosition() {
+  /// Send the OS-cached last known position instantly (no GPS hardware needed).
+  void _sendCachedPosition() {
+    Geolocator.getLastKnownPosition().then((position) {
+      if (position != null && _lastKnownPosition == null) {
+        _lastKnownPosition = position;
+        onPositionUpdate?.call(position);
+        _sendGpsUpdate(position);
+      }
+    }).catchError((e) {
+      // ignore: avoid_print
+      print('[TrackingService] getLastKnownPosition failed: $e');
+    });
+  }
+
+  /// Get a fresh high-accuracy GPS fix (may take seconds for cold start).
+  void _sendFreshPosition() {
     Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
     ).then((position) {
