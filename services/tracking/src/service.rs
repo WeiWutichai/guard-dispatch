@@ -76,13 +76,12 @@ pub async fn upsert_location(
 }
 
 /// Mark guard as online when WebSocket connects.
-/// Only UPDATE existing rows — don't INSERT a placeholder (0,0) row.
-/// The first real GPS update via upsert_location() will create the row
-/// with actual coordinates. This prevents guards from appearing at (0,0)
-/// on the map before their GPS fix arrives.
+/// Only sets is_online flag — does NOT update recorded_at.
+/// recorded_at is only refreshed by real GPS data via upsert_location(),
+/// so admin map and mobile stay in sync (both gray until real GPS arrives).
 pub async fn set_online(db: &PgPool, guard_id: Uuid) -> Result<(), AppError> {
     sqlx::query(
-        "UPDATE tracking.guard_locations SET is_online = true, recorded_at = NOW() WHERE guard_id = $1",
+        "UPDATE tracking.guard_locations SET is_online = true WHERE guard_id = $1",
     )
     .bind(guard_id)
     .execute(db)
