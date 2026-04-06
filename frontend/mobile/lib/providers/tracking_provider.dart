@@ -14,6 +14,7 @@ class TrackingProvider extends ChangeNotifier {
   bool _isConnecting = false;
   bool _isConnected = false;
   Position? _lastPosition;
+  bool _serverConfirmed = false;
   String? _error;
 
   TrackingProvider(this._service) {
@@ -21,6 +22,7 @@ class TrackingProvider extends ChangeNotifier {
       ..onConnected = _handleConnected
       ..onDisconnected = _handleDisconnected
       ..onPositionUpdate = _handlePositionUpdate
+      ..onAck = _handleAck
       ..onError = _handleError;
   }
 
@@ -32,11 +34,16 @@ class TrackingProvider extends ChangeNotifier {
   Position? get lastPosition => _lastPosition;
   String? get error => _error;
 
-  /// True when WebSocket is connected AND we have GPS data.
-  /// - WS dies → isConnected=false → gray immediately
-  /// - No GPS → lastPosition=null → gray
-  /// - Both OK → green
-  bool get hasRecentGps => _isConnected && _lastPosition != null;
+  /// True when server has confirmed receiving at least one GPS update.
+  /// This matches admin map logic: both green only when backend has
+  /// a fresh recorded_at from upsert_location().
+  ///
+  /// Lifecycle:
+  /// - toggle on → false (gray)
+  /// - GPS sent → server ACK {"status":"ok"} → true (green)
+  /// - WS disconnects → false (gray)
+  /// - toggle off → false (gray)
+  bool get hasRecentGps => _isConnected && _serverConfirmed;
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
@@ -72,6 +79,7 @@ class TrackingProvider extends ChangeNotifier {
     _isConnecting = false;
     _isConnected = false;
     _lastPosition = null;
+    _serverConfirmed = false;
     _error = null;
     notifyListeners();
   }
@@ -109,12 +117,20 @@ class TrackingProvider extends ChangeNotifier {
 
   void _handleDisconnected() {
     _isConnected = false;
+    _serverConfirmed = false;
     notifyListeners();
   }
 
   void _handlePositionUpdate(Position position) {
     _lastPosition = position;
     notifyListeners();
+  }
+
+  void _handleAck(Map<String, dynamic> ack) {
+    if (ack['status'] == 'ok' && !_serverConfirmed) {
+      _serverConfirmed = true;
+      notifyListeners();
+    }
   }
 
   void _handleError(String message) {

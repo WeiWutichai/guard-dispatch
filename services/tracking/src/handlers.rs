@@ -111,17 +111,18 @@ async fn handle_gps_socket(mut socket: WebSocket, state: Arc<AppState>, user: Au
             _ => continue,
         };
 
-        // Rate limit: drop messages that arrive too fast
+        // Skip heartbeat messages first (before rate limit check)
+        // so they don't consume the rate limit slot
+        if msg.contains("\"type\":\"heartbeat\"") {
+            continue;
+        }
+
+        // Rate limit: drop GPS messages that arrive too fast (max 1/second)
         let now = std::time::Instant::now();
         if now.duration_since(last_update) < min_interval {
             continue;
         }
         last_update = now;
-
-        // Skip heartbeat messages (client sends these to keep connection alive)
-        if msg.contains("\"type\":\"heartbeat\"") {
-            continue;
-        }
 
         let update: GpsUpdate = match serde_json::from_str(&msg) {
             Ok(u) => u,
