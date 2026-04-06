@@ -59,6 +59,8 @@ function getGuardStatus(recordedAt: string, isOnline: boolean, hasActiveJob: boo
   const minutesAgo =
     (Date.now() - new Date(recordedAt).getTime()) / 60000;
   if (minutesAgo > 5) return "alert";
+  // active (emerald) = "ว่าง" (available, no job)
+  // idle (amber) = "กำลังดำเนินงาน" (busy, has active job)
   if (hasActiveJob) return "idle";
   return "active";
 }
@@ -129,8 +131,8 @@ export default function MapPage() {
           }))
         );
       }
-    } catch {
-      // API not available — show empty map
+    } catch (e) {
+      console.error("[Map] Failed to fetch guard locations:", e);
     }
   }, []);
 

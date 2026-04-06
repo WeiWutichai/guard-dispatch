@@ -76,16 +76,13 @@ pub async fn upsert_location(
 }
 
 /// Mark guard as online when WebSocket connects.
-/// Uses UPSERT so a guard connecting for the first time (no prior GPS row) gets a default row.
-/// lat/lng default to 0 — will be overwritten by the first real GPS update.
+/// Only UPDATE existing rows — don't INSERT a placeholder (0,0) row.
+/// The first real GPS update via upsert_location() will create the row
+/// with actual coordinates. This prevents guards from appearing at (0,0)
+/// on the map before their GPS fix arrives.
 pub async fn set_online(db: &PgPool, guard_id: Uuid) -> Result<(), AppError> {
     sqlx::query(
-        r#"
-        INSERT INTO tracking.guard_locations (guard_id, lat, lng, recorded_at, is_online)
-        VALUES ($1, 0, 0, NOW(), true)
-        ON CONFLICT (guard_id)
-        DO UPDATE SET is_online = true, recorded_at = NOW()
-        "#,
+        "UPDATE tracking.guard_locations SET is_online = true, recorded_at = NOW() WHERE guard_id = $1",
     )
     .bind(guard_id)
     .execute(db)

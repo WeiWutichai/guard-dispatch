@@ -30,6 +30,7 @@ class TrackingService {
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<dynamic>? _wsSub;
   Timer? _heartbeatTimer;
+  Timer? _positionRefreshTimer;
   bool _isConnected = false;
   bool _isStopping = false;
   int _retryCount = 0;
@@ -76,6 +77,8 @@ class TrackingService {
     _reconnectTimer = null;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _positionRefreshTimer?.cancel();
+    _positionRefreshTimer = null;
 
     await _positionSub?.cancel();
     _positionSub = null;
@@ -222,18 +225,17 @@ class TrackingService {
 
   void _startGpsStream() {
     _positionSub?.cancel();
+    _positionRefreshTimer?.cancel();
 
     // Send initial position immediately (don't wait for distanceFilter delta)
-    Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-    ).then((position) {
-      onPositionUpdate?.call(position);
-      _sendGpsUpdate(position);
-    }).catchError((e) {
-      // Log error but continue — the position stream below will still work
-      // when the device eventually gets a GPS fix
-      // ignore: avoid_print
-      print('[TrackingService] getCurrentPosition failed: $e — waiting for stream');
+    _sendCurrentPosition();
+
+    // Periodic refresh every 30s for stationary guards.
+    // distanceFilter=10 won't fire if the guard hasn't moved,
+    // so this ensures the backend always has a fresh recorded_at
+    // and the guard doesn't fall off the 30-min available-guards filter.
+    _positionRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _sendCurrentPosition();
     });
 
     const locationSettings = LocationSettings(
@@ -252,6 +254,18 @@ class TrackingService {
         onError?.call('gps_stream_error');
       },
     );
+  }
+
+  void _sendCurrentPosition() {
+    Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+    ).then((position) {
+      onPositionUpdate?.call(position);
+      _sendGpsUpdate(position);
+    }).catchError((e) {
+      // ignore: avoid_print
+      print('[TrackingService] getCurrentPosition failed: $e — waiting for stream');
+    });
   }
 
   void _sendGpsUpdate(Position position) {
