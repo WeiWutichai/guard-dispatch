@@ -14,7 +14,7 @@ class TrackingProvider extends ChangeNotifier {
   bool _isConnecting = false;
   bool _isConnected = false;
   Position? _lastPosition;
-  DateTime? _lastPositionTime;
+  DateTime? _lastServerAckTime;
   String? _error;
 
   TrackingProvider(this._service) {
@@ -22,6 +22,7 @@ class TrackingProvider extends ChangeNotifier {
       ..onConnected = _handleConnected
       ..onDisconnected = _handleDisconnected
       ..onPositionUpdate = _handlePositionUpdate
+      ..onAck = _handleAck
       ..onError = _handleError;
   }
 
@@ -33,11 +34,12 @@ class TrackingProvider extends ChangeNotifier {
   Position? get lastPosition => _lastPosition;
   String? get error => _error;
 
-  /// True when GPS position was received within the last 5 minutes.
-  /// Matches admin map threshold — stale GPS shows gray on both sides.
+  /// True when server acknowledged a GPS update within the last 5 minutes.
+  /// Uses server ACK (not local position) so mobile and admin map stay in sync.
+  /// If WebSocket silently dies, acks stop → both sides show gray.
   bool get hasRecentGps {
-    if (_lastPosition == null || _lastPositionTime == null) return false;
-    return DateTime.now().difference(_lastPositionTime!) < const Duration(minutes: 5);
+    if (_lastPosition == null || _lastServerAckTime == null) return false;
+    return DateTime.now().difference(_lastServerAckTime!) < const Duration(minutes: 5);
   }
 
   // ─── Actions ──────────────────────────────────────────────────────────────
@@ -74,7 +76,7 @@ class TrackingProvider extends ChangeNotifier {
     _isConnecting = false;
     _isConnected = false;
     _lastPosition = null;
-    _lastPositionTime = null;
+    _lastServerAckTime = null;
     _error = null;
     notifyListeners();
   }
@@ -117,8 +119,16 @@ class TrackingProvider extends ChangeNotifier {
 
   void _handlePositionUpdate(Position position) {
     _lastPosition = position;
-    _lastPositionTime = DateTime.now();
     notifyListeners();
+  }
+
+  void _handleAck(Map<String, dynamic> ack) {
+    // Server confirmed it received and stored our GPS update.
+    // This is the only reliable signal that backend has fresh data.
+    if (ack['status'] == 'ok') {
+      _lastServerAckTime = DateTime.now();
+      notifyListeners();
+    }
   }
 
   void _handleError(String message) {
