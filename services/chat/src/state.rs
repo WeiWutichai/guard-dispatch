@@ -26,6 +26,10 @@ impl HasJwtSecret for AppState {
     fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
         &self.jwt_config.decoding_key
     }
+
+    fn redis_conn(&self) -> &redis::aio::MultiplexedConnection {
+        &self.redis_pubsub
+    }
 }
 
 impl HasDbPool for AppState {

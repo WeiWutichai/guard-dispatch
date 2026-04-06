@@ -31,11 +31,10 @@ impl FcmConfig {
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
-    // NOTE: Notification service currently uses redis::Client.
-    // TODO: Convert to redis::aio::MultiplexedConnection per CLAUDE.md pattern
-    // when implementing Redis caching for notification queries.
     #[allow(dead_code)]
     pub redis_cache: redis::Client,
+    /// Multiplexed Redis connection for token revocation blocklist checks.
+    pub redis_cache_conn: redis::aio::MultiplexedConnection,
     #[allow(dead_code)]
     pub redis_pubsub: redis::Client,
     pub jwt_config: JwtConfig,
@@ -50,6 +49,10 @@ impl HasJwtSecret for AppState {
 
     fn decoding_key(&self) -> &jsonwebtoken::DecodingKey {
         &self.jwt_config.decoding_key
+    }
+
+    fn redis_conn(&self) -> &redis::aio::MultiplexedConnection {
+        &self.redis_cache_conn
     }
 }
 

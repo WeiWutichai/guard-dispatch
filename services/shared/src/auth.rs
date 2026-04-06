@@ -2,6 +2,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -17,37 +18,47 @@ pub struct JwtClaims {
     pub exp: i64,
     pub iat: i64,
     pub iss: String,
+    pub aud: String,
+    /// Unique token ID for revocation blocklist.
+    pub jti: String,
 }
 
 pub fn encode_jwt(
     user_id: Uuid,
     role: &str,
     secret: &str,
-    expiry_hours: i64,
-) -> Result<String, AppError> {
+    expiry_minutes: i64,
+) -> Result<(String, String), AppError> {
     let key = EncodingKey::from_secret(secret.as_bytes());
-    encode_jwt_with_key(user_id, role, &key, expiry_hours)
+    encode_jwt_with_key(user_id, role, &key, expiry_minutes)
 }
+
+const JWT_AUDIENCE: &str = "guard-dispatch";
 
 /// Encode JWT using a pre-computed `EncodingKey` (cached in `JwtConfig`).
 /// Avoids re-deriving the key on every call.
+/// `expiry_minutes` controls token lifetime (default 15 for access tokens).
 pub fn encode_jwt_with_key(
     user_id: Uuid,
     role: &str,
     key: &EncodingKey,
-    expiry_hours: i64,
-) -> Result<String, AppError> {
+    expiry_minutes: i64,
+) -> Result<(String, String), AppError> {
     let now = Utc::now();
+    let jti = Uuid::new_v4().to_string();
     let claims = JwtClaims {
         sub: user_id,
         role: role.to_string(),
-        exp: (now + chrono::TimeDelta::hours(expiry_hours)).timestamp(),
+        exp: (now + chrono::TimeDelta::minutes(expiry_minutes)).timestamp(),
         iat: now.timestamp(),
         iss: JWT_ISSUER.to_string(),
+        aud: JWT_AUDIENCE.to_string(),
+        jti: jti.clone(),
     };
 
-    jsonwebtoken::encode(&Header::default(), &claims, key)
-        .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))
+    let token = jsonwebtoken::encode(&Header::default(), &claims, key)
+        .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))?;
+    Ok((token, jti))
 }
 
 pub fn decode_jwt(token: &str, secret: &str) -> Result<JwtClaims, AppError> {
@@ -56,12 +67,13 @@ pub fn decode_jwt(token: &str, secret: &str) -> Result<JwtClaims, AppError> {
 }
 
 /// Decode JWT using a pre-computed `DecodingKey` (cached in `JwtConfig`).
-/// Avoids re-deriving the key on every call.
+/// Validates iss, aud, exp, and algorithm (HS256 only).
 pub fn decode_jwt_with_key(token: &str, key: &DecodingKey) -> Result<JwtClaims, AppError> {
     let mut validation = Validation::default();
     validation.algorithms = vec![Algorithm::HS256];
     validation.validate_exp = true;
     validation.set_issuer(&[JWT_ISSUER]);
+    validation.set_audience(&[JWT_AUDIENCE]);
 
     let token_data = jsonwebtoken::decode::<JwtClaims>(token, key, &validation)
         .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
@@ -274,6 +286,14 @@ where
 
         let claims = decode_jwt_with_key(&token, state.decoding_key())?;
 
+        // Check token revocation blocklist in Redis
+        let mut redis = state.redis_conn().clone();
+        let revoked_key = format!("revoked_jti:{}", claims.jti);
+        let is_revoked: bool = redis.exists(&revoked_key).await.unwrap_or(false);
+        if is_revoked {
+            return Err(AppError::Unauthorized("Token has been revoked".to_string()));
+        }
+
         Ok(AuthUser {
             user_id: claims.sub,
             role: claims.role,
@@ -288,6 +308,9 @@ pub trait HasJwtSecret {
     /// Return a reference to a pre-computed `DecodingKey`.
     /// Implementors should store a cached `DecodingKey` in their state.
     fn decoding_key(&self) -> &DecodingKey;
+
+    /// Return Redis connection for token revocation blocklist check.
+    fn redis_conn(&self) -> &redis::aio::MultiplexedConnection;
 }
 
 impl<T: HasJwtSecret> HasJwtSecret for std::sync::Arc<T> {
@@ -297,6 +320,10 @@ impl<T: HasJwtSecret> HasJwtSecret for std::sync::Arc<T> {
 
     fn decoding_key(&self) -> &DecodingKey {
         T::decoding_key(self)
+    }
+
+    fn redis_conn(&self) -> &redis::aio::MultiplexedConnection {
+        T::redis_conn(self)
     }
 }
 
@@ -315,15 +342,17 @@ mod tests {
     #[test]
     fn encode_then_decode_roundtrip() {
         let user_id = Uuid::new_v4();
-        let token = encode_jwt(user_id, "admin", TEST_SECRET, 24).unwrap();
+        let (token, jti) = encode_jwt(user_id, "admin", TEST_SECRET, 60).unwrap();
         let claims = decode_jwt(&token, TEST_SECRET).unwrap();
         assert_eq!(claims.sub, user_id);
         assert_eq!(claims.role, "admin");
+        assert_eq!(claims.jti, jti);
+        assert_eq!(claims.aud, "guard-dispatch");
     }
 
     #[test]
     fn decode_with_wrong_secret_fails() {
-        let token = encode_jwt(Uuid::new_v4(), "guard", TEST_SECRET, 24).unwrap();
+        let (token, _) = encode_jwt(Uuid::new_v4(), "guard", TEST_SECRET, 60).unwrap();
         let result = decode_jwt(&token, "wrong-secret");
         assert!(result.is_err());
     }
@@ -337,7 +366,7 @@ mod tests {
     #[test]
     fn jwt_claims_contain_correct_role() {
         let user_id = Uuid::new_v4();
-        let token = encode_jwt(user_id, "customer", TEST_SECRET, 1).unwrap();
+        let (token, _) = encode_jwt(user_id, "customer", TEST_SECRET, 15).unwrap();
         let claims = decode_jwt(&token, TEST_SECRET).unwrap();
         assert_eq!(claims.role, "customer");
     }
@@ -345,17 +374,17 @@ mod tests {
     #[test]
     fn jwt_expiry_is_set_correctly() {
         let user_id = Uuid::new_v4();
-        let token = encode_jwt(user_id, "guard", TEST_SECRET, 24).unwrap();
+        let (token, _) = encode_jwt(user_id, "guard", TEST_SECRET, 15).unwrap();
         let claims = decode_jwt(&token, TEST_SECRET).unwrap();
-        // exp should be roughly 24 hours from iat
+        // exp should be 15 minutes from iat
         let diff = claims.exp - claims.iat;
-        assert_eq!(diff, 24 * 3600);
+        assert_eq!(diff, 15 * 60);
     }
 
     #[test]
     fn jwt_iat_is_current_time() {
         let before = Utc::now().timestamp();
-        let token = encode_jwt(Uuid::new_v4(), "admin", TEST_SECRET, 1).unwrap();
+        let (token, _) = encode_jwt(Uuid::new_v4(), "admin", TEST_SECRET, 15).unwrap();
         let after = Utc::now().timestamp();
         let claims = decode_jwt(&token, TEST_SECRET).unwrap();
         assert!(claims.iat >= before && claims.iat <= after);
@@ -431,13 +460,22 @@ mod tests {
     struct TestState {
         jwt_secret: String,
         decoding_key: DecodingKey,
+        redis_conn: redis::aio::MultiplexedConnection,
     }
 
     impl TestState {
-        fn new(secret: &str) -> Self {
+        async fn new(secret: &str) -> Self {
+            // Connect to test Redis (or use a dummy connection)
+            let client = redis::Client::open("redis://127.0.0.1:6379")
+                .expect("Redis client for tests");
+            let conn = client
+                .get_multiplexed_tokio_connection()
+                .await
+                .expect("Redis connection for tests");
             Self {
                 jwt_secret: secret.to_string(),
                 decoding_key: DecodingKey::from_secret(secret.as_bytes()),
+                redis_conn: conn,
             }
         }
     }
@@ -450,13 +488,17 @@ mod tests {
         fn decoding_key(&self) -> &DecodingKey {
             &self.decoding_key
         }
+
+        fn redis_conn(&self) -> &redis::aio::MultiplexedConnection {
+            &self.redis_conn
+        }
     }
 
     #[tokio::test]
     async fn auth_user_extracts_from_bearer_header() {
-        let state = Arc::new(TestState::new(TEST_SECRET));
+        let state = Arc::new(TestState::new(TEST_SECRET).await);
         let user_id = Uuid::new_v4();
-        let token = encode_jwt(user_id, "guard", TEST_SECRET, 24).unwrap();
+        let (token, _) = encode_jwt(user_id, "guard", TEST_SECRET, 60).unwrap();
 
         let request = Request::builder()
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
@@ -471,9 +513,9 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_extracts_from_cookie() {
-        let state = Arc::new(TestState::new(TEST_SECRET));
+        let state = Arc::new(TestState::new(TEST_SECRET).await);
         let user_id = Uuid::new_v4();
-        let token = encode_jwt(user_id, "admin", TEST_SECRET, 24).unwrap();
+        let (token, _) = encode_jwt(user_id, "admin", TEST_SECRET, 60).unwrap();
 
         let request = Request::builder()
             .header(header::COOKIE, format!("access_token={token}; other=val"))
@@ -488,11 +530,11 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_prefers_bearer_over_cookie() {
-        let state = Arc::new(TestState::new(TEST_SECRET));
+        let state = Arc::new(TestState::new(TEST_SECRET).await);
         let bearer_id = Uuid::new_v4();
         let cookie_id = Uuid::new_v4();
-        let bearer_token = encode_jwt(bearer_id, "guard", TEST_SECRET, 24).unwrap();
-        let cookie_token = encode_jwt(cookie_id, "admin", TEST_SECRET, 24).unwrap();
+        let (bearer_token, _) = encode_jwt(bearer_id, "guard", TEST_SECRET, 60).unwrap();
+        let (cookie_token, _) = encode_jwt(cookie_id, "admin", TEST_SECRET, 60).unwrap();
 
         let request = Request::builder()
             .header(header::AUTHORIZATION, format!("Bearer {bearer_token}"))
@@ -508,7 +550,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_fails_with_no_token() {
-        let state = Arc::new(TestState::new(TEST_SECRET));
+        let state = Arc::new(TestState::new(TEST_SECRET).await);
 
         let request = Request::builder().body(()).unwrap();
 
@@ -518,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_fails_with_invalid_bearer() {
-        let state = Arc::new(TestState::new(TEST_SECRET));
+        let state = Arc::new(TestState::new(TEST_SECRET).await);
 
         let request = Request::builder()
             .header(header::AUTHORIZATION, "Bearer garbage.token.here")
@@ -531,8 +573,8 @@ mod tests {
 
     #[tokio::test]
     async fn auth_user_fails_with_wrong_secret_cookie() {
-        let state = Arc::new(TestState::new(TEST_SECRET));
-        let token = encode_jwt(Uuid::new_v4(), "admin", "different-secret-key!!", 24).unwrap();
+        let state = Arc::new(TestState::new(TEST_SECRET).await);
+        let (token, _) = encode_jwt(Uuid::new_v4(), "admin", "different-secret-key!!", 60).unwrap();
 
         let request = Request::builder()
             .header(header::COOKIE, format!("access_token={token}"))
@@ -543,9 +585,9 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn has_jwt_secret_works_through_arc() {
-        let state = Arc::new(TestState::new("my-secret"));
+    #[tokio::test]
+    async fn has_jwt_secret_works_through_arc() {
+        let state = Arc::new(TestState::new("my-secret").await);
         assert_eq!(state.jwt_secret(), "my-secret");
     }
 }

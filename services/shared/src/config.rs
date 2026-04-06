@@ -57,7 +57,8 @@ pub struct RedisConfig {
 #[derive(Clone)]
 pub struct JwtConfig {
     pub secret: String,
-    pub expiry_hours: i64,
+    /// Access token lifetime in minutes (default 15).
+    pub expiry_minutes: i64,
     /// Pre-computed encoding key — avoids re-creating on every `encode_jwt` call.
     pub encoding_key: jsonwebtoken::EncodingKey,
     /// Pre-computed decoding key — avoids re-creating on every `decode_jwt` call.
@@ -67,7 +68,7 @@ pub struct JwtConfig {
 impl std::fmt::Debug for JwtConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JwtConfig")
-            .field("expiry_hours", &self.expiry_hours)
+            .field("expiry_minutes", &self.expiry_minutes)
             .field("secret", &"[REDACTED]")
             .finish()
     }
@@ -129,9 +130,9 @@ impl JwtConfig {
         let decoding_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
         Ok(Self {
             secret,
-            expiry_hours: optional_env("JWT_EXPIRY_HOURS")
+            expiry_minutes: optional_env("JWT_EXPIRY_MINUTES")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(24),
+                .unwrap_or(15),
             encoding_key,
             decoding_key,
         })

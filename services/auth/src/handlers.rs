@@ -170,20 +170,81 @@ pub async fn phone_login(
     .await?;
 
     let cookie_headers = auth_cookie_headers(&auth);
-    // Mobile clients (no cookie support) → return full tokens in JSON body.
     // Web clients → tokens only in httpOnly cookies, body has role/expiry only.
-    let is_mobile = headers
-        .get("X-Client-Type")
+    let web_response: crate::models::WebAuthResponse = (&auth).into();
+    Ok((
+        cookie_headers,
+        Json(ApiResponse::success(
+            serde_json::to_value(&web_response).unwrap_or_default(),
+        )),
+    ))
+}
+
+/// Mobile-only phone login — returns full tokens in JSON body.
+/// Separated from web login to prevent XSS from spoofing X-Client-Type header.
+#[utoipa::path(
+    post,
+    path = "/login/mobile",
+    tag = "Auth",
+    request_body = PhoneLoginRequest,
+    responses(
+        (status = 200, description = "Login successful, tokens in body", body = AuthResponse),
+        (status = 401, description = "Invalid credentials", body = ErrorBody),
+    ),
+)]
+pub async fn mobile_phone_login(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<PhoneLoginRequest>,
+) -> Result<Json<ApiResponse<AuthResponse>>, AppError> {
+    let ip_address = headers
+        .get("X-Real-IP")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v == "mobile")
-        .unwrap_or(false);
-    let body = if is_mobile {
-        serde_json::to_value(&auth).unwrap_or_default()
-    } else {
-        let web_response: crate::models::WebAuthResponse = (&auth).into();
-        serde_json::to_value(&web_response).unwrap_or_default()
-    };
-    Ok((cookie_headers, Json(ApiResponse::success(body))))
+        .map(|s| s.to_string());
+    let device_info = headers
+        .get("User-Agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let auth = crate::service::login_with_phone(
+        &state.db,
+        &state.redis,
+        &state.jwt_config,
+        req,
+        ip_address,
+        device_info,
+    )
+    .await?;
+
+    Ok(Json(ApiResponse::success(auth)))
+}
+
+/// Mobile-only token refresh — returns full tokens in JSON body.
+#[utoipa::path(
+    post,
+    path = "/refresh/mobile",
+    tag = "Auth",
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Token refreshed, tokens in body", body = AuthResponse),
+        (status = 401, description = "Invalid refresh token", body = ErrorBody),
+    ),
+)]
+pub async fn mobile_refresh_token(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RefreshRequest>,
+) -> Result<Json<ApiResponse<AuthResponse>>, AppError> {
+    if req.refresh_token.is_empty() {
+        return Err(AppError::BadRequest(
+            "refresh_token is required".to_string(),
+        ));
+    }
+
+    let auth =
+        crate::service::refresh_token(&state.db, &state.redis, &state.jwt_config, &req.refresh_token)
+            .await?;
+
+    Ok(Json(ApiResponse::success(auth)))
 }
 
 #[utoipa::path(
@@ -290,9 +351,43 @@ pub async fn update_profile(
 )]
 pub async fn logout(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     user: AuthUser,
 ) -> Result<(HeaderMap, Json<ApiResponse<()>>), AppError> {
-    crate::service::logout(&state.db, &state.redis, user.user_id).await?;
+    // Extract refresh token from cookie for single-session logout
+    let refresh_tok = headers
+        .get("Cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            shared::auth::extract_cookie_value(cookies, REFRESH_TOKEN_COOKIE)
+                .map(|t| t.to_string())
+        });
+
+    // Extract access token jti + exp for revocation blocklist
+    let access_token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .or_else(|| {
+            headers
+                .get("Cookie")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|cookies| shared::auth::extract_cookie_value(cookies, ACCESS_TOKEN_COOKIE))
+        });
+    let (jti, exp) = access_token
+        .and_then(|t| shared::auth::decode_jwt_with_key(t, &state.jwt_config.decoding_key).ok())
+        .map(|c| (c.jti, c.exp))
+        .unzip();
+
+    crate::service::logout(
+        &state.db,
+        &state.redis,
+        user.user_id,
+        refresh_tok.as_deref(),
+        jti.as_deref(),
+        exp,
+    )
+    .await?;
 
     // Clear auth cookies
     let mut headers = HeaderMap::new();

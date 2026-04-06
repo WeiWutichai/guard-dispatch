@@ -134,16 +134,20 @@ async fn main() -> anyhow::Result<()> {
         // REST — Attachments (image upload + signed URL)
         .route("/attachments", post(handlers::upload_attachment))
         .route("/attachments/{id}", get(handlers::get_signed_url))
-        .merge({
-            let swagger =
-                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
-            match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
-                    "{prefix}/api-docs/openapi.json"
-                ))),
-                Err(_) => swagger,
-            }
-        })
+        ;
+    let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
+        let swagger =
+            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+        let swagger = match std::env::var("SWAGGER_PATH_PREFIX") {
+            Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                "{prefix}/api-docs/openapi.json"
+            ))),
+            Err(_) => swagger,
+        };
+        app.merge(swagger)
+    } else {
+        app
+    }
         .layer(middleware::from_fn_with_state(
             state.clone(),
             shared::audit::audit_middleware::<Arc<AppState>>,

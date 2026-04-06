@@ -67,6 +67,10 @@ async fn main() -> anyhow::Result<()> {
 
     let db = create_pool(&db_config).await?;
     let redis_cache = create_redis_client(&redis_config.cache_url)?;
+    let redis_cache_conn = redis_cache
+        .get_multiplexed_tokio_connection()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis cache: {e}"))?;
     let redis_pubsub = create_redis_client(
         redis_config
             .pubsub_url
@@ -78,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         db,
         redis_cache,
+        redis_cache_conn,
         redis_pubsub,
         jwt_config,
         fcm_config,
@@ -95,16 +100,20 @@ async fn main() -> anyhow::Result<()> {
         .route("/notifications/read-all", put(handlers::mark_all_as_read))
         .route("/notifications/{id}/read", put(handlers::mark_as_read))
         .route("/notifications/send", post(handlers::send_notification))
-        .merge({
-            let swagger =
-                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
-            match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
-                    "{prefix}/api-docs/openapi.json"
-                ))),
-                Err(_) => swagger,
-            }
-        })
+        ;
+    let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
+        let swagger =
+            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+        let swagger = match std::env::var("SWAGGER_PATH_PREFIX") {
+            Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                "{prefix}/api-docs/openapi.json"
+            ))),
+            Err(_) => swagger,
+        };
+        app.merge(swagger)
+    } else {
+        app
+    }
         .layer(middleware::from_fn_with_state(
             state.clone(),
             shared::audit::audit_middleware::<Arc<AppState>>,

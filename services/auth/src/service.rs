@@ -238,11 +238,11 @@ pub async fn login(
         .as_ref()
         .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
 
-    let access_token = encode_jwt_with_key(
+    let (access_token, _jti) = encode_jwt_with_key(
         user.id,
         &role.to_string(),
         &jwt_config.encoding_key,
-        jwt_config.expiry_hours,
+        jwt_config.expiry_minutes,
     )?;
 
     // Enforce max sessions per user — evict oldest sessions beyond limit
@@ -290,7 +290,7 @@ pub async fn login(
         access_token,
         refresh_token,
         token_type: "Bearer".to_string(),
-        expires_in: jwt_config.expiry_hours * 3600,
+        expires_in: jwt_config.expiry_minutes * 60,
         role: role_str,
     })
 }
@@ -429,11 +429,11 @@ pub async fn login_with_phone(
         .as_ref()
         .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
 
-    let access_token = encode_jwt_with_key(
+    let (access_token, _jti) = encode_jwt_with_key(
         user.id,
         &role.to_string(),
         &jwt_config.encoding_key,
-        jwt_config.expiry_hours,
+        jwt_config.expiry_minutes,
     )?;
 
     // Enforce max sessions per user — evict oldest sessions beyond limit
@@ -481,7 +481,7 @@ pub async fn login_with_phone(
         access_token,
         refresh_token,
         token_type: "Bearer".to_string(),
-        expires_in: jwt_config.expiry_hours * 3600,
+        expires_in: jwt_config.expiry_minutes * 60,
         role: role_str,
     })
 }
@@ -540,11 +540,11 @@ pub async fn refresh_token(
         .as_ref()
         .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
 
-    let access_token = encode_jwt_with_key(
+    let (access_token, _jti) = encode_jwt_with_key(
         user.id,
         &role.to_string(),
         &jwt_config.encoding_key,
-        jwt_config.expiry_hours,
+        jwt_config.expiry_minutes,
     )?;
 
     let role_str = role.to_string();
@@ -555,7 +555,7 @@ pub async fn refresh_token(
         access_token,
         refresh_token: new_refresh_token,
         token_type: "Bearer".to_string(),
-        expires_in: jwt_config.expiry_hours * 3600,
+        expires_in: jwt_config.expiry_minutes * 60,
         role: role_str,
     })
 }
@@ -726,11 +726,40 @@ pub async fn logout(
     db: &PgPool,
     redis: &redis::aio::MultiplexedConnection,
     user_id: Uuid,
+    refresh_token: Option<&str>,
+    access_token_jti: Option<&str>,
+    access_token_exp: Option<i64>,
 ) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM auth.sessions WHERE user_id = $1")
-        .bind(user_id)
-        .execute(db)
-        .await?;
+    // Delete only the current session (not all devices)
+    if let Some(rt) = refresh_token {
+        let rt_hash = sha256_hex(rt);
+        sqlx::query("DELETE FROM auth.sessions WHERE user_id = $1 AND refresh_token = $2")
+            .bind(user_id)
+            .bind(&rt_hash)
+            .execute(db)
+            .await?;
+    } else {
+        // Fallback: delete all sessions if no refresh token provided
+        sqlx::query("DELETE FROM auth.sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(db)
+            .await?;
+    }
+
+    // Revoke the access token via Redis blocklist
+    if let (Some(jti), Some(exp)) = (access_token_jti, access_token_exp) {
+        let remaining_secs = exp - Utc::now().timestamp();
+        if remaining_secs > 0 {
+            let _: () = redis::cmd("SET")
+                .arg(format!("revoked_jti:{jti}"))
+                .arg("1")
+                .arg("EX")
+                .arg(remaining_secs)
+                .query_async(&mut redis.clone())
+                .await
+                .map_err(AppError::Redis)?;
+        }
+    }
 
     invalidate_user_cache(redis, &user_id).await?;
 
@@ -1214,14 +1243,24 @@ pub async fn reissue_profile_token(
         ));
     }
 
-    // User must exist
-    let user: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM auth.users WHERE phone = $1")
-        .bind(&phone_clean)
-        .fetch_optional(db)
-        .await?;
+    // User must exist and be pending (approved users cannot reissue — must re-verify OTP)
+    let user: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, approval_status::text FROM auth.users WHERE phone = $1",
+    )
+    .bind(&phone_clean)
+    .fetch_optional(db)
+    .await?;
 
-    let (user_id,) =
+    let (user_id, status) =
         user.ok_or_else(|| AppError::BadRequest("Unable to process request".to_string()))?;
+
+    // Prevent profile hijacking: approved users cannot reissue profile tokens
+    // without going through a fresh OTP + login flow
+    if status == "approved" {
+        return Err(AppError::Forbidden(
+            "Cannot reissue profile token for approved accounts".to_string(),
+        ));
+    }
 
     // Determine purpose from role (default: guard for backward compatibility)
     let purpose = match role {
@@ -1286,10 +1325,25 @@ pub async fn update_user_role(
         .await
         .map_err(AppError::Database)?;
 
-    let (user_id,) = user.ok_or_else(|| {
-        // Generic error to prevent phone enumeration
-        AppError::BadRequest("Unable to process request".to_string())
-    })?;
+    let (user_id,) = match user {
+        Some(u) => u,
+        None => {
+            // Constant-time: generate a dummy token + Redis SET to equalize timing
+            // (prevents phone enumeration via response time difference)
+            let dummy_id = Uuid::new_v4();
+            let _ = encode_profile_token(dummy_id, &jwt_config.encoding_key, 1, "dummy");
+            let _ = redis::cmd("SET")
+                .arg("dummy_enumeration_padding")
+                .arg("1")
+                .arg("EX")
+                .arg(1_i64)
+                .query_async::<()>(&mut redis.clone())
+                .await;
+            return Err(AppError::BadRequest(
+                "Unable to process request".to_string(),
+            ));
+        }
+    };
 
     // Invalidate user cache
     invalidate_user_cache(redis, &user_id).await?;

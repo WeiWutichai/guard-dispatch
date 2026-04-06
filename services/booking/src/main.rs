@@ -224,16 +224,20 @@ async fn main() -> anyhow::Result<()> {
                 .put(handlers::update_service_rate)
                 .delete(handlers::delete_service_rate),
         )
-        .merge({
-            let swagger =
-                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
-            match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
-                    "{prefix}/api-docs/openapi.json"
-                ))),
-                Err(_) => swagger,
-            }
-        })
+        ;
+    let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
+        let swagger =
+            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+        let swagger = match std::env::var("SWAGGER_PATH_PREFIX") {
+            Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                "{prefix}/api-docs/openapi.json"
+            ))),
+            Err(_) => swagger,
+        };
+        app.merge(swagger)
+    } else {
+        app
+    }
         .layer(middleware::from_fn_with_state(
             state.clone(),
             shared::audit::audit_middleware::<Arc<AppState>>,

@@ -31,6 +31,8 @@ use crate::state::AppState;
         handlers::register,
         handlers::login,
         handlers::phone_login,
+        handlers::mobile_phone_login,
+        handlers::mobile_refresh_token,
         handlers::refresh_token,
         handlers::get_profile,
         handlers::update_profile,
@@ -216,11 +218,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/register", post(handlers::register))
         .route("/login", post(handlers::login))
         .route("/login/phone", post(handlers::phone_login))
+        .route("/login/mobile", post(handlers::mobile_phone_login))
         .route("/check-status", post(handlers::check_status))
         .route("/otp/request", post(handlers::request_otp))
         .route("/otp/verify", post(handlers::verify_otp))
         .route("/register/otp", post(handlers::register_with_otp))
         .route("/refresh", post(handlers::refresh_token))
+        .route("/refresh/mobile", post(handlers::mobile_refresh_token))
         .route(
             "/me",
             get(handlers::get_profile).put(handlers::update_profile),
@@ -260,16 +264,21 @@ async fn main() -> anyhow::Result<()> {
             "/admin/customer-profile/{user_id}/approval",
             patch(handlers::update_customer_approval),
         )
-        .merge({
-            let swagger =
-                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
-            match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
-                    "{prefix}/api-docs/openapi.json"
-                ))),
-                Err(_) => swagger,
-            }
-        })
+        ;
+    // Only mount Swagger UI when ENABLE_SWAGGER is set (disabled in production)
+    let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
+        let swagger =
+            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+        let swagger = match std::env::var("SWAGGER_PATH_PREFIX") {
+            Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                "{prefix}/api-docs/openapi.json"
+            ))),
+            Err(_) => swagger,
+        };
+        app.merge(swagger)
+    } else {
+        app
+    }
         .layer(middleware::from_fn_with_state(
             state.clone(),
             shared::audit::audit_middleware::<Arc<AppState>>,
