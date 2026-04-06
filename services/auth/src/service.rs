@@ -3296,10 +3296,11 @@ mod tests {
     #[test]
     fn presigned_url_rewrite_is_noop_when_same() {
         let endpoint = "https://r2.cloudflare.com";
+        let public_url = "https://r2.cloudflare.com"; // same as endpoint
         let url = "https://r2.cloudflare.com/bucket/key?sig=abc";
 
-        let result = if endpoint != endpoint {
-            url.replacen(endpoint, endpoint, 1)
+        let result = if endpoint != public_url {
+            url.replacen(endpoint, public_url, 1)
         } else {
             url.to_string()
         };
@@ -3316,17 +3317,12 @@ mod tests {
 
     #[test]
     fn list_users_default_limit_is_20_max_100() {
-        let limit_none: Option<i64> = None;
-        let effective = limit_none.unwrap_or(20).min(100);
-        assert_eq!(effective, 20);
-
-        let limit_200: Option<i64> = Some(200);
-        let effective = limit_200.unwrap_or(20).min(100);
-        assert_eq!(effective, 100, "Limit must be capped at 100");
-
-        let limit_50: Option<i64> = Some(50);
-        let effective = limit_50.unwrap_or(20).min(100);
-        assert_eq!(effective, 50);
+        fn apply_limit(limit: Option<i64>) -> i64 {
+            limit.unwrap_or(20).min(100)
+        }
+        assert_eq!(apply_limit(None), 20);
+        assert_eq!(apply_limit(Some(200)), 100, "Limit must be capped at 100");
+        assert_eq!(apply_limit(Some(50)), 50);
     }
 
     // =========================================================================

@@ -249,7 +249,10 @@ mod tests {
     fn jwt_config_custom_expiry() {
         with_env_vars(
             &[
-                ("JWT_SECRET", "a]strong-secret-that-is-at-least-32-chars!"),
+                (
+                    "JWT_SECRET",
+                    "a]strong-secret-that-is-at-least-64-characters-long-for-jwt-hs256-security!!",
+                ),
                 ("JWT_EXPIRY_HOURS", "48"),
             ],
             || {

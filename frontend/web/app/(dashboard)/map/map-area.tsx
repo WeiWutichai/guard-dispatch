@@ -200,8 +200,11 @@ export default function MapArea({
   // causing "Cannot read properties of undefined (reading 'appendChild')".
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
-    setMounted(true);
-    return () => setMounted(false);
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => {
+      cancelAnimationFrame(id);
+      setMounted(false);
+    };
   }, [mapKey]);
 
   const h = height ?? "500px";
