@@ -14,6 +14,7 @@ class TrackingProvider extends ChangeNotifier {
   bool _isConnecting = false;
   bool _isConnected = false;
   Position? _lastPosition;
+  DateTime? _lastPositionTime;
   String? _error;
 
   TrackingProvider(this._service) {
@@ -31,6 +32,13 @@ class TrackingProvider extends ChangeNotifier {
   bool get isConnected => _isConnected;
   Position? get lastPosition => _lastPosition;
   String? get error => _error;
+
+  /// True when GPS position was received within the last 5 minutes.
+  /// Matches admin map threshold — stale GPS shows gray on both sides.
+  bool get hasRecentGps {
+    if (_lastPosition == null || _lastPositionTime == null) return false;
+    return DateTime.now().difference(_lastPositionTime!) < const Duration(minutes: 5);
+  }
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
@@ -66,6 +74,7 @@ class TrackingProvider extends ChangeNotifier {
     _isConnecting = false;
     _isConnected = false;
     _lastPosition = null;
+    _lastPositionTime = null;
     _error = null;
     notifyListeners();
   }
@@ -108,6 +117,7 @@ class TrackingProvider extends ChangeNotifier {
 
   void _handlePositionUpdate(Position position) {
     _lastPosition = position;
+    _lastPositionTime = DateTime.now();
     notifyListeners();
   }
 

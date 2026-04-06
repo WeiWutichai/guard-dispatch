@@ -320,15 +320,15 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
     final isConnecting = tracking.isConnecting;
     final hasActiveJob = booking.activeJob != null;
 
-    final hasGps = tracking.lastPosition != null;
+    final hasRecentGps = tracking.hasRecentGps;
 
-    // Status label — gray when online but GPS lost (matches admin map "alert" state)
+    // Status label — gray when online but GPS stale/lost (matches admin map "alert" state)
     String statusText;
     Color dotColor;
     if (isConnecting) {
       statusText = strings.connecting;
       dotColor = AppColors.warning;
-    } else if (isOnline && !hasGps) {
+    } else if (isOnline && !hasRecentGps) {
       statusText = LanguageProvider.of(context).isThai
           ? 'ไม่พร้อมรับงาน'
           : 'GPS Unavailable';
@@ -399,24 +399,22 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
             child: Row(
               children: [
                 Icon(
-                  tracking.lastPosition != null
-                      ? Icons.gps_fixed
-                      : Icons.gps_off,
+                  hasRecentGps ? Icons.gps_fixed : Icons.gps_off,
                   size: 14,
-                  color: tracking.lastPosition != null
+                  color: hasRecentGps
                       ? AppColors.success
-                      : const Color(0xFF94A3B8), // slate-400 — same gray as admin map "alert"
+                      : const Color(0xFF94A3B8),
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  tracking.lastPosition != null
+                  hasRecentGps
                       ? '${strings.gpsAccuracy}: ${tracking.lastPosition!.accuracy.toStringAsFixed(0)}m'
                       : (LanguageProvider.of(context).isThai
                           ? 'กำลังค้นหาสัญญาณ GPS...'
                           : 'Searching for GPS signal...'),
                   style: GoogleFonts.inter(
                     fontSize: 12,
-                    color: tracking.lastPosition != null
+                    color: hasRecentGps
                         ? AppColors.textSecondary
                         : const Color(0xFF94A3B8),
                   ),
