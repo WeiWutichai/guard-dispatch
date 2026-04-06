@@ -67,7 +67,11 @@ pub fn validate_upload(mime_type: &str, file_size: usize, data: &[u8]) -> Result
             "File too large: {} bytes. Maximum: {} bytes ({})",
             file_size,
             max_size,
-            if is_video_mime(mime_type) { "50MB" } else { "10MB" }
+            if is_video_mime(mime_type) {
+                "50MB"
+            } else {
+                "10MB"
+            }
         )));
     }
 
@@ -79,8 +83,7 @@ pub fn validate_upload(mime_type: &str, file_size: usize, data: &[u8]) -> Result
     })?;
 
     // For video: allow mp4/quicktime interchangeably since container format is the same
-    let is_match = detected == mime_type
-        || (is_video_mime(detected) && is_video_mime(mime_type));
+    let is_match = detected == mime_type || (is_video_mime(detected) && is_video_mime(mime_type));
 
     if !is_match {
         return Err(AppError::BadRequest(format!(
@@ -145,6 +148,7 @@ pub async fn get_signed_url(
 }
 
 /// Delete file from S3/MinIO
+#[allow(dead_code)]
 pub async fn delete_file(
     client: &aws_sdk_s3::Client,
     bucket: &str,

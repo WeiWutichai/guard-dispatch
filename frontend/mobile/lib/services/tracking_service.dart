@@ -29,6 +29,9 @@ class TrackingService {
   IOWebSocketChannel? _channel;
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<dynamic>? _wsSub;
+  Timer? _heartbeatTimer;
+  Timer? _positionRefreshTimer;
+  Position? _lastKnownPosition;
   bool _isConnected = false;
   bool _isStopping = false;
   int _retryCount = 0;
@@ -73,6 +76,10 @@ class TrackingService {
     _isStopping = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _positionRefreshTimer?.cancel();
+    _positionRefreshTimer = null;
 
     await _positionSub?.cancel();
     _positionSub = null;
@@ -85,6 +92,7 @@ class TrackingService {
 
     _isConnected = false;
     _assignmentId = null;
+    _lastKnownPosition = null;
     onDisconnected?.call();
   }
 
@@ -136,7 +144,8 @@ class TrackingService {
       _channel = IOWebSocketChannel.connect(
         uri,
         headers: {'Authorization': 'Bearer $token'},
-        pingInterval: const Duration(seconds: 30),
+        // Let the server handle ping/pong (30s interval, 10s timeout).
+        // Don't set client-side pingInterval to avoid conflict.
       );
 
       // Wait for the connection to be ready
@@ -146,11 +155,29 @@ class TrackingService {
       _retryCount = 0;
       onConnected?.call();
 
-      // Listen for server messages (acks / errors)
+      // Application-level heartbeat: send a lightweight JSON message every 20s.
+      // This keeps the connection alive even when GPS is stationary (no updates).
+      // The server treats any Text message as activity, resetting its ping timer.
+      // This is needed because dart:io WebSocket on iOS may not auto-respond
+      // to server-sent Ping frames with Pong at the protocol level.
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+        if (_isConnected && _channel != null) {
+          try {
+            _channel!.sink.add(jsonEncode({'type': 'heartbeat'}));
+          } catch (_) {}
+        }
+      });
+
+      // Listen for server messages (acks / errors).
+      // Note: Ping/Pong frames are handled automatically at the dart:io
+      // WebSocket layer and never appear in the stream — only Text/Binary
+      // data frames reach this listener.
       _wsSub = _channel!.stream.listen(
         (data) {
+          if (data is! String) return; // Skip non-text frames
           try {
-            final msg = jsonDecode(data as String) as Map<String, dynamic>;
+            final msg = jsonDecode(data) as Map<String, dynamic>;
             if (msg.containsKey('error')) {
               onError?.call(msg['error'] as String);
             } else {
@@ -200,24 +227,38 @@ class TrackingService {
 
   void _startGpsStream() {
     _positionSub?.cancel();
+    _positionRefreshTimer?.cancel();
 
-    // Send initial position immediately (don't wait for distanceFilter delta)
-    Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-    ).then((position) {
-      onPositionUpdate?.call(position);
-      _sendGpsUpdate(position);
-    }).catchError((_) {});
+    // 1. Send cached OS position instantly (no GPS hardware delay).
+    //    This ensures the guard appears on the map immediately, even indoors.
+    _sendCachedPosition();
 
+    // 2. Then get a fresh high-accuracy fix (may take a few seconds).
+    _sendFreshPosition();
+
+    // 3. Periodic refresh every 30s for stationary guards.
+    //    Re-sends cached _lastKnownPosition so backend refreshes recorded_at
+    //    and the guard doesn't fall off the 30-min available-guards filter.
+    _positionRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_lastKnownPosition != null) {
+        _sendGpsUpdate(_lastKnownPosition!);
+      } else {
+        // Still no position after 30s — retry fresh fix
+        _sendFreshPosition();
+      }
+    });
+
+    // 4. Stream movement-based updates (distanceFilter ≥ 10m).
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 10, // meters — only send when moved ≥10m
+      distanceFilter: 10,
     );
 
     _positionSub = Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(
       (position) {
+        _lastKnownPosition = position;
         onPositionUpdate?.call(position);
         _sendGpsUpdate(position);
       },
@@ -225,6 +266,34 @@ class TrackingService {
         onError?.call('gps_stream_error');
       },
     );
+  }
+
+  /// Send the OS-cached last known position instantly (no GPS hardware needed).
+  void _sendCachedPosition() {
+    Geolocator.getLastKnownPosition().then((position) {
+      if (position != null && _lastKnownPosition == null) {
+        _lastKnownPosition = position;
+        onPositionUpdate?.call(position);
+        _sendGpsUpdate(position);
+      }
+    }).catchError((e) {
+      // ignore: avoid_print
+      print('[TrackingService] getLastKnownPosition failed: $e');
+    });
+  }
+
+  /// Get a fresh high-accuracy GPS fix (may take seconds for cold start).
+  void _sendFreshPosition() {
+    Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+    ).then((position) {
+      _lastKnownPosition = position;
+      onPositionUpdate?.call(position);
+      _sendGpsUpdate(position);
+    }).catchError((e) {
+      // ignore: avoid_print
+      print('[TrackingService] getCurrentPosition failed: $e — waiting for stream');
+    });
   }
 
   void _sendGpsUpdate(Position position) {

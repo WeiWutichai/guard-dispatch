@@ -7,8 +7,8 @@ use shared::error::AppError;
 use crate::models::{
     AttachmentResponse, AttachmentRow, ConversationResponse, ConversationRow,
     CreateConversationRequest, EnrichedConversationResponse, EnrichedConversationRow,
-    IncomingChatMessage, ListMessagesQuery, MessageResponse, MessageRow,
-    MessageType, MessageWithAttachmentRow, OutgoingChatMessage,
+    IncomingChatMessage, ListMessagesQuery, MessageResponse, MessageRow, MessageType,
+    MessageWithAttachmentRow, OutgoingChatMessage,
 };
 
 // =============================================================================
@@ -24,10 +24,10 @@ fn spawn_chat_notification(
 ) {
     tokio::spawn(async move {
         let title = format!("ข้อความจาก {sender_name}");
-        let body = if message_preview.len() > 100 {
-            format!("{}...", &message_preview[..100])
+        let body = if message_preview.is_empty() {
+            "📎 ไฟล์แนบ".to_string()
         } else {
-            message_preview
+            message_preview.chars().take(100).collect::<String>()
         };
         let payload = serde_json::json!({
             "conversation_id": conversation_id.to_string(),
@@ -158,7 +158,10 @@ pub async fn list_conversations(
     .fetch_all(db)
     .await?;
 
-    Ok(rows.into_iter().map(EnrichedConversationResponse::from).collect())
+    Ok(rows
+        .into_iter()
+        .map(EnrichedConversationResponse::from)
+        .collect())
 }
 
 // =============================================================================
@@ -206,15 +209,14 @@ pub async fn send_message(
     .unwrap_or_default();
 
     // Get sender name for notification title
-    let sender_name: String = sqlx::query_scalar(
-        "SELECT COALESCE(full_name, 'User') FROM auth.users WHERE id = $1",
-    )
-    .bind(sender_id)
-    .fetch_optional(db)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "User".to_string());
+    let sender_name: String =
+        sqlx::query_scalar("SELECT COALESCE(full_name, 'User') FROM auth.users WHERE id = $1")
+            .bind(sender_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "User".to_string());
 
     for recipient_id in recipients {
         spawn_chat_notification(
@@ -421,10 +423,7 @@ pub async fn is_conversation_participant_by_conversation(
 // Get Attachment (for signed URL generation)
 // =============================================================================
 
-pub async fn get_attachment(
-    db: &PgPool,
-    attachment_id: Uuid,
-) -> Result<AttachmentRow, AppError> {
+pub async fn get_attachment(db: &PgPool, attachment_id: Uuid) -> Result<AttachmentRow, AppError> {
     sqlx::query_as::<_, AttachmentRow>(
         r#"
         SELECT id, message_id, uploader_id, file_key, file_url, file_size, mime_type, created_at

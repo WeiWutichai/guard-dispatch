@@ -113,7 +113,7 @@ class ChatService {
       _channel = IOWebSocketChannel.connect(
         uri,
         headers: {'Authorization': 'Bearer $token'},
-        pingInterval: const Duration(seconds: 30),
+        // Let the server handle ping/pong (30s interval, 10s timeout).
       );
 
       await _channel!.ready;
@@ -121,8 +121,9 @@ class ChatService {
 
       _wsSub = _channel!.stream.listen(
         (data) {
+          if (data is! String) return; // Skip non-text frames
           try {
-            final msg = jsonDecode(data as String) as Map<String, dynamic>;
+            final msg = jsonDecode(data) as Map<String, dynamic>;
             if (!msg.containsKey('error')) {
               onMessage(msg);
             }

@@ -10,6 +10,7 @@ import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import 'registration_pending_screen.dart';
 import 'role_selection_screen.dart';
+import 'phone_input_screen.dart';
 
 class CustomerRegistrationScreen extends StatefulWidget {
   final String phone;
@@ -59,9 +60,43 @@ class _CustomerRegistrationScreenState
       final authProvider = context.read<AuthProvider>();
       final isAlreadyAuthenticated = authProvider.isAuthenticated;
 
-      // Always get a fresh profile token to avoid expired/used token errors
-      final profileToken =
-          await authProvider.reissueProfileToken(widget.phone, role: 'customer');
+      // Use profile token from widget, or request a fresh one via updateRole.
+      // Authenticated users (approved guard adding customer profile) can get a
+      // new profile_token without OTP because they already have a valid JWT.
+      // Unauthenticated users without a token must re-verify via OTP.
+      var profileToken = widget.profileToken;
+      if (profileToken == null) {
+        if (isAlreadyAuthenticated) {
+          // Authenticated user — get fresh profile_token via updateRole
+          try {
+            profileToken = await authProvider.updateRole(widget.phone, 'customer');
+          } catch (e) {
+            if (!mounted) return;
+            setState(() {
+              _isSubmitting = false;
+              _errorMessage = '$e';
+            });
+            return;
+          }
+        }
+        if (profileToken == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(LanguageProvider.of(context).isThai
+                  ? 'เซสชันหมดอายุ กรุณายืนยันเบอร์โทรอีกครั้ง'
+                  : 'Session expired. Please verify your phone again.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+            (route) => false,
+          );
+          return;
+        }
+      }
 
       // Only save pending state for users who are NOT already authenticated.
       if (!isAlreadyAuthenticated) {

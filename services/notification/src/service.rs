@@ -264,10 +264,7 @@ async fn send_fcm_push(
 
     let response = http_client
         .post(&url)
-        .header(
-            "Authorization",
-            format!("Bearer {}", fcm_config.server_key),
-        )
+        .header("Authorization", format!("Bearer {}", fcm_config.server_key))
         .json(&message)
         .send()
         .await

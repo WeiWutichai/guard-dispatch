@@ -59,6 +59,8 @@ function getGuardStatus(recordedAt: string, isOnline: boolean, hasActiveJob: boo
   const minutesAgo =
     (Date.now() - new Date(recordedAt).getTime()) / 60000;
   if (minutesAgo > 5) return "alert";
+  // active (emerald) = "ว่าง" (available, no job)
+  // idle (amber) = "กำลังดำเนินงาน" (busy, has active job)
   if (hasActiveJob) return "idle";
   return "active";
 }
@@ -129,23 +131,28 @@ export default function MapPage() {
           }))
         );
       }
-    } catch {
-      // API not available — show empty map
+    } catch (e) {
+      console.error("[Map] Failed to fetch guard locations:", e);
     }
   }, []);
 
   useEffect(() => {
-    void fetchLocations();
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(() => void fetchLocations(), 30_000);
-    return () => clearInterval(interval);
+    // Initial fetch + auto-refresh every 30 seconds
+    let cancelled = false;
+    const load = async () => {
+      if (!cancelled) await fetchLocations();
+    };
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [fetchLocations]);
-
-  const displayGuards = useMemo(() => guards, [guards]);
 
   const filteredGuards = useMemo(() => {
     const query = debouncedSearch.toLowerCase().trim();
-    return displayGuards.filter((g) => {
+    return guards.filter((g) => {
       const matchesStatus = filterStatus === "all" || g.status === filterStatus;
       const matchesSearch =
         query === "" ||
@@ -154,34 +161,34 @@ export default function MapPage() {
         g.location.toLowerCase().includes(query);
       return matchesStatus && matchesSearch;
     });
-  }, [displayGuards, filterStatus, debouncedSearch]);
+  }, [guards, filterStatus, debouncedSearch]);
 
   const stats = useMemo(() => {
     let active = 0,
       idle = 0,
       alerts = 0,
       offline = 0;
-    for (const g of displayGuards) {
+    for (const g of guards) {
       if (g.status === "active") active++;
       else if (g.status === "idle") idle++;
       else if (g.status === "offline") offline++;
       else alerts++;
     }
-    return { total: displayGuards.length, active, idle, alerts, offline };
-  }, [displayGuards]);
+    return { total: guards.length, active, idle, alerts, offline };
+  }, [guards]);
 
   const handleGuardSelect = useCallback(
     (guardId: string) => {
       const next = selectedGuard === guardId ? null : guardId;
       setSelectedGuard(next);
       if (next) {
-        const guard = displayGuards.find((g) => g.id === next);
+        const guard = guards.find((g) => g.id === next);
         if (guard && flyToRef.current) {
           flyToRef.current(guard.lat, guard.lng);
         }
       }
     },
-    [selectedGuard, displayGuards]
+    [selectedGuard, guards]
   );
 
   const filterLabels: Record<string, string> = {

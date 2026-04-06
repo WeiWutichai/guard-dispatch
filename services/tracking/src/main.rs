@@ -88,11 +88,9 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await; // skip first immediate tick
             loop {
                 interval.tick().await;
-                match sqlx::query_scalar::<_, i64>(
-                    "SELECT tracking.cleanup_old_history(90)"
-                )
-                .fetch_one(&db)
-                .await
+                match sqlx::query_scalar::<_, i64>("SELECT tracking.cleanup_old_history(90)")
+                    .fetch_one(&db)
+                    .await
                 {
                     Ok(deleted) => {
                         if deleted > 0 {
@@ -117,16 +115,19 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_location_history),
         )
         .merge({
-            let swagger = SwaggerUi::new("/swagger-ui")
-                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            let swagger =
+                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
             match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(
-                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
-                ),
+                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                    "{prefix}/api-docs/openapi.json"
+                ))),
                 Err(_) => swagger,
             }
         })
-        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            shared::audit::audit_middleware::<Arc<AppState>>,
+        ))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

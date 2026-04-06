@@ -79,10 +79,8 @@ pub fn validate_thai_phone(phone: &str) -> Result<String, AppError> {
 /// for the INET SMS API which accepts both formats.
 pub fn to_international_format(phone: &str) -> String {
     let digits: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
-    if digits.starts_with('0') {
-        format!("66{}", &digits[1..])
-    } else if digits.starts_with("66") {
-        digits
+    if let Some(stripped) = digits.strip_prefix('0') {
+        format!("66{stripped}")
     } else {
         digits
     }

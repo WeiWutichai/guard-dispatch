@@ -843,6 +843,7 @@ pub struct ProgressReportRow {
 }
 
 /// DB row for progress_report_media table
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct ProgressReportMediaRow {
     pub id: Uuid,

@@ -7,8 +7,8 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    ListNotificationsQuery, NotificationLogResponse, RegisterTokenRequest,
-    RoleQuery, SendNotificationRequest, UnreadCountResponse,
+    ListNotificationsQuery, NotificationLogResponse, RegisterTokenRequest, RoleQuery,
+    SendNotificationRequest, UnreadCountResponse,
 };
 use crate::state::AppState;
 
@@ -74,8 +74,7 @@ pub async fn list_notifications(
     user: AuthUser,
     Query(query): Query<ListNotificationsQuery>,
 ) -> Result<Json<ApiResponse<Vec<NotificationLogResponse>>>, AppError> {
-    let notifications =
-        crate::service::list_notifications(&state.db, user.user_id, query).await?;
+    let notifications = crate::service::list_notifications(&state.db, user.user_id, query).await?;
     Ok(Json(ApiResponse::success(notifications)))
 }
 
@@ -95,7 +94,8 @@ pub async fn unread_count(
     user: AuthUser,
     Query(query): Query<RoleQuery>,
 ) -> Result<Json<ApiResponse<UnreadCountResponse>>, AppError> {
-    let count = crate::service::get_unread_count(&state.db, user.user_id, query.role.as_deref()).await?;
+    let count =
+        crate::service::get_unread_count(&state.db, user.user_id, query.role.as_deref()).await?;
     Ok(Json(ApiResponse::success(UnreadCountResponse { count })))
 }
 
@@ -115,7 +115,8 @@ pub async fn mark_all_as_read(
     user: AuthUser,
     Query(query): Query<RoleQuery>,
 ) -> Result<Json<ApiResponse<UnreadCountResponse>>, AppError> {
-    let count = crate::service::mark_all_as_read(&state.db, user.user_id, query.role.as_deref()).await?;
+    let count =
+        crate::service::mark_all_as_read(&state.db, user.user_id, query.role.as_deref()).await?;
     Ok(Json(ApiResponse::success(UnreadCountResponse { count })))
 }
 
@@ -162,12 +163,8 @@ pub async fn send_notification(
             "Only admins can send notifications".to_string(),
         ));
     }
-    let notification = crate::service::send_notification(
-        &state.db,
-        &state.http_client,
-        &state.fcm_config,
-        req,
-    )
-    .await?;
+    let notification =
+        crate::service::send_notification(&state.db, &state.http_client, &state.fcm_config, req)
+            .await?;
     Ok(Json(ApiResponse::success(notification)))
 }

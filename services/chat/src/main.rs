@@ -126,10 +126,7 @@ async fn main() -> anyhow::Result<()> {
             "/conversations",
             post(handlers::create_conversation).get(handlers::list_conversations),
         )
-        .route(
-            "/conversations/{id}/messages",
-            get(handlers::list_messages),
-        )
+        .route("/conversations/{id}/messages", get(handlers::list_messages))
         .route(
             "/conversations/{id}/read",
             axum::routing::put(handlers::mark_read),
@@ -138,16 +135,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/attachments", post(handlers::upload_attachment))
         .route("/attachments/{id}", get(handlers::get_signed_url))
         .merge({
-            let swagger = SwaggerUi::new("/swagger-ui")
-                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            let swagger =
+                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
             match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(
-                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
-                ),
+                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                    "{prefix}/api-docs/openapi.json"
+                ))),
                 Err(_) => swagger,
             }
         })
-        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            shared::audit::audit_middleware::<Arc<AppState>>,
+        ))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

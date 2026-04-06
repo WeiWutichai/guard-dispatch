@@ -31,17 +31,17 @@ impl GpsUpdate {
             return Err("lat/lng at (0,0) is likely invalid");
         }
         if let Some(acc) = self.accuracy {
-            if acc < 0.0 || acc > 10_000.0 {
+            if !(0.0..=10_000.0).contains(&acc) {
                 return Err("accuracy must be between 0 and 10000 meters");
             }
         }
         if let Some(heading) = self.heading {
-            if heading < 0.0 || heading > 360.0 {
+            if !(0.0..=360.0).contains(&heading) {
                 return Err("heading must be between 0 and 360 degrees");
             }
         }
         if let Some(speed) = self.speed {
-            if speed < 0.0 || speed > 500.0 {
+            if !(0.0..=500.0).contains(&speed) {
                 return Err("speed must be between 0 and 500 m/s");
             }
         }
@@ -152,6 +152,7 @@ pub struct HistoryQuery {
 // Database row types
 // =============================================================================
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct GuardLocationRow {
     pub id: Uuid,

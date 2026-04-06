@@ -36,14 +36,17 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
   void _updateCategoryAndRecalc(void Function() update) {
     setState(() {
       update();
-      // Auto-compute overall as average of filled categories
+      // Auto-compute overall as average of filled categories (1 decimal)
       final filled = <double>[];
       if (_punctuality > 0) filled.add(_punctuality);
       if (_professionalism > 0) filled.add(_professionalism);
       if (_communication > 0) filled.add(_communication);
       if (_appearance > 0) filled.add(_appearance);
       if (filled.isNotEmpty) {
-        _overallRating = (filled.reduce((a, b) => a + b) / filled.length).roundToDouble();
+        final avg = filled.reduce((a, b) => a + b) / filled.length;
+        _overallRating = (avg * 10).roundToDouble() / 10; // e.g. 3.75 → 3.8
+      } else {
+        _overallRating = 0;
       }
     });
   }
@@ -258,13 +261,10 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
 
                   const SizedBox(height: 28),
 
-                  // Overall rating (required) — auto-calculated from categories
-                  _buildRatingSection(
+                  // Overall rating — auto-calculated, read-only
+                  _buildRatingDisplay(
                     strings.overallRating,
                     _overallRating,
-                    (val) => setState(() => _overallRating = val),
-                    isLarge: true,
-                    isRequired: true,
                   ),
 
                   const SizedBox(height: 20),
@@ -378,6 +378,61 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
         ],
       ),
     ),
+    );
+  }
+
+  Widget _buildRatingDisplay(String label, double rating) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            if (rating > 0) ...[
+              const SizedBox(width: 8),
+              Text(
+                rating.toStringAsFixed(1),
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.amber.shade700,
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(5, (index) {
+            // Support half-star display for fractional averages
+            final fillLevel = rating - index;
+            IconData icon;
+            if (fillLevel >= 1) {
+              icon = Icons.star_rounded;
+            } else if (fillLevel >= 0.3) {
+              icon = Icons.star_half_rounded;
+            } else {
+              icon = Icons.star_outline_rounded;
+            }
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: Icon(
+                icon,
+                size: 40,
+                color: fillLevel > 0 ? Colors.amber : AppColors.disabled,
+              ),
+            );
+          }),
+        ),
+      ],
     );
   }
 

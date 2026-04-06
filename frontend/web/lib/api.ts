@@ -243,6 +243,7 @@ async function apiFetch<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "X-Requested-With": "XMLHttpRequest", // CSRF protection — required for cookie-based auth
     ...(options.headers as Record<string, string>),
   };
 

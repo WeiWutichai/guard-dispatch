@@ -130,8 +130,8 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("S3_ACCESS_KEY env var is required"))?;
     let s3_secret_key = std::env::var("S3_SECRET_KEY")
         .map_err(|_| anyhow::anyhow!("S3_SECRET_KEY env var is required"))?;
-    let s3_bucket = std::env::var("S3_BUCKET")
-        .map_err(|_| anyhow::anyhow!("S3_BUCKET env var is required"))?;
+    let s3_bucket =
+        std::env::var("S3_BUCKET").map_err(|_| anyhow::anyhow!("S3_BUCKET env var is required"))?;
     // Public URL for presigned URLs. Defaults to S3_ENDPOINT when not set
     // (useful when MinIO is directly accessible, e.g. in some CI environments).
     // In Docker dev: set to http://localhost/minio-files so the browser can load images.
@@ -146,6 +146,35 @@ async fn main() -> anyhow::Result<()> {
         .force_path_style(true) // Required for MinIO path-style addressing
         .build();
     let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
+
+    // Ensure bucket exists (dev convenience — production bucket is pre-created)
+    if s3_client
+        .head_bucket()
+        .bucket(&s3_bucket)
+        .send()
+        .await
+        .is_err()
+    {
+        tracing::info!("Bucket '{}' not found, creating...", s3_bucket);
+        let _ = s3_client.create_bucket().bucket(&s3_bucket).send().await;
+        // Set private-only bucket policy (deny anonymous/public access to guard documents)
+        let policy = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": format!("arn:aws:s3:::{}/*", s3_bucket),
+                "Condition": { "StringEquals": { "aws:PrincipalType": "Anonymous" } }
+            }]
+        });
+        let _ = s3_client
+            .put_bucket_policy()
+            .bucket(&s3_bucket)
+            .policy(policy.to_string())
+            .send()
+            .await;
+    }
 
     let state = Arc::new(AppState {
         db,
@@ -166,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
             interval.tick().await;
-            match sqlx::query("DELETE FROM auth.otp_codes WHERE expires_at < NOW() - INTERVAL '1 hour'")
+            match sqlx::query("DELETE FROM auth.otp_codes WHERE expires_at < NOW()")
                 .execute(&cleanup_db)
                 .await
             {
@@ -198,7 +227,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/logout", post(handlers::logout))
         .route("/users", get(handlers::list_users))
-        .route("/users/{id}/approval", patch(handlers::update_approval_status))
+        .route(
+            "/users/{id}/approval",
+            patch(handlers::update_approval_status),
+        )
         .merge(
             Router::new()
                 .route("/profile/guard", post(handlers::submit_guard_profile))
@@ -207,23 +239,41 @@ async fn main() -> anyhow::Result<()> {
         .route("/profile/reissue", post(handlers::reissue_profile_token))
         .route("/profile/role", post(handlers::update_role))
         .route("/profile/customer", post(handlers::submit_customer_profile))
-        .route("/guards/{user_id}/profile", get(handlers::get_public_guard_profile))
+        .route(
+            "/guards/{user_id}/profile",
+            get(handlers::get_public_guard_profile),
+        )
         .route("/guards/me/expiry", put(handlers::update_own_expiry))
-        .route("/admin/guard-profile/{user_id}", get(handlers::get_guard_profile).put(handlers::admin_update_guard_profile))
-        .route("/admin/customer-profile/{user_id}", get(handlers::get_customer_profile))
-        .route("/admin/customer-applicants", get(handlers::list_customer_applicants))
-        .route("/admin/customer-profile/{user_id}/approval", patch(handlers::update_customer_approval))
+        .route(
+            "/admin/guard-profile/{user_id}",
+            get(handlers::get_guard_profile).put(handlers::admin_update_guard_profile),
+        )
+        .route(
+            "/admin/customer-profile/{user_id}",
+            get(handlers::get_customer_profile),
+        )
+        .route(
+            "/admin/customer-applicants",
+            get(handlers::list_customer_applicants),
+        )
+        .route(
+            "/admin/customer-profile/{user_id}/approval",
+            patch(handlers::update_customer_approval),
+        )
         .merge({
-            let swagger = SwaggerUi::new("/swagger-ui")
-                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            let swagger =
+                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
             match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(
-                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
-                ),
+                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                    "{prefix}/api-docs/openapi.json"
+                ))),
                 Err(_) => swagger,
             }
         })
-        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            shared::audit::audit_middleware::<Arc<AppState>>,
+        ))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

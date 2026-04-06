@@ -128,8 +128,15 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       try {
         final authProvider = context.read<AuthProvider>();
         if (pendingRole == 'guard') {
-          // Role already set — just need a fresh profile token
-          profileToken = await authProvider.reissueProfileToken(phone);
+          // Role already set but token expired — re-verify via OTP
+          if (!mounted) return;
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PhoneInputScreen(),
+            ),
+          );
+          return;
         } else {
           // Set role for the first time
           profileToken = await authProvider.updateRole(phone, 'guard');
@@ -164,8 +171,15 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     try {
       final authProvider = context.read<AuthProvider>();
       if (pendingRole == 'customer') {
-        // Role already set — just need a fresh profile token
-        profileToken = await authProvider.reissueProfileToken(phone, role: 'customer');
+        // Role already set but token expired — re-verify via OTP
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PhoneInputScreen(),
+          ),
+        );
+        return;
       } else {
         // Set role for the first time
         profileToken = await authProvider.updateRole(phone, 'customer');

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -195,8 +195,26 @@ export default function MapArea({
   height,
   mapKey,
 }: MapAreaProps) {
+  // Defer MapContainer render until DOM is ready.
+  // React 19 + Turbopack can remount before Leaflet's internal panes exist,
+  // causing "Cannot read properties of undefined (reading 'appendChild')".
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => {
+      cancelAnimationFrame(id);
+      setMounted(false);
+    };
+  }, [mapKey]);
+
+  const h = height ?? "500px";
+
+  if (!mounted) {
+    return <div className="relative" style={{ height: h }} />;
+  }
+
   return (
-    <div className="relative" style={{ height: height ?? "500px" }}>
+    <div className="relative" style={{ height: h }}>
       <MapContainer
         key={mapKey ?? "map"}
         center={[13.7363, 100.5318]}

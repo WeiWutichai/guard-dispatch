@@ -118,6 +118,7 @@ impl From<NotificationLogRow> for NotificationLogResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct FcmTokenRow {
     pub id: Uuid,

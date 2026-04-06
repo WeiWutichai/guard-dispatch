@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../../theme/colors.dart';
@@ -30,6 +31,134 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
       context.read<BookingProvider>().fetchActiveJob();
       context.read<NotificationProvider>().fetchUnreadCount(role: 'guard');
     });
+  }
+
+  Future<void> _handleToggle(BuildContext context) async {
+    final tracking = context.read<TrackingProvider>();
+    final isThai = LanguageProvider.of(context).isThai;
+
+    // If already online → just toggle off
+    if (tracking.isOnline) {
+      await tracking.toggle();
+      return;
+    }
+
+    // Check location service first
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (!context.mounted) return;
+      final openSettings = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            isThai ? 'เปิดบริการตำแหน่ง' : 'Enable Location Services',
+            style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+          ),
+          content: Text(
+            isThai
+                ? 'กรุณาเปิด GPS เพื่อให้ระบบติดตามตำแหน่งของคุณได้'
+                : 'Please enable GPS so we can track your location.',
+            style: GoogleFonts.inter(fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(isThai ? 'ยกเลิก' : 'Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(isThai ? 'เปิดตั้งค่า' : 'Open Settings',
+                  style: const TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+      if (openSettings == true) {
+        await Geolocator.openLocationSettings();
+      }
+      return;
+    }
+
+    // Check permission
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      if (!context.mounted) return;
+      // Show explanation dialog before requesting
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            isThai ? 'อนุญาตการเข้าถึงตำแหน่ง' : 'Allow Location Access',
+            style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+          ),
+          content: Text(
+            isThai
+                ? 'P-Guard ต้องการเข้าถึงตำแหน่งของคุณเพื่อแสดงให้ลูกค้าเห็นว่าคุณอยู่ที่ไหน และช่วยนำทางไปยังจุดหมาย'
+                : 'P-Guard needs your location to show customers where you are and help navigate to job sites.',
+            style: GoogleFonts.inter(fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(isThai ? 'ยกเลิก' : 'Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(isThai ? 'อนุญาต' : 'Allow',
+                  style: const TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      if (!context.mounted) return;
+      final openSettings = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            isThai ? 'ตำแหน่งถูกปิดกั้น' : 'Location Blocked',
+            style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+          ),
+          content: Text(
+            isThai
+                ? 'คุณเคยปฏิเสธการเข้าถึงตำแหน่ง กรุณาเปิดอนุญาตในตั้งค่าของเครื่อง'
+                : 'Location access was previously denied. Please enable it in device settings.',
+            style: GoogleFonts.inter(fontSize: 14),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(isThai ? 'ยกเลิก' : 'Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(isThai ? 'เปิดตั้งค่า' : 'Open Settings',
+                  style: const TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+      if (openSettings == true) {
+        await Geolocator.openAppSettings();
+      }
+      return;
+    }
+
+    // Permission granted → toggle on
+    if (!context.mounted) return;
+    await tracking.toggle();
   }
 
   Future<void> _onRefresh() async {
@@ -251,7 +380,7 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                 activeTrackColor: hasActiveJob ? const Color(0xFFF59E0B) : AppColors.primary,
                 onChanged: (isConnecting || hasActiveJob)
                     ? null
-                    : (_) => context.read<TrackingProvider>().toggle(),
+                    : (_) => _handleToggle(context),
               ),
             ],
           ),

@@ -166,14 +166,14 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health_check))
-        .route("/requests", post(handlers::create_request).get(handlers::list_requests))
+        .route(
+            "/requests",
+            post(handlers::create_request).get(handlers::list_requests),
+        )
         .route("/requests/{id}", get(handlers::get_request))
         .route("/requests/{id}/cancel", put(handlers::cancel_request))
         .route("/requests/{id}/assign", post(handlers::assign_guard))
-        .route(
-            "/requests/{id}/assignments",
-            get(handlers::get_assignments),
-        )
+        .route("/requests/{id}/assignments", get(handlers::get_assignments))
         .route(
             "/requests/{id}/active-job",
             get(handlers::get_customer_active_job),
@@ -191,10 +191,7 @@ async fn main() -> anyhow::Result<()> {
             "/assignments/{id}/review-completion",
             put(handlers::review_completion),
         )
-        .route(
-            "/assignments/{id}/review",
-            post(handlers::submit_review),
-        )
+        .route("/assignments/{id}/review", post(handlers::submit_review))
         .route(
             "/assignments/{id}/progress-reports",
             post(handlers::submit_progress_report).get(handlers::list_progress_reports),
@@ -205,7 +202,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/payments", post(handlers::create_payment))
         // Available guards (customer discovery)
         .route("/available-guards", get(handlers::available_guards))
-        .route("/guards/{guard_id}/reviews", get(handlers::get_guard_reviews))
+        .route(
+            "/guards/{guard_id}/reviews",
+            get(handlers::get_guard_reviews),
+        )
         // Guard-specific endpoints
         .route("/guard/dashboard", get(handlers::guard_dashboard))
         .route("/guard/active-job", get(handlers::get_active_job))
@@ -225,16 +225,19 @@ async fn main() -> anyhow::Result<()> {
                 .delete(handlers::delete_service_rate),
         )
         .merge({
-            let swagger = SwaggerUi::new("/swagger-ui")
-                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            let swagger =
+                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
             match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(
-                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
-                ),
+                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                    "{prefix}/api-docs/openapi.json"
+                ))),
                 Err(_) => swagger,
             }
         })
-        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            shared::audit::audit_middleware::<Arc<AppState>>,
+        ))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

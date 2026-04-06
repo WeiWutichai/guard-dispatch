@@ -77,7 +77,7 @@ where
 
     let decoding_key = state.decoding_key();
     let user_id = token.and_then(|t| {
-        decode_jwt_with_key(&t, &decoding_key)
+        decode_jwt_with_key(&t, decoding_key)
             .ok()
             .map(|claims| claims.sub)
     });
@@ -110,7 +110,16 @@ where
     // Fire-and-forget async insert to audit.audit_logs — don't block the response
     let pool = state.db_pool().clone();
     tokio::spawn(async move {
-        if let Err(e) = insert_audit_log(&pool, user_id, &action, &entity_type, status_code, ip_address.as_deref()).await {
+        if let Err(e) = insert_audit_log(
+            &pool,
+            user_id,
+            &action,
+            &entity_type,
+            status_code,
+            ip_address.as_deref(),
+        )
+        .await
+        {
             tracing::warn!(error = %e, "failed to persist audit log");
         }
     });

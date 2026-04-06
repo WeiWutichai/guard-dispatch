@@ -239,6 +239,7 @@ impl From<MessageWithAttachmentRow> for MessageResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct AttachmentRow {
     pub id: Uuid,

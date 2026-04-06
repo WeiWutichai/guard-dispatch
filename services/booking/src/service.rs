@@ -9,13 +9,12 @@ use shared::error::AppError;
 use crate::models::{
     AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse, AssignmentRow,
     AssignmentStatus, AvailableGuardResponse, AvailableGuardRow, AvailableGuardsQuery,
-    CreatePaymentDto, CreateRequestDto, CreateServiceRateDto, DailyEarning,
-    GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary,
-    GuardRequestResponse, GuardRequestRow, ListRequestsQuery, PaymentResponse, PaymentRow,
-    ProgressReportMediaItem, ProgressReportMediaRow, ProgressReportResponse, ProgressReportRow,
-    RatingSummaryRow, RequestStatus, ReviewItem,
-    ReviewRow, ServiceRate, UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem,
-    WorkHistoryResponse, WorkHistoryRow,
+    CreatePaymentDto, CreateRequestDto, CreateServiceRateDto, DailyEarning, GuardDashboardSummary,
+    GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary, GuardRequestResponse,
+    GuardRequestRow, ListRequestsQuery, PaymentResponse, PaymentRow, ProgressReportMediaItem,
+    ProgressReportMediaRow, ProgressReportResponse, ProgressReportRow, RatingSummaryRow,
+    RequestStatus, ReviewItem, ReviewRow, ServiceRate, UpdateAssignmentStatusDto,
+    UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse, WorkHistoryRow,
 };
 
 /// Validate and sanitise optional lat/lng. Returns (None, None) if invalid or (0,0).
@@ -147,6 +146,41 @@ pub async fn create_request(
         return Err(AppError::BadRequest("Address is required".to_string()));
     }
 
+    // Validate coordinates
+    if !(-90.0..=90.0).contains(&req.location_lat) {
+        return Err(AppError::BadRequest(
+            "Latitude must be between -90 and 90".to_string(),
+        ));
+    }
+    if !(-180.0..=180.0).contains(&req.location_lng) {
+        return Err(AppError::BadRequest(
+            "Longitude must be between -180 and 180".to_string(),
+        ));
+    }
+    if req.location_lat == 0.0 && req.location_lng == 0.0 {
+        return Err(AppError::BadRequest(
+            "Invalid coordinates (0,0)".to_string(),
+        ));
+    }
+
+    // Validate booked_hours
+    if let Some(hours) = req.booked_hours {
+        if !(1..=720).contains(&hours) {
+            return Err(AppError::BadRequest(
+                "Booked hours must be between 1 and 720".to_string(),
+            ));
+        }
+    }
+
+    // Validate offered_price
+    if let Some(price) = req.offered_price {
+        if price < 0.0 {
+            return Err(AppError::BadRequest(
+                "Offered price cannot be negative".to_string(),
+            ));
+        }
+    }
+
     let urgency_str = serde_json::to_value(&req.urgency)
         .map_err(|e| AppError::Internal(format!("Failed to serialize urgency: {e}")))?
         .as_str()
@@ -155,7 +189,11 @@ pub async fn create_request(
 
     let price = req
         .offered_price
-        .map(|p| rust_decimal::Decimal::try_from(p).unwrap_or_default());
+        .map(|p| {
+            rust_decimal::Decimal::try_from(p)
+                .map_err(|_| AppError::BadRequest("Invalid offered price value".to_string()))
+        })
+        .transpose()?;
 
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
@@ -302,10 +340,7 @@ pub async fn list_requests(
 // Get Guard Request
 // =============================================================================
 
-pub async fn get_request(
-    db: &PgPool,
-    request_id: Uuid,
-) -> Result<GuardRequestResponse, AppError> {
+pub async fn get_request(db: &PgPool, request_id: Uuid) -> Result<GuardRequestResponse, AppError> {
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
         SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
@@ -433,12 +468,11 @@ pub async fn assign_guard(
     }
 
     // Verify guard exists and has guard role
-    let guard_role: Option<String> = sqlx::query_scalar(
-        "SELECT role::text FROM auth.users WHERE id = $1 AND is_active = true",
-    )
-    .bind(req.guard_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let guard_role: Option<String> =
+        sqlx::query_scalar("SELECT role::text FROM auth.users WHERE id = $1 AND is_active = true")
+            .bind(req.guard_id)
+            .fetch_optional(&mut *tx)
+            .await?;
 
     match guard_role {
         None => return Err(AppError::NotFound("Guard not found".to_string())),
@@ -530,10 +564,16 @@ pub async fn update_assignment_status(
         (AssignmentStatus::Accepted, AssignmentStatus::EnRoute)
             | (AssignmentStatus::Assigned, AssignmentStatus::EnRoute)
             | (AssignmentStatus::EnRoute, AssignmentStatus::Arrived)
-            | (AssignmentStatus::Arrived, AssignmentStatus::PendingCompletion)
+            | (
+                AssignmentStatus::Arrived,
+                AssignmentStatus::PendingCompletion
+            )
             | (AssignmentStatus::Assigned, AssignmentStatus::Cancelled)
             | (AssignmentStatus::Accepted, AssignmentStatus::Cancelled)
-            | (AssignmentStatus::AwaitingPayment, AssignmentStatus::Cancelled)
+            | (
+                AssignmentStatus::AwaitingPayment,
+                AssignmentStatus::Cancelled
+            )
             | (AssignmentStatus::EnRoute, AssignmentStatus::Cancelled)
     );
 
@@ -607,7 +647,11 @@ pub async fn update_assignment_status(
             } else {
                 None
             };
-            (place, existing.arrived_place.clone(), existing.completion_place.clone())
+            (
+                place,
+                existing.arrived_place.clone(),
+                existing.completion_place.clone(),
+            )
         }
         AssignmentStatus::Arrived => {
             let place = if let (Some(lat), Some(lng)) = (req_lat, req_lng) {
@@ -615,7 +659,11 @@ pub async fn update_assignment_status(
             } else {
                 None
             };
-            (existing.en_route_place.clone(), place, existing.completion_place.clone())
+            (
+                existing.en_route_place.clone(),
+                place,
+                existing.completion_place.clone(),
+            )
         }
         AssignmentStatus::PendingCompletion => {
             let place = if let (Some(lat), Some(lng)) = (req_lat, req_lng) {
@@ -623,9 +671,17 @@ pub async fn update_assignment_status(
             } else {
                 None
             };
-            (existing.en_route_place.clone(), existing.arrived_place.clone(), place)
+            (
+                existing.en_route_place.clone(),
+                existing.arrived_place.clone(),
+                place,
+            )
         }
-        _ => (existing.en_route_place.clone(), existing.arrived_place.clone(), existing.completion_place.clone()),
+        _ => (
+            existing.en_route_place.clone(),
+            existing.arrived_place.clone(),
+            existing.completion_place.clone(),
+        ),
     };
 
     let status_str = serde_json::to_value(&req.status)
@@ -668,7 +724,9 @@ pub async fn update_assignment_status(
 
     // Update the guard_request status accordingly
     let request_status = match req.status {
-        AssignmentStatus::EnRoute | AssignmentStatus::Arrived | AssignmentStatus::PendingCompletion => "in_progress",
+        AssignmentStatus::EnRoute
+        | AssignmentStatus::Arrived
+        | AssignmentStatus::PendingCompletion => "in_progress",
         AssignmentStatus::Completed => "completed",
         AssignmentStatus::Cancelled => "cancelled",
         _ => "assigned",
@@ -689,23 +747,30 @@ pub async fn update_assignment_status(
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "unknown".to_string());
-    publish_assignment_event(redis_conn, existing.request_id, assignment_id, &status_str_for_event);
+    publish_assignment_event(
+        redis_conn,
+        existing.request_id,
+        assignment_id,
+        &status_str_for_event,
+    );
 
     // Notify customer for status changes they care about
-    if matches!(req.status, AssignmentStatus::EnRoute | AssignmentStatus::Arrived | AssignmentStatus::PendingCompletion) {
+    if matches!(
+        req.status,
+        AssignmentStatus::EnRoute | AssignmentStatus::Arrived | AssignmentStatus::PendingCompletion
+    ) {
         let db_clone = db.clone();
         let req_id = existing.request_id;
         let a_id = assignment_id;
         let status = req.status.clone();
         tokio::spawn(async move {
-            let cid: Option<Uuid> = sqlx::query_scalar(
-                "SELECT customer_id FROM booking.guard_requests WHERE id = $1",
-            )
-            .bind(req_id)
-            .fetch_optional(&db_clone)
-            .await
-            .ok()
-            .flatten();
+            let cid: Option<Uuid> =
+                sqlx::query_scalar("SELECT customer_id FROM booking.guard_requests WHERE id = $1")
+                    .bind(req_id)
+                    .fetch_optional(&db_clone)
+                    .await
+                    .ok()
+                    .flatten();
 
             if let Some(customer_id) = cid {
                 let (title, body, ntype) = match status {
@@ -714,11 +779,9 @@ pub async fn update_assignment_status(
                         "เจ้าหน้าที่ รปภ. กำลังเดินทางมาหาคุณ",
                         "guard_en_route",
                     ),
-                    AssignmentStatus::Arrived => (
-                        "เจ้าหน้าที่ถึงแล้ว",
-                        "เจ้าหน้าที่ รปภ. ถึงจุดหมายแล้ว",
-                        "guard_arrived",
-                    ),
+                    AssignmentStatus::Arrived => {
+                        ("เจ้าหน้าที่ถึงแล้ว", "เจ้าหน้าที่ รปภ. ถึงจุดหมายแล้ว", "guard_arrived")
+                    }
                     AssignmentStatus::PendingCompletion => (
                         "เจ้าหน้าที่แจ้งงานเสร็จ",
                         "เจ้าหน้าที่ รปภ. แจ้งว่างานเสร็จสิ้น กรุณาตรวจสอบ",
@@ -1012,10 +1075,7 @@ pub async fn get_guard_dashboard_summary(
     );
 
     Ok(GuardDashboardSummary {
-        today_jobs_count: today_count
-            .map_err(AppError::from)?
-            .count
-            .unwrap_or(0),
+        today_jobs_count: today_count.map_err(AppError::from)?.count.unwrap_or(0),
         today_earnings: today_earnings
             .map_err(AppError::from)?
             .total
@@ -1031,10 +1091,7 @@ pub async fn get_guard_dashboard_summary(
             .total
             .and_then(|d| d.to_f64())
             .unwrap_or(0.0),
-        pending_jobs_count: pending_count
-            .map_err(AppError::from)?
-            .count
-            .unwrap_or(0),
+        pending_jobs_count: pending_count.map_err(AppError::from)?.count.unwrap_or(0),
         pending_acceptance_count: pending_acceptance_count
             .map_err(AppError::from)?
             .count
@@ -1049,10 +1106,7 @@ pub async fn get_guard_dashboard_summary(
 // Guard Earnings (income tab)
 // =============================================================================
 
-pub async fn get_guard_earnings(
-    db: &PgPool,
-    guard_id: Uuid,
-) -> Result<GuardEarnings, AppError> {
+pub async fn get_guard_earnings(db: &PgPool, guard_id: Uuid) -> Result<GuardEarnings, AppError> {
     #[derive(sqlx::FromRow)]
     struct EarningSummaryRow {
         total_earned: Option<rust_decimal::Decimal>,
@@ -1104,10 +1158,7 @@ pub async fn get_guard_earnings(
     let daily = daily.map_err(AppError::from)?;
 
     Ok(GuardEarnings {
-        total_earned: summary
-            .total_earned
-            .and_then(|d| d.to_f64())
-            .unwrap_or(0.0),
+        total_earned: summary.total_earned.and_then(|d| d.to_f64()).unwrap_or(0.0),
         month_earnings: summary
             .month_earnings
             .and_then(|d| d.to_f64())
@@ -1334,13 +1385,19 @@ fn validate_prices(
     base_fee: rust_decimal::Decimal,
 ) -> Result<(), AppError> {
     if min_price < rust_decimal::Decimal::ZERO {
-        return Err(AppError::BadRequest("Min price cannot be negative".to_string()));
+        return Err(AppError::BadRequest(
+            "Min price cannot be negative".to_string(),
+        ));
     }
     if max_price < rust_decimal::Decimal::ZERO {
-        return Err(AppError::BadRequest("Max price cannot be negative".to_string()));
+        return Err(AppError::BadRequest(
+            "Max price cannot be negative".to_string(),
+        ));
     }
     if base_fee < rust_decimal::Decimal::ZERO {
-        return Err(AppError::BadRequest("Base fee cannot be negative".to_string()));
+        return Err(AppError::BadRequest(
+            "Base fee cannot be negative".to_string(),
+        ));
     }
     if min_price > max_price {
         return Err(AppError::BadRequest(
@@ -1359,7 +1416,9 @@ pub async fn create_service_rate(
         return Err(AppError::BadRequest("Service name is required".to_string()));
     }
     if name.len() > 200 {
-        return Err(AppError::BadRequest("Service name too long (max 200 chars)".to_string()));
+        return Err(AppError::BadRequest(
+            "Service name too long (max 200 chars)".to_string(),
+        ));
     }
     validate_prices(dto.min_price, dto.max_price, dto.base_fee)?;
 
@@ -1392,10 +1451,14 @@ pub async fn update_service_rate(
 ) -> Result<ServiceRate, AppError> {
     if let Some(ref name) = dto.name {
         if name.trim().is_empty() {
-            return Err(AppError::BadRequest("Service name cannot be empty".to_string()));
+            return Err(AppError::BadRequest(
+                "Service name cannot be empty".to_string(),
+            ));
         }
         if name.len() > 200 {
-            return Err(AppError::BadRequest("Service name too long (max 200 chars)".to_string()));
+            return Err(AppError::BadRequest(
+                "Service name too long (max 200 chars)".to_string(),
+            ));
         }
     }
 
@@ -1506,7 +1569,11 @@ pub async fn accept_or_decline_assignment(
         ));
     }
 
-    let new_status = if req.accept { "awaiting_payment" } else { "declined" };
+    let new_status = if req.accept {
+        "awaiting_payment"
+    } else {
+        "declined"
+    };
 
     let row = sqlx::query_as::<_, AssignmentRow>(
         r#"
@@ -1537,8 +1604,17 @@ pub async fn accept_or_decline_assignment(
     tx.commit().await?;
 
     // Publish real-time event (fire-and-forget)
-    let new_status_label = if req.accept { "awaiting_payment" } else { "declined" };
-    publish_assignment_event(redis_conn, existing.request_id, assignment_id, new_status_label);
+    let new_status_label = if req.accept {
+        "awaiting_payment"
+    } else {
+        "declined"
+    };
+    publish_assignment_event(
+        redis_conn,
+        existing.request_id,
+        assignment_id,
+        new_status_label,
+    );
 
     // Notify customer about guard's decision
     {
@@ -1547,14 +1623,13 @@ pub async fn accept_or_decline_assignment(
         let accepted = req.accept;
         let a_id = assignment_id;
         tokio::spawn(async move {
-            let cid: Option<Uuid> = sqlx::query_scalar(
-                "SELECT customer_id FROM booking.guard_requests WHERE id = $1",
-            )
-            .bind(req_id)
-            .fetch_optional(&db_clone)
-            .await
-            .ok()
-            .flatten();
+            let cid: Option<Uuid> =
+                sqlx::query_scalar("SELECT customer_id FROM booking.guard_requests WHERE id = $1")
+                    .bind(req_id)
+                    .fetch_optional(&db_clone)
+                    .await
+                    .ok()
+                    .flatten();
 
             if let Some(customer_id) = cid {
                 if accepted {
@@ -1678,7 +1753,7 @@ pub async fn create_payment(
     {
         let db_clone = db.clone();
         let req_id = req.request_id;
-        let amount = req.amount;
+        let _amount = req.amount;
         tokio::spawn(async move {
             let gid: Option<Uuid> = sqlx::query_scalar(
                 "SELECT guard_id FROM booking.assignments WHERE request_id = $1 AND status = 'accepted'::assignment_status LIMIT 1",
@@ -2173,7 +2248,9 @@ pub async fn submit_review(
     let five = Decimal::new(5, 0);
 
     if req.overall_rating < one || req.overall_rating > five {
-        return Err(AppError::BadRequest("overall_rating must be between 1.0 and 5.0".to_string()));
+        return Err(AppError::BadRequest(
+            "overall_rating must be between 1.0 and 5.0".to_string(),
+        ));
     }
     for (name, val) in [
         ("punctuality", &req.punctuality),
@@ -2183,7 +2260,9 @@ pub async fn submit_review(
     ] {
         if let Some(v) = val {
             if *v < one || *v > five {
-                return Err(AppError::BadRequest(format!("{name} must be between 1.0 and 5.0")));
+                return Err(AppError::BadRequest(format!(
+                    "{name} must be between 1.0 and 5.0"
+                )));
             }
         }
     }
@@ -2205,7 +2284,9 @@ pub async fn submit_review(
     .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
 
     if assignment.status != AssignmentStatus::Completed {
-        return Err(AppError::BadRequest("Can only review completed assignments".to_string()));
+        return Err(AppError::BadRequest(
+            "Can only review completed assignments".to_string(),
+        ));
     }
 
     // Authorization: customer must own the request, or be admin
@@ -2219,7 +2300,9 @@ pub async fn submit_review(
         .await?;
 
         if !owns {
-            return Err(AppError::Forbidden("You can only review your own requests".to_string()));
+            return Err(AppError::Forbidden(
+                "You can only review your own requests".to_string(),
+            ));
         }
     }
 
@@ -2343,6 +2426,7 @@ pub async fn list_available_guards(
 // =============================================================================
 
 /// Lightweight row for verifying assignment ownership + status.
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 struct ProgressAssignmentCheck {
     pub guard_id: Uuid,
@@ -2354,6 +2438,7 @@ struct ProgressAssignmentCheck {
 /// Submit an hourly progress report (guard only).
 /// Uses runtime queries (sqlx::query) because progress_reports table is new and
 /// not available at compile-time without a running DB.
+#[allow(clippy::too_many_arguments)]
 pub async fn submit_progress_report(
     db: &PgPool,
     s3_client: &aws_sdk_s3::Client,
@@ -2401,9 +2486,7 @@ pub async fn submit_progress_report(
 
     // 2. Validate hour_number (0 = initial report at job start)
     if hour_number < 0 {
-        return Err(AppError::BadRequest(
-            "hour_number must be >= 0".to_string(),
-        ));
+        return Err(AppError::BadRequest("hour_number must be >= 0".to_string()));
     }
     if let Some(booked) = row.booked_hours {
         if hour_number > booked {
@@ -2431,7 +2514,8 @@ pub async fn submit_progress_report(
             });
         }
         while let Some(result) = join_set.join_next().await {
-            let item = result.map_err(|e| AppError::Internal(format!("Upload task failed: {e}")))?;
+            let item =
+                result.map_err(|e| AppError::Internal(format!("Upload task failed: {e}")))?;
             uploaded.push(item?);
         }
         // Sort by file_key to maintain consistent order (index is in the key)
@@ -2439,7 +2523,9 @@ pub async fn submit_progress_report(
     }
 
     // Set legacy photo_file_key from first image (backward compat)
-    let first_image = uploaded.iter().find(|(_, mime, _)| !crate::s3::is_video_mime(mime));
+    let first_image = uploaded
+        .iter()
+        .find(|(_, mime, _)| !crate::s3::is_video_mime(mime));
     let photo_file_key = first_image.map(|(k, _, _)| k.as_str());
     let photo_mime_type = first_image.map(|(_, m, _)| m.as_str());
 
@@ -2501,7 +2587,10 @@ pub async fn submit_progress_report(
     }
 
     // 6. photo_url = first image signed URL (backward compat)
-    let photo_url = media.iter().find(|m| !crate::s3::is_video_mime(&m.mime_type)).map(|m| m.url.clone());
+    let photo_url = media
+        .iter()
+        .find(|m| !crate::s3::is_video_mime(&m.mime_type))
+        .map(|m| m.url.clone());
 
     // Removed: progress report notification — customer sees reports in active job screen
 
@@ -2518,6 +2607,7 @@ pub async fn submit_progress_report(
 }
 
 /// List progress reports for an assignment (guard, customer, or admin).
+#[allow(clippy::too_many_arguments)]
 pub async fn list_progress_reports(
     db: &PgPool,
     s3_client: &aws_sdk_s3::Client,
@@ -2623,7 +2713,10 @@ pub async fn list_progress_reports(
                 } else {
                     url
                 };
-                let mime = row.photo_mime_type.clone().unwrap_or_else(|| "image/jpeg".to_string());
+                let mime = row
+                    .photo_mime_type
+                    .clone()
+                    .unwrap_or_else(|| "image/jpeg".to_string());
                 media.push(ProgressReportMediaItem {
                     id: row.id, // reuse report id for legacy
                     url,
@@ -2635,7 +2728,10 @@ pub async fn list_progress_reports(
         }
 
         // photo_url = first image from media (backward compat)
-        let photo_url = media.iter().find(|m| !crate::s3::is_video_mime(&m.mime_type)).map(|m| m.url.clone());
+        let photo_url = media
+            .iter()
+            .find(|m| !crate::s3::is_video_mime(&m.mime_type))
+            .map(|m| m.url.clone());
 
         responses.push(ProgressReportResponse {
             id: row.id,
@@ -2650,4 +2746,261 @@ pub async fn list_progress_reports(
     }
 
     Ok(responses)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CreateRequestDto, UrgencyLevel};
+
+    // =========================================================================
+    // create_request input validation (mirrors validation in create_request())
+    // These test validation logic without requiring a database connection.
+    // =========================================================================
+
+    /// Helper that runs the same validation checks as create_request().
+    fn validate_create_request(req: &CreateRequestDto) -> Result<(), AppError> {
+        if req.address.is_empty() {
+            return Err(AppError::BadRequest("Address is required".to_string()));
+        }
+
+        // Validate coordinates
+        if !(-90.0..=90.0).contains(&req.location_lat) {
+            return Err(AppError::BadRequest(
+                "Latitude must be between -90 and 90".to_string(),
+            ));
+        }
+        if !(-180.0..=180.0).contains(&req.location_lng) {
+            return Err(AppError::BadRequest(
+                "Longitude must be between -180 and 180".to_string(),
+            ));
+        }
+        if req.location_lat == 0.0 && req.location_lng == 0.0 {
+            return Err(AppError::BadRequest(
+                "Invalid coordinates (0,0)".to_string(),
+            ));
+        }
+
+        // Validate booked_hours
+        if let Some(hours) = req.booked_hours {
+            if !(1..=720).contains(&hours) {
+                return Err(AppError::BadRequest(
+                    "Booked hours must be between 1 and 720".to_string(),
+                ));
+            }
+        }
+
+        // Validate offered_price
+        if let Some(price) = req.offered_price {
+            if price < 0.0 {
+                return Err(AppError::BadRequest(
+                    "Offered price cannot be negative".to_string(),
+                ));
+            }
+        }
+
+        // Validate Decimal conversion (NaN/Infinity)
+        if let Some(p) = req.offered_price {
+            rust_decimal::Decimal::try_from(p)
+                .map_err(|_| AppError::BadRequest("Invalid offered price value".to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    fn valid_request() -> CreateRequestDto {
+        CreateRequestDto {
+            location_lat: 13.7563,
+            location_lng: 100.5018,
+            address: "123 Test Street, Bangkok".to_string(),
+            description: None,
+            offered_price: None,
+            special_instructions: None,
+            urgency: UrgencyLevel::Medium,
+            booked_hours: Some(6),
+        }
+    }
+
+    #[test]
+    fn create_request_accepts_valid_input() {
+        assert!(validate_create_request(&valid_request()).is_ok());
+    }
+
+    // --- Coordinate validation ---
+
+    #[test]
+    fn create_request_rejects_lat_above_90() {
+        let mut req = valid_request();
+        req.location_lat = 91.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Latitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_lat_below_negative_90() {
+        let mut req = valid_request();
+        req.location_lat = -91.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Latitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_lng_above_180() {
+        let mut req = valid_request();
+        req.location_lng = 181.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Longitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_lng_below_negative_180() {
+        let mut req = valid_request();
+        req.location_lng = -181.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Longitude"));
+    }
+
+    #[test]
+    fn create_request_rejects_zero_zero_coordinates() {
+        let mut req = valid_request();
+        req.location_lat = 0.0;
+        req.location_lng = 0.0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("(0,0)"));
+    }
+
+    #[test]
+    fn create_request_accepts_lat_at_boundaries() {
+        let mut req = valid_request();
+        req.location_lat = 90.0;
+        assert!(validate_create_request(&req).is_ok());
+        req.location_lat = -90.0;
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_lng_at_boundaries() {
+        let mut req = valid_request();
+        req.location_lng = 180.0;
+        assert!(validate_create_request(&req).is_ok());
+        req.location_lng = -180.0;
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    // --- booked_hours validation ---
+
+    #[test]
+    fn create_request_rejects_zero_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(0);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Booked hours"));
+    }
+
+    #[test]
+    fn create_request_rejects_negative_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(-1);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Booked hours"));
+    }
+
+    #[test]
+    fn create_request_rejects_721_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(721);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Booked hours"));
+    }
+
+    #[test]
+    fn create_request_accepts_1_booked_hour() {
+        let mut req = valid_request();
+        req.booked_hours = Some(1);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_720_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = Some(720);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_none_booked_hours() {
+        let mut req = valid_request();
+        req.booked_hours = None;
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    // --- offered_price validation ---
+
+    #[test]
+    fn create_request_rejects_negative_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(-1.0);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("price"));
+    }
+
+    #[test]
+    fn create_request_rejects_nan_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(f64::NAN);
+        // NaN fails both the negativity check (NaN < 0.0 is false) and
+        // the Decimal::try_from conversion
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("price") || format!("{err:?}").contains("Invalid"));
+    }
+
+    #[test]
+    fn create_request_rejects_infinity_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(f64::INFINITY);
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("price") || format!("{err:?}").contains("Invalid"));
+    }
+
+    #[test]
+    fn create_request_accepts_zero_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(0.0);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    #[test]
+    fn create_request_accepts_valid_price() {
+        let mut req = valid_request();
+        req.offered_price = Some(500.50);
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    // --- sanitize_coords ---
+
+    #[test]
+    fn sanitize_coords_rejects_out_of_range() {
+        assert_eq!(sanitize_coords(Some(91.0), Some(0.0)), (None, None));
+        assert_eq!(sanitize_coords(Some(0.0), Some(181.0)), (None, None));
+    }
+
+    #[test]
+    fn sanitize_coords_rejects_zero_zero() {
+        assert_eq!(sanitize_coords(Some(0.0), Some(0.0)), (None, None));
+    }
+
+    #[test]
+    fn sanitize_coords_accepts_valid() {
+        assert_eq!(
+            sanitize_coords(Some(13.75), Some(100.5)),
+            (Some(13.75), Some(100.5))
+        );
+    }
+
+    #[test]
+    fn sanitize_coords_returns_none_for_none_input() {
+        assert_eq!(sanitize_coords(None, None), (None, None));
+        assert_eq!(sanitize_coords(Some(13.0), None), (None, None));
+        assert_eq!(sanitize_coords(None, Some(100.0)), (None, None));
+    }
 }

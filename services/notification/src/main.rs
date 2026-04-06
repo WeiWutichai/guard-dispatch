@@ -93,22 +93,22 @@ async fn main() -> anyhow::Result<()> {
         .route("/notifications", get(handlers::list_notifications))
         .route("/notifications/unread-count", get(handlers::unread_count))
         .route("/notifications/read-all", put(handlers::mark_all_as_read))
-        .route(
-            "/notifications/{id}/read",
-            put(handlers::mark_as_read),
-        )
+        .route("/notifications/{id}/read", put(handlers::mark_as_read))
         .route("/notifications/send", post(handlers::send_notification))
         .merge({
-            let swagger = SwaggerUi::new("/swagger-ui")
-                .url("/api-docs/openapi.json", ApiDoc::openapi());
+            let swagger =
+                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
             match std::env::var("SWAGGER_PATH_PREFIX") {
-                Ok(prefix) => swagger.config(
-                    utoipa_swagger_ui::Config::from(format!("{prefix}/api-docs/openapi.json")),
-                ),
+                Ok(prefix) => swagger.config(utoipa_swagger_ui::Config::from(format!(
+                    "{prefix}/api-docs/openapi.json"
+                ))),
                 Err(_) => swagger,
             }
         })
-        .layer(middleware::from_fn_with_state(state.clone(), shared::audit::audit_middleware::<Arc<AppState>>))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            shared::audit::audit_middleware::<Arc<AppState>>,
+        ))
         .layer(shared::config::build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

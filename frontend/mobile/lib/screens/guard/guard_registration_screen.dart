@@ -11,6 +11,7 @@ import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 import '../../services/auth_service.dart';
 import '../../providers/auth_provider.dart';
+import '../phone_input_screen.dart';
 
 class GuardRegistrationScreen extends StatefulWidget {
   final String? phone;
@@ -184,10 +185,22 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
           role: 'guard',
         );
       } else {
-        // Retry — user is already pending, reissue profile_token
-        final phone = widget.phone ?? await AuthService.getPhone('guard');
-        if (phone == null) throw Exception('Phone number not available');
-        profileToken = await authProvider.reissueProfileToken(phone);
+        // Token expired — user needs to re-verify phone via OTP
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(LanguageProvider.of(context).isThai
+                ? 'เซสชันหมดอายุ กรุณายืนยันเบอร์โทรอีกครั้ง'
+                : 'Session expired. Please verify your phone again.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+          (route) => false,
+        );
+        return;
       }
 
       if (profileToken == null) {

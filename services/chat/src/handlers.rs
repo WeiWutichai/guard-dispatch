@@ -11,6 +11,7 @@ use shared::models::ApiResponse;
 
 /// Schema-only struct for documenting multipart upload in Swagger UI.
 /// Not used in code — Axum uses `Multipart` extractor directly.
+#[allow(dead_code)]
 #[derive(utoipa::ToSchema)]
 pub struct AttachmentUploadForm {
     /// UUID of the conversation
@@ -22,8 +23,8 @@ pub struct AttachmentUploadForm {
 
 use crate::models::{
     AttachmentResponse, ConversationResponse, CreateConversationRequest,
-    EnrichedConversationResponse, IncomingChatMessage, ListConversationsQuery,
-    ListMessagesQuery, MessageResponse,
+    EnrichedConversationResponse, IncomingChatMessage, ListConversationsQuery, ListMessagesQuery,
+    MessageResponse,
 };
 use crate::state::AppState;
 
@@ -52,9 +53,50 @@ pub async fn ws_handler(
 async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
     tracing::info!("Chat WebSocket connected: user_id={}", user.user_id);
 
-    while let Some(msg) = socket.recv().await {
+    // Rate limiting: max 5 messages per second per connection
+    let mut last_message_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    let min_interval = std::time::Duration::from_millis(200); // 5 msg/s
+
+    // Ping/pong: detect zombie connections (same pattern as GPS WebSocket)
+    let ping_interval = std::time::Duration::from_secs(30);
+    let pong_timeout = std::time::Duration::from_secs(10);
+    let mut last_activity = std::time::Instant::now();
+    let mut ping_sent_at: Option<std::time::Instant> = None;
+
+    loop {
+        let wait_duration = if let Some(sent) = ping_sent_at {
+            pong_timeout.saturating_sub(sent.elapsed())
+        } else {
+            ping_interval.saturating_sub(last_activity.elapsed())
+        };
+
+        let msg = match tokio::time::timeout(wait_duration, socket.recv()).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => break,
+            Err(_) => {
+                if ping_sent_at.is_some() {
+                    tracing::warn!("Chat WS pong timeout: user_id={}", user.user_id);
+                    break;
+                }
+                if socket.send(Message::Ping(vec![].into())).await.is_err() {
+                    break;
+                }
+                ping_sent_at = Some(std::time::Instant::now());
+                continue;
+            }
+        };
+
         let text = match msg {
-            Ok(Message::Text(text)) => text,
+            Ok(Message::Text(text)) => {
+                last_activity = std::time::Instant::now();
+                ping_sent_at = None;
+                text
+            }
+            Ok(Message::Pong(_)) => {
+                last_activity = std::time::Instant::now();
+                ping_sent_at = None;
+                continue;
+            }
             Ok(Message::Close(_)) => break,
             Err(e) => {
                 tracing::warn!("WebSocket recv error: {e}");
@@ -63,12 +105,21 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
             _ => continue,
         };
 
+        // Rate limit: drop messages that arrive too fast
+        let now = std::time::Instant::now();
+        if now.duration_since(last_message_at) < min_interval {
+            continue;
+        }
+        last_message_at = now;
+
         let incoming: IncomingChatMessage = match serde_json::from_str(&text) {
             Ok(m) => m,
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": format!("Invalid message: {e}")}).to_string().into(),
+                        serde_json::json!({"error": format!("Invalid message: {e}")})
+                            .to_string()
+                            .into(),
                     ))
                     .await;
                 continue;
@@ -85,7 +136,9 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
             Err(e) => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"error": e.to_string()}).to_string().into(),
+                        serde_json::json!({"error": e.to_string()})
+                            .to_string()
+                            .into(),
                     ))
                     .await;
             }
@@ -169,7 +222,8 @@ pub async fn list_messages(
     Path(id): Path<Uuid>,
     Query(query): Query<ListMessagesQuery>,
 ) -> Result<Json<ApiResponse<Vec<MessageResponse>>>, AppError> {
-    let messages = crate::service::list_messages(&state.db, id, user.user_id, &user.role, query).await?;
+    let messages =
+        crate::service::list_messages(&state.db, id, user.user_id, &user.role, query).await?;
     Ok(Json(ApiResponse::success(messages)))
 }
 
@@ -193,6 +247,20 @@ pub async fn mark_read(
     Path(id): Path<Uuid>,
     Query(query): Query<ListConversationsQuery>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
+    // Authorization: only participants or admins can mark conversations as read
+    if user.role != "admin" {
+        let is_participant = crate::service::is_conversation_participant_by_conversation(
+            &state.db,
+            id,
+            user.user_id,
+        )
+        .await?;
+        if !is_participant {
+            return Err(AppError::Forbidden(
+                "You are not a participant of this conversation".to_string(),
+            ));
+        }
+    }
     let acting_role = query.role.as_deref().unwrap_or(&user.role);
     crate::service::mark_read(&state.db, id, user.user_id, acting_role).await?;
     Ok(Json(ApiResponse::success(())))
@@ -254,8 +322,8 @@ pub async fn upload_attachment(
         }
     }
 
-    let conversation_id =
-        conversation_id.ok_or_else(|| AppError::BadRequest("conversation_id is required".to_string()))?;
+    let conversation_id = conversation_id
+        .ok_or_else(|| AppError::BadRequest("conversation_id is required".to_string()))?;
 
     // Authorization: verify uploader is a participant in this conversation or admin
     if user.role != "admin" {
@@ -272,8 +340,7 @@ pub async fn upload_attachment(
         }
     }
 
-    let data =
-        file_data.ok_or_else(|| AppError::BadRequest("file is required".to_string()))?;
+    let data = file_data.ok_or_else(|| AppError::BadRequest("file is required".to_string()))?;
     let mime = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
     // Validate file (checks MIME + magic bytes + size — images 10MB, videos 50MB)
@@ -288,12 +355,10 @@ pub async fn upload_attachment(
     let data_len = data.len();
 
     // Upload to S3/MinIO (consumes data, no clone needed)
-    crate::s3::upload_file(&state.s3_client, &state.s3_bucket, &file_key, data, &mime)
-        .await?;
+    crate::s3::upload_file(&state.s3_client, &state.s3_bucket, &file_key, data, &mime).await?;
 
     // Generate signed URL and rewrite host for client access (per CLAUDE.md presigned URL host rewrite)
-    let raw_url =
-        crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &file_key).await?;
+    let raw_url = crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &file_key).await?;
     let file_url = if state.s3_endpoint != state.s3_public_url {
         raw_url.replacen(&state.s3_endpoint, &state.s3_public_url, 1)
     } else {
@@ -366,12 +431,9 @@ pub async fn get_signed_url(
     let attachment = crate::service::get_attachment(&state.db, id).await?;
 
     // Authorization: only the uploader or a conversation participant can access
-    let is_participant = crate::service::is_conversation_participant(
-        &state.db,
-        attachment.message_id,
-        user.user_id,
-    )
-    .await?;
+    let is_participant =
+        crate::service::is_conversation_participant(&state.db, attachment.message_id, user.user_id)
+            .await?;
 
     if !is_participant && user.role != "admin" {
         return Err(AppError::Forbidden(
@@ -381,8 +443,7 @@ pub async fn get_signed_url(
 
     // Regenerate signed URL (previous one may have expired) + host rewrite
     let raw_url =
-        crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &attachment.file_key)
-            .await?;
+        crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &attachment.file_key).await?;
     let fresh_url = if state.s3_endpoint != state.s3_public_url {
         raw_url.replacen(&state.s3_endpoint, &state.s3_public_url, 1)
     } else {

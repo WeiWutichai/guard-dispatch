@@ -15,11 +15,10 @@ use shared::models::ApiResponse;
 use crate::models::{
     AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse,
     AvailableGuardResponse, AvailableGuardsQuery, CreatePaymentDto, CreateRequestDto,
-    CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
-    GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse,
-    ListRequestsQuery, PaymentResponse, ProgressReportResponse, ReviewCompletionDto, ServiceRate,
-    StartJobDto, SubmitReviewResponse, UpdateAssignmentStatusDto, UpdateServiceRateDto,
-    WorkHistoryResponse,
+    CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
+    GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListRequestsQuery, PaymentResponse,
+    ProgressReportResponse, ReviewCompletionDto, ServiceRate, StartJobDto, SubmitReviewResponse,
+    UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -39,6 +38,22 @@ pub async fn create_request(
     user: AuthUser,
     Json(req): Json<CreateRequestDto>,
 ) -> Result<Json<ApiResponse<GuardRequestResponse>>, AppError> {
+    // Only users with an approved customer profile (or admins) can create booking requests.
+    // A guard who also registered as a customer has role='guard' in auth.users but has
+    // an approved customer_profiles entry — they should be allowed to book.
+    if user.role != "admin" {
+        let has_customer_profile: Option<bool> = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM auth.customer_profiles WHERE user_id = $1 AND approval_status = 'approved')",
+        )
+        .bind(user.user_id)
+        .fetch_one(&state.db)
+        .await?;
+        if !has_customer_profile.unwrap_or(false) {
+            return Err(AppError::Forbidden(
+                "Only approved customers can create booking requests".to_string(),
+            ));
+        }
+    }
     let request = crate::service::create_request(&state.db, user.user_id, req).await?;
     Ok(Json(ApiResponse::success(request)))
 }
@@ -171,8 +186,16 @@ pub async fn update_assignment_status(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<UpdateAssignmentStatusDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
-    let assignment =
-        crate::service::update_assignment_status(&state.db, id, user.user_id, &user.role, req, &state.redis_conn, &state.http_client).await?;
+    let assignment = crate::service::update_assignment_status(
+        &state.db,
+        id,
+        user.user_id,
+        &user.role,
+        req,
+        &state.redis_conn,
+        &state.http_client,
+    )
+    .await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -195,8 +218,15 @@ pub async fn review_completion(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<ReviewCompletionDto>,
 ) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
-    let assignment =
-        crate::service::review_completion(&state.db, id, user.user_id, &user.role, req, &state.redis_conn).await?;
+    let assignment = crate::service::review_completion(
+        &state.db,
+        id,
+        user.user_id,
+        &user.role,
+        req,
+        &state.redis_conn,
+    )
+    .await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -258,7 +288,8 @@ pub async fn submit_review(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<CreateReviewDto>,
 ) -> Result<Json<ApiResponse<SubmitReviewResponse>>, AppError> {
-    let result = crate::service::submit_review(&state.db, id, user.user_id, &user.role, req).await?;
+    let result =
+        crate::service::submit_review(&state.db, id, user.user_id, &user.role, req).await?;
     Ok(Json(ApiResponse::success(result)))
 }
 
@@ -284,8 +315,7 @@ pub async fn guard_dashboard(
     if user.role != "guard" {
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
-    let summary =
-        crate::service::get_guard_dashboard_summary(&state.db, user.user_id).await?;
+    let summary = crate::service::get_guard_dashboard_summary(&state.db, user.user_id).await?;
     Ok(Json(ApiResponse::success(summary)))
 }
 
@@ -457,8 +487,14 @@ pub async fn accept_decline_assignment(
     if user.role != "guard" {
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
-    let assignment =
-        crate::service::accept_or_decline_assignment(&state.db, id, user.user_id, req, &state.redis_conn).await?;
+    let assignment = crate::service::accept_or_decline_assignment(
+        &state.db,
+        id,
+        user.user_id,
+        req,
+        &state.redis_conn,
+    )
+    .await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
 
@@ -482,7 +518,8 @@ pub async fn create_payment(
     user: AuthUser,
     Json(req): Json<CreatePaymentDto>,
 ) -> Result<Json<ApiResponse<PaymentResponse>>, AppError> {
-    let payment = crate::service::create_payment(&state.db, user.user_id, req, &state.redis_conn).await?;
+    let payment =
+        crate::service::create_payment(&state.db, user.user_id, req, &state.redis_conn).await?;
     Ok(Json(ApiResponse::success(payment)))
 }
 
@@ -512,7 +549,8 @@ pub async fn start_job(
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
     let (lat, lng) = body.map(|b| (b.lat, b.lng)).unwrap_or((None, None));
-    let job = crate::service::start_job(&state.db, id, user.user_id, lat, lng, &state.http_client).await?;
+    let job = crate::service::start_job(&state.db, id, user.user_id, lat, lng, &state.http_client)
+        .await?;
     Ok(Json(ApiResponse::success(job)))
 }
 
@@ -564,7 +602,9 @@ pub async fn get_customer_active_job(
     user: AuthUser,
     Path(request_id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<Option<ActiveJobResponse>>>, AppError> {
-    let job = crate::service::get_customer_active_job(&state.db, request_id, user.user_id, &user.role).await?;
+    let job =
+        crate::service::get_customer_active_job(&state.db, request_id, user.user_id, &user.role)
+            .await?;
     Ok(Json(ApiResponse::success(job)))
 }
 
@@ -585,9 +625,23 @@ pub async fn get_customer_active_job(
 )]
 pub async fn available_guards(
     State(state): State<Arc<AppState>>,
-    _user: AuthUser,
+    user: AuthUser,
     Query(query): Query<AvailableGuardsQuery>,
 ) -> Result<Json<ApiResponse<Vec<AvailableGuardResponse>>>, AppError> {
+    // Only users with an approved customer profile (or admins) can search for guards.
+    if user.role != "admin" {
+        let has_customer_profile: Option<bool> = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM auth.customer_profiles WHERE user_id = $1 AND approval_status = 'approved')",
+        )
+        .bind(user.user_id)
+        .fetch_one(&state.db)
+        .await?;
+        if !has_customer_profile.unwrap_or(false) {
+            return Err(AppError::Forbidden(
+                "Only approved customers can search for available guards".to_string(),
+            ));
+        }
+    }
     let guards = crate::service::list_available_guards(&state.db, query).await?;
     Ok(Json(ApiResponse::success(guards)))
 }
@@ -757,13 +811,51 @@ async fn handle_assignment_ws(mut socket: WebSocket, state: Arc<AppState>, user:
         }
     };
 
+    // Step 2: Validate request_id format and authorize user
+    let request_uuid = match uuid::Uuid::parse_str(&request_id) {
+        Ok(id) => id,
+        Err(_) => {
+            let _ = socket
+                .send(Message::Text("Invalid request_id format".into()))
+                .await;
+            return;
+        }
+    };
+
+    // Authorization: only request owner, assigned guard, or admin can subscribe
+    if user.role != "admin" {
+        let is_authorized: bool = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM booking.guard_requests
+                WHERE id = $1 AND customer_id = $2
+                UNION ALL
+                SELECT 1 FROM booking.assignments
+                WHERE request_id = $1 AND guard_id = $2
+            )
+            "#,
+        )
+        .bind(request_uuid)
+        .bind(user.user_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+        if !is_authorized {
+            let _ = socket
+                .send(Message::Text("Not authorized for this request".into()))
+                .await;
+            return;
+        }
+    }
+
     tracing::info!(
         "Assignment WS subscribing: request_id={}, user_id={}",
         request_id,
         user.user_id
     );
 
-    // Step 2: Subscribe to Redis channel for this request's assignment updates
+    // Step 3: Subscribe to Redis channel for this request's assignment updates
     let channel = format!("assignment_status:{request_id}");
 
     let mut pubsub = match state.redis_client.get_async_pubsub().await {
@@ -900,8 +992,7 @@ pub async fn submit_progress_report(
                     .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
                     .to_vec();
                 // Use magic-byte detected MIME, fallback to declared
-                let mime = crate::s3::detect_mime(&data)
-                    .unwrap_or(declared_mime);
+                let mime = crate::s3::detect_mime(&data).unwrap_or_else(|| declared_mime.clone());
                 crate::s3::validate_upload(&mime, data.len(), &data)?;
                 files.push((data, mime));
             }

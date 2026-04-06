@@ -369,10 +369,14 @@ class AuthProvider extends ChangeNotifier {
   /// Reissue a profile_token for a pending user who already passed OTP.
   /// Used when retrying profile submission without repeating the OTP flow.
   /// [role] determines the token purpose (guard_profile or customer_profile).
-  Future<String> reissueProfileToken(String phone, {String? role}) async {
+  Future<String> reissueProfileToken(String phone, {String? role, required String phoneVerifiedToken}) async {
     final response = await _apiClient.dio.post(
       '/auth/profile/reissue',
-      data: <String, dynamic>{'phone': phone, 'role': ?role},
+      data: <String, dynamic>{
+        'phone': phone,
+        'phone_verified_token': phoneVerifiedToken,
+        'role': ?role,
+      },
     );
     final token = response.data['data']?['profile_token'];
     if (token is! String) {
@@ -495,6 +499,7 @@ class AuthProvider extends ChangeNotifier {
     final response = await _apiClient.dio.post(
       '/auth/login/phone',
       data: {'phone': phone, 'password': pinHash},
+      options: Options(headers: {'X-Client-Type': 'mobile'}),
     );
     final data = response.data['data'];
     final accessToken = data['access_token'] as String;

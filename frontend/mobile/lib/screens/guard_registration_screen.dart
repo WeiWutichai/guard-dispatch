@@ -11,6 +11,7 @@ import '../services/auth_service.dart';
 import '../providers/auth_provider.dart';
 import '../l10n/app_strings.dart';
 import 'registration_pending_screen.dart';
+import 'phone_input_screen.dart';
 
 class GuardRegistrationScreen extends StatefulWidget {
   final String phone;
@@ -207,9 +208,25 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     try {
       final authProvider = context.read<AuthProvider>();
 
-      // Get profile_token: use the one from updateRole(), or reissue if expired/null.
-      final profileToken = widget.profileToken ??
-          await authProvider.reissueProfileToken(widget.phone);
+      // profile_token from updateRole() — if null, session expired, redirect to OTP
+      final profileToken = widget.profileToken;
+      if (profileToken == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(LanguageProvider.of(context).isThai
+                ? 'เซสชันหมดอายุ กรุณายืนยันเบอร์โทรอีกครั้ง'
+                : 'Session expired. Please verify your phone again.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+          (route) => false,
+        );
+        return;
+      }
 
       // Save profile summary locally (masked account number for security).
       String? dobSave;

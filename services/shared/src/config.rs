@@ -1,7 +1,4 @@
-use axum::http::header::{
-    AUTHORIZATION, ACCEPT, CONTENT_TYPE, ORIGIN, COOKIE,
-    HeaderName,
-};
+use axum::http::header::{HeaderName, ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, ORIGIN};
 use axum::http::{HeaderValue, Method};
 use tower_http::cors::CorsLayer;
 
@@ -123,6 +120,11 @@ impl RedisConfig {
 impl JwtConfig {
     pub fn from_env() -> Result<Self, AppError> {
         let secret = require_env("JWT_SECRET")?;
+        if secret.len() < 64 {
+            return Err(AppError::Internal(
+                "JWT_SECRET must be at least 64 characters".to_string(),
+            ));
+        }
         let encoding_key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
         let decoding_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
         Ok(Self {
@@ -196,14 +198,11 @@ mod tests {
 
     #[test]
     fn database_config_reads_from_env() {
-        with_env_vars(
-            &[("DATABASE_URL", "postgres://localhost/test")],
-            || {
-                let cfg = DatabaseConfig::from_env().unwrap();
-                assert_eq!(cfg.url, "postgres://localhost/test");
-                assert_eq!(cfg.max_connections, 20); // default
-            },
-        );
+        with_env_vars(&[("DATABASE_URL", "postgres://localhost/test")], || {
+            let cfg = DatabaseConfig::from_env().unwrap();
+            assert_eq!(cfg.url, "postgres://localhost/test");
+            assert_eq!(cfg.max_connections, 20); // default
+        });
     }
 
     #[test]
@@ -231,10 +230,16 @@ mod tests {
     #[test]
     fn jwt_config_reads_from_env() {
         with_env_vars(
-            &[("JWT_SECRET", "super-secret-key")],
+            &[(
+                "JWT_SECRET",
+                "super-secret-key-that-is-at-least-64-characters-long-for-hs256-security!",
+            )],
             || {
                 let cfg = JwtConfig::from_env().unwrap();
-                assert_eq!(cfg.secret, "super-secret-key");
+                assert_eq!(
+                    cfg.secret,
+                    "super-secret-key-that-is-at-least-64-characters-long-for-hs256-security!"
+                );
                 assert_eq!(cfg.expiry_hours, 24); // default
             },
         );
@@ -244,7 +249,10 @@ mod tests {
     fn jwt_config_custom_expiry() {
         with_env_vars(
             &[
-                ("JWT_SECRET", "key"),
+                (
+                    "JWT_SECRET",
+                    "a]strong-secret-that-is-at-least-64-characters-long-for-jwt-hs256-security!!",
+                ),
                 ("JWT_EXPIRY_HOURS", "48"),
             ],
             || {
@@ -260,6 +268,14 @@ mod tests {
         clear_env_vars(&["JWT_SECRET"]);
         let result = JwtConfig::from_env();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn jwt_config_fails_with_short_secret() {
+        with_env_vars(&[("JWT_SECRET", "too-short")], || {
+            let result = JwtConfig::from_env();
+            assert!(result.is_err());
+        });
     }
 
     #[test]

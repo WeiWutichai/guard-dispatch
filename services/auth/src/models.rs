@@ -79,6 +79,25 @@ pub struct AuthResponse {
     pub role: String,
 }
 
+/// Web-safe auth response — tokens are in httpOnly cookies, not the body.
+/// Prevents XSS from reading tokens even if the page is compromised.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WebAuthResponse {
+    pub token_type: String,
+    pub expires_in: i64,
+    pub role: String,
+}
+
+impl From<&AuthResponse> for WebAuthResponse {
+    fn from(auth: &AuthResponse) -> Self {
+        Self {
+            token_type: auth.token_type.clone(),
+            expires_in: auth.expires_in,
+            role: auth.role.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct UserResponse {
     pub id: Uuid,
@@ -124,6 +143,7 @@ pub struct UserResponse {
 // Database row types
 // =============================================================================
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct UserRow {
     pub id: Uuid,
@@ -164,6 +184,7 @@ impl From<UserRow> for UserResponse {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct SessionRow {
     pub id: Uuid,
@@ -267,6 +288,8 @@ pub struct PaginatedUsers {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ReissueProfileTokenRequest {
     pub phone: String,
+    /// OTP-verified token — proves phone ownership before reissuing profile token.
+    pub phone_verified_token: String,
     /// Optional role to determine profile token purpose. Defaults to guard.
     pub role: Option<UserRole>,
 }
@@ -455,6 +478,7 @@ pub struct SubmitCustomerProfileRequest {
 }
 
 /// Customer profile as stored in `auth.customer_profiles`.
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct CustomerProfileRow {
     pub user_id: Uuid,
@@ -484,6 +508,7 @@ pub struct CustomerProfileResponse {
 // OTP Database row types
 // =============================================================================
 
+#[allow(dead_code)]
 #[derive(Debug, sqlx::FromRow)]
 pub struct OtpRow {
     pub id: Uuid,

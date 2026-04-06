@@ -6,6 +6,7 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    #[allow(dead_code)]
     pub redis_cache: redis::Client,
     /// Pre-established multiplexed Redis connection for chat PubSub.
     /// Clone is cheap — shares the underlying connection (per CLAUDE.md).
