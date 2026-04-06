@@ -320,12 +320,19 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
     final isConnecting = tracking.isConnecting;
     final hasActiveJob = booking.activeJob != null;
 
-    // Status label
+    final hasGps = tracking.lastPosition != null;
+
+    // Status label — gray when online but GPS lost (matches admin map "alert" state)
     String statusText;
     Color dotColor;
     if (isConnecting) {
       statusText = strings.connecting;
       dotColor = AppColors.warning;
+    } else if (isOnline && !hasGps) {
+      statusText = LanguageProvider.of(context).isThai
+          ? 'ไม่พร้อมรับงาน'
+          : 'GPS Unavailable';
+      dotColor = const Color(0xFF94A3B8); // slate-400 gray
     } else if (hasActiveJob && isOnline) {
       statusText = strings.busy;
       dotColor = const Color(0xFFF59E0B);
@@ -385,19 +392,33 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
             ],
           ),
         ),
-        // GPS accuracy indicator when online
-        if (isOnline && tracking.lastPosition != null)
+        // GPS status indicator when online
+        if (isOnline)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Row(
               children: [
-                Icon(Icons.gps_fixed, size: 14, color: AppColors.success),
+                Icon(
+                  tracking.lastPosition != null
+                      ? Icons.gps_fixed
+                      : Icons.gps_off,
+                  size: 14,
+                  color: tracking.lastPosition != null
+                      ? AppColors.success
+                      : const Color(0xFF94A3B8), // slate-400 — same gray as admin map "alert"
+                ),
                 const SizedBox(width: 6),
                 Text(
-                  '${strings.gpsAccuracy}: ${tracking.lastPosition!.accuracy.toStringAsFixed(0)}m',
+                  tracking.lastPosition != null
+                      ? '${strings.gpsAccuracy}: ${tracking.lastPosition!.accuracy.toStringAsFixed(0)}m'
+                      : (LanguageProvider.of(context).isThai
+                          ? 'กำลังค้นหาสัญญาณ GPS...'
+                          : 'Searching for GPS signal...'),
                   style: GoogleFonts.inter(
                     fontSize: 12,
-                    color: AppColors.textSecondary,
+                    color: tracking.lastPosition != null
+                        ? AppColors.textSecondary
+                        : const Color(0xFF94A3B8),
                   ),
                 ),
               ],
