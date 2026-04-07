@@ -261,12 +261,17 @@ pub async fn mobile_refresh_token(
 pub async fn refresh_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    body: Option<Json<RefreshRequest>>,
+    body: String,
 ) -> Result<(HeaderMap, Json<ApiResponse<crate::models::WebAuthResponse>>), AppError> {
-    // Accept refresh_token from body or cookie (web sends empty body, uses cookie)
-    let body_token = body
-        .map(|Json(req)| req.refresh_token)
-        .unwrap_or_default();
+    // Accept refresh_token from body or cookie (web sends empty body, uses cookie).
+    // Use raw String body to tolerate empty/missing body without 400 from extractor.
+    let body_token = if body.trim().is_empty() {
+        String::new()
+    } else {
+        serde_json::from_str::<RefreshRequest>(&body)
+            .map(|r| r.refresh_token)
+            .unwrap_or_default()
+    };
     let refresh_tok = if body_token.is_empty() {
         // Try to read from cookie
         headers
