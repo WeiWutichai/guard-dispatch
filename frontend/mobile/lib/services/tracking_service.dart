@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:web_socket_channel/io.dart';
 
@@ -200,9 +201,46 @@ class TrackingService {
       );
     } catch (e) {
       _isConnected = false;
-      onError?.call('ws_connect_failed');
-      _scheduleReconnect();
+      // Token may have expired during reconnect — try refreshing once
+      // before falling back to scheduled reconnect.
+      final refreshed = await _tryRefreshToken();
+      if (refreshed && !_isStopping) {
+        _scheduleReconnect();
+      } else {
+        onError?.call('ws_connect_failed');
+        _scheduleReconnect();
+      }
     }
+  }
+
+  /// Attempt to refresh the access token via /auth/refresh/mobile.
+  /// Returns true if a new token was successfully stored.
+  Future<bool> _tryRefreshToken() async {
+    try {
+      final refreshToken = await AuthService.getRefreshToken();
+      if (refreshToken == null || refreshToken.isEmpty) return false;
+      final dio = Dio(BaseOptions(
+        baseUrl: _defaultBaseUrl,
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 10),
+      ));
+      final response = await dio.post(
+        '/auth/refresh/mobile',
+        data: {'refresh_token': refreshToken},
+      );
+      if (response.statusCode == 200) {
+        final data = response.data['data'];
+        final newAccess = data['access_token'] as String?;
+        final newRefresh = data['refresh_token'] as String?;
+        if (newAccess != null && newRefresh != null) {
+          await AuthService.storeTokens(newAccess, newRefresh);
+          return true;
+        }
+      }
+    } catch (_) {
+      // Refresh failed — fall through to scheduled reconnect
+    }
+    return false;
   }
 
   void _scheduleReconnect() {

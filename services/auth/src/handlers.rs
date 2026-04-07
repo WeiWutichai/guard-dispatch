@@ -232,16 +232,25 @@ pub async fn mobile_phone_login(
 )]
 pub async fn mobile_refresh_token(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<RefreshRequest>,
+    body: String,
 ) -> Result<Json<ApiResponse<AuthResponse>>, AppError> {
-    if req.refresh_token.is_empty() {
+    // Use raw String body to tolerate Content-Type quirks across HTTP clients
+    let refresh_tok = if body.trim().is_empty() {
+        String::new()
+    } else {
+        serde_json::from_str::<RefreshRequest>(&body)
+            .map(|r| r.refresh_token)
+            .unwrap_or_default()
+    };
+
+    if refresh_tok.is_empty() {
         return Err(AppError::BadRequest(
             "refresh_token is required".to_string(),
         ));
     }
 
     let auth =
-        crate::service::refresh_token(&state.db, &state.redis, &state.jwt_config, &req.refresh_token)
+        crate::service::refresh_token(&state.db, &state.redis, &state.jwt_config, &refresh_tok)
             .await?;
 
     Ok(Json(ApiResponse::success(auth)))
