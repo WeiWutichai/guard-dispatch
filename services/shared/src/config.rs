@@ -130,9 +130,12 @@ impl JwtConfig {
         let decoding_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
         Ok(Self {
             secret,
+            // Default 60 min — short enough to limit theft window, long enough
+            // to survive WebSocket reconnect cycles. Production should lower
+            // to 15-30 min once mobile WS reconnect logic refreshes tokens.
             expiry_minutes: optional_env("JWT_EXPIRY_MINUTES")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(15),
+                .unwrap_or(60),
             encoding_key,
             decoding_key,
         })

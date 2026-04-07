@@ -496,10 +496,11 @@ class AuthProvider extends ChangeNotifier {
   /// (which was stored as the password during registration).
   /// On success: stores tokens + role, clears pending state, sets authenticated.
   Future<bool> loginWithPhone(String phone, String pinHash) async {
+    // Use dedicated mobile endpoint that returns tokens in JSON body
+    // (web /login/phone only sets cookies)
     final response = await _apiClient.dio.post(
-      '/auth/login/phone',
+      '/auth/login/mobile',
       data: {'phone': phone, 'password': pinHash},
-      options: Options(headers: {'X-Client-Type': 'mobile'}),
     );
     final data = response.data['data'];
     final accessToken = data['access_token'] as String;

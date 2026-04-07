@@ -52,7 +52,7 @@ class _AuthInterceptor extends Interceptor {
   ) async {
     // Skip auth header for public endpoints and profile-token endpoints
     // (profile/guard and profile/customer use their own Bearer profile_token)
-    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/check-status', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role', '/auth/profile/guard', '/auth/profile/customer'];
+    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/login/mobile', '/auth/check-status', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role', '/auth/profile/guard', '/auth/profile/customer', '/auth/refresh/mobile'];
     final isPublic = publicPaths.any((p) => options.path.contains(p));
 
     if (!isPublic) {
@@ -86,8 +86,9 @@ class _AuthInterceptor extends Interceptor {
           connectTimeout: const Duration(seconds: 10),
         ));
 
+        // Use mobile endpoint that returns tokens in JSON body
         final response = await refreshDio.post(
-          '/auth/refresh',
+          '/auth/refresh/mobile',
           data: {'refresh_token': refreshToken},
         );
 

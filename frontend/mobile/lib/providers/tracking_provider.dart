@@ -32,11 +32,16 @@ class TrackingProvider extends ChangeNotifier {
   Position? get lastPosition => _lastPosition;
   String? get error => _error;
 
-  /// Green when we have GPS data and are either connected or reconnecting.
-  /// Uses _isOnline (toggle state) not _isConnected (WS state) so brief
-  /// reconnect gaps don't flash gray. The 30s periodic re-send ensures
-  /// backend stays fresh while _lastPosition persists across reconnects.
-  bool get hasRecentGps => _isOnline && _lastPosition != null;
+  /// Green when WebSocket is actually connected AND we have GPS data.
+  /// Reflects backend reality — admin map shows green only when backend
+  /// has fresh data, so mobile must require live WS connection too.
+  ///
+  /// - Toggle on, WS connecting → false (gray)
+  /// - WS connected, no GPS yet → false (gray)
+  /// - WS connected + GPS → true (green)
+  /// - WS dies → false (gray immediately, matches admin red)
+  /// - Toggle off → false (gray)
+  bool get hasRecentGps => _isOnline && _isConnected && _lastPosition != null;
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
