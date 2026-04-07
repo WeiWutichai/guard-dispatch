@@ -36,6 +36,7 @@ class TrackingService {
   bool _isConnected = false;
   bool _isStopping = false;
   int _retryCount = 0;
+  int _freshFailCount = 0;
   Timer? _reconnectTimer;
   String? _assignmentId;
 
@@ -94,6 +95,8 @@ class TrackingService {
     _isConnected = false;
     _assignmentId = null;
     _lastKnownPosition = null;
+    _freshFailCount = 0;
+    _retryCount = 0;
     onDisconnected?.call();
   }
 
@@ -109,17 +112,22 @@ class TrackingService {
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return false;
-      }
+    }
+
+    // Whitelist only explicit granted states. Everything else (denied,
+    // deniedForever, restricted, unableToDetermine) must be rejected so
+    // the caller doesn't proceed to start GPS streaming without permission.
+    if (permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse) {
+      return true;
     }
 
     if (permission == LocationPermission.deniedForever) {
       onError?.call('location_permission_denied_forever');
-      return false;
+    } else {
+      onError?.call('location_permission_denied');
     }
-
-    return true;
+    return false;
   }
 
   // ─── WebSocket Connection ─────────────────────────────────────────────────
@@ -244,10 +252,14 @@ class TrackingService {
   }
 
   void _scheduleReconnect() {
-    if (_isStopping || _retryCount >= 5) return;
+    if (_isStopping) return;
 
     _retryCount++;
-    final delay = Duration(seconds: _retryCount * 2); // 2, 4, 6, 8, 10s
+    // Exponential backoff capped at 60s: 2, 4, 8, 16, 32, 60, 60, ...
+    // Unbounded attempts — user must toggle off to stop retries.
+    final shift = _retryCount.clamp(1, 6);
+    final seconds = (1 << shift).clamp(2, 60);
+    final delay = Duration(seconds: seconds);
 
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () async {
@@ -266,6 +278,7 @@ class TrackingService {
   void _startGpsStream() {
     _positionSub?.cancel();
     _positionRefreshTimer?.cancel();
+    _freshFailCount = 0;
 
     // 1. Send cached OS position instantly (no GPS hardware delay).
     //    This ensures the guard appears on the map immediately, even indoors.
@@ -276,13 +289,20 @@ class TrackingService {
 
     // 3. Periodic refresh every 30s for stationary guards.
     //    Re-sends cached _lastKnownPosition so backend refreshes recorded_at
-    //    and the guard doesn't fall off the 30-min available-guards filter.
+    //    and the guard doesn't fall off the available-guards freshness window.
+    //    If no fix is ever obtained, surface a clear 'gps_unavailable' error
+    //    so UI can tell the user GPS is stuck (WS is up but nothing to send).
     _positionRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (_lastKnownPosition != null) {
+        _freshFailCount = 0;
         _sendGpsUpdate(_lastKnownPosition!);
       } else {
-        // Still no position after 30s — retry fresh fix
+        _freshFailCount++;
         _sendFreshPosition();
+        // ~90s without any fix → notify once (don't spam)
+        if (_freshFailCount == 3) {
+          onError?.call('gps_unavailable');
+        }
       }
     });
 
@@ -326,6 +346,7 @@ class TrackingService {
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
     ).then((position) {
       _lastKnownPosition = position;
+      _freshFailCount = 0;
       onPositionUpdate?.call(position);
       _sendGpsUpdate(position);
     }).catchError((e) {
@@ -337,12 +358,24 @@ class TrackingService {
   void _sendGpsUpdate(Position position) {
     if (!_isConnected || _channel == null) return;
 
+    // iOS CLLocation returns -1 for invalid course/speed; Android may return 0
+    // or NaN. Backend validates heading ∈ [0,360], speed ∈ [0,500], accuracy
+    // ∈ [0,10000] — any out-of-range value gets the entire update rejected,
+    // which prevents recorded_at/is_online from being refreshed on admin map.
+    // Send null for invalid readings so backend skips range checks.
+    double? sanitize(double value, double max) {
+      if (value.isNaN || value.isInfinite || value < 0 || value > max) {
+        return null;
+      }
+      return value;
+    }
+
     final update = {
       'lat': position.latitude,
       'lng': position.longitude,
-      'accuracy': position.accuracy,
-      'heading': position.heading,
-      'speed': position.speed,
+      'accuracy': sanitize(position.accuracy, 10000),
+      'heading': sanitize(position.heading, 360),
+      'speed': sanitize(position.speed, 500),
       'assignment_id': _assignmentId,
     };
 

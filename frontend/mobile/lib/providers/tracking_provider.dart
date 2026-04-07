@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -15,6 +17,7 @@ class TrackingProvider extends ChangeNotifier {
   bool _isConnected = false;
   Position? _lastPosition;
   String? _error;
+  Timer? _connectWatchdog;
 
   TrackingProvider(this._service) {
     _service
@@ -66,10 +69,23 @@ class TrackingProvider extends ChangeNotifier {
     _isOnline = true;
     _isConnecting = false;
     notifyListeners();
+
+    // Watchdog: if 15s elapses without a first GPS fix, surface a slow-GPS
+    // hint so the UI can prompt the user (WS may be up but GPS stuck).
+    _connectWatchdog?.cancel();
+    _connectWatchdog = Timer(const Duration(seconds: 15), () {
+      if (_isOnline && !hasRecentGps && _error == null) {
+        _error = 'gps_slow';
+        notifyListeners();
+      }
+    });
   }
 
   Future<void> goOffline() async {
     if (!_isOnline && !_isConnecting) return;
+
+    _connectWatchdog?.cancel();
+    _connectWatchdog = null;
 
     await _service.stop();
 
@@ -121,6 +137,12 @@ class TrackingProvider extends ChangeNotifier {
 
   void _handlePositionUpdate(Position position) {
     _lastPosition = position;
+    // Clear slow-GPS hint once a real fix arrives.
+    if (_error == 'gps_slow') {
+      _error = null;
+    }
+    _connectWatchdog?.cancel();
+    _connectWatchdog = null;
     notifyListeners();
   }
 
@@ -137,6 +159,7 @@ class TrackingProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _connectWatchdog?.cancel();
     _service.stop();
     super.dispose();
   }

@@ -403,15 +403,21 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                   color: hasGps ? AppColors.success : AppColors.danger,
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  hasGps
-                      ? '${strings.gpsAccuracy}: ${tracking.lastPosition!.accuracy.toStringAsFixed(0)}m'
-                      : (isThai
-                          ? 'กำลังค้นหาสัญญาณ GPS...'
-                          : 'Searching for GPS signal...'),
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: hasGps ? AppColors.textSecondary : AppColors.danger,
+                Expanded(
+                  child: Text(
+                    hasGps
+                        ? '${strings.gpsAccuracy}: ${tracking.lastPosition!.accuracy.toStringAsFixed(0)}m'
+                        : (tracking.error == 'gps_slow' || tracking.error == 'gps_unavailable'
+                            ? (isThai
+                                ? 'GPS ช้า กรุณาตรวจสอบการตั้งค่าตำแหน่ง'
+                                : 'GPS is slow — check location settings')
+                            : (isThai
+                                ? 'กำลังค้นหาสัญญาณ GPS...'
+                                : 'Searching for GPS signal...')),
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: hasGps ? AppColors.textSecondary : AppColors.danger,
+                    ),
                   ),
                 ),
               ],
