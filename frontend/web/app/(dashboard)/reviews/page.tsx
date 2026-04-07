@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
   Star,
@@ -20,9 +20,15 @@ import {
   Crown,
   Sparkles,
   Check,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
+import {
+  reviewsApi,
+  type AdminReviewItem,
+  type AdminReviewStats,
+} from "@/lib/api";
 
 type ReviewStatus = "shown" | "hidden";
 
@@ -30,6 +36,7 @@ interface Review {
   id: string;
   customerName: string;
   guardName: string;
+  guardId: string;
   rating: number;
   comment: string;
   date: string;
@@ -37,83 +44,83 @@ interface Review {
   area?: string;
 }
 
-const initialReviews: Review[] = [
-  {
-    id: "R001",
-    customerName: "สมชาย วงศ์ทอง",
-    guardName: "อนุชา สมบูรณ์",
-    rating: 5,
-    comment: "บริการดีมาก รักษาความปลอดภัยได้อย่างมีประสิทธิภาพ ตรงเวลาทุกครั้ง",
-    date: "2024-01-15",
-    status: "shown",
-    area: "Central Plaza",
-  },
-  {
-    id: "R002",
-    customerName: "สุนีย์ จันทร์แก้ว",
-    guardName: "วิเชียร อำนาจ",
-    rating: 2,
-    comment: "มาสาย และไม่ค่อยใส่ใจในการรักษาความปลอดภัย",
-    date: "2024-01-14",
-    status: "shown",
-    area: "Siam Paragon",
-  },
-  {
-    id: "R003",
-    customerName: "ประยุทธ์ ใจดี",
-    guardName: "สมพงษ์ แก้วใส",
-    rating: 4,
-    comment: "ทำงานดี มีความรับผิดชอบ แต่ควรปรับปรุงการสื่อสาร",
-    date: "2024-01-13",
-    status: "shown",
-    area: "EmQuartier",
-  },
-  {
-    id: "R004",
-    customerName: "มาลี สีทราช",
-    guardName: "อนุชา สมบูรณ์",
-    rating: 5,
-    comment: "เป็นมืออาชีพมาก พูดจาสุภาพ และทำงานได้ตามมาตรฐาน",
-    date: "2024-01-12",
-    status: "shown",
-    area: "ICONSIAM",
-  },
-  {
-    id: "R005",
-    customerName: "วิชัย มั่งคั่ง",
-    guardName: "วิเชียร อำนาจ",
-    rating: 1,
-    comment: "ไม่พอใจมาก ไม่ตรงเวลา และไม่มีความรับผิดชอบ",
-    date: "2024-01-11",
-    status: "hidden",
-    area: "Terminal 21",
-  },
-  {
-    id: "R006",
-    customerName: "นภา ศรีสุข",
-    guardName: "สมชาย ใจดี",
-    rating: 4,
-    comment: "ให้บริการดี แต่ควรเพิ่มความรวดเร็วในการตอบสนอง",
-    date: "2024-01-10",
-    status: "shown",
-    area: "MBK Center",
-  },
-];
+function toReview(item: AdminReviewItem): Review {
+  return {
+    id: item.id,
+    customerName: item.customer_name ?? "-",
+    guardName: item.guard_name ?? "-",
+    guardId: item.guard_id,
+    rating: Math.round(item.overall_rating),
+    comment: item.review_text ?? "",
+    date: item.created_at.slice(0, 10),
+    status: item.is_visible ? "shown" : "hidden",
+    area: item.address ?? undefined,
+  };
+}
 
-const guards = ["ทั้งหมด", "อนุชา สมบูรณ์", "วิเชียร อำนาจ", "สมพงษ์ แก้วใส", "สมชาย ใจดี"];
-const areas = ["ทั้งหมด", "Central Plaza", "Siam Paragon", "EmQuartier", "ICONSIAM", "Terminal 21", "MBK Center"];
 const ratings = ["ทั้งหมด", "5", "4", "3", "2", "1"];
 const statuses = ["ทั้งหมด", "แสดง", "ซ่อน"];
 
 export default function ReviewsPage() {
   const { locale } = useLanguage();
-  const [reviews, setReviews] = useState<Review[]>(initialReviews);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [serverStats, setServerStats] = useState<AdminReviewStats>({
+    total: 0,
+    visible: 0,
+    avg_rating: 0,
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [ratingFilter, setRatingFilter] = useState("ทั้งหมด");
   const [statusFilter, setStatusFilter] = useState("ทั้งหมด");
   const [guardFilter, setGuardFilter] = useState("ทั้งหมด");
   const [areaFilter, setAreaFilter] = useState("ทั้งหมด");
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+
+  // Debounce free-text search before hitting the API
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const loadReviews = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const params: Parameters<typeof reviewsApi.list>[0] = { limit: 200 };
+      if (ratingFilter !== "ทั้งหมด") params.rating = parseInt(ratingFilter, 10);
+      if (statusFilter === "แสดง") params.is_visible = true;
+      else if (statusFilter === "ซ่อน") params.is_visible = false;
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
+      const result = await reviewsApi.list(params);
+      setReviews(result.data.map(toReview));
+      setServerStats(result.stats);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Failed to load reviews");
+      setReviews([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [ratingFilter, statusFilter, debouncedSearch]);
+
+  useEffect(() => {
+    loadReviews();
+  }, [loadReviews]);
+
+  // Derive guard / area dropdowns from loaded data so they always reflect reality
+  const guards = useMemo(() => {
+    const set = new Set<string>();
+    reviews.forEach((r) => r.guardName && set.add(r.guardName));
+    return ["ทั้งหมด", ...Array.from(set).sort()];
+  }, [reviews]);
+
+  const areas = useMemo(() => {
+    const set = new Set<string>();
+    reviews.forEach((r) => r.area && set.add(r.area));
+    return ["ทั้งหมด", ...Array.from(set).sort()];
+  }, [reviews]);
 
   // Modal states
   const [warningModalOpen, setWarningModalOpen] = useState(false);
@@ -128,26 +135,42 @@ export default function ReviewsPage() {
   const [isGuardOpen, setIsGuardOpen] = useState(false);
   const [isAreaOpen, setIsAreaOpen] = useState(false);
 
-  const filteredReviews = reviews.filter((review) => {
-    const matchesSearch =
-      review.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      review.guardName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      review.comment.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesRating = ratingFilter === "ทั้งหมด" || review.rating === parseInt(ratingFilter);
-    const matchesStatus =
-      statusFilter === "ทั้งหมด" ||
-      (statusFilter === "แสดง" && review.status === "shown") ||
-      (statusFilter === "ซ่อน" && review.status === "hidden");
-    const matchesGuard = guardFilter === "ทั้งหมด" || review.guardName === guardFilter;
-    const matchesArea = areaFilter === "ทั้งหมด" || review.area === areaFilter;
-    return matchesSearch && matchesRating && matchesStatus && matchesGuard && matchesArea;
-  });
+  // rating / status / search are filtered server-side via loadReviews().
+  // guard / area are kept client-side because they're derived from the dataset.
+  const filteredReviews = useMemo(
+    () =>
+      reviews.filter((review) => {
+        const matchesGuard = guardFilter === "ทั้งหมด" || review.guardName === guardFilter;
+        const matchesArea = areaFilter === "ทั้งหมด" || review.area === areaFilter;
+        return matchesGuard && matchesArea;
+      }),
+    [reviews, guardFilter, areaFilter]
+  );
 
-  const handleToggleStatus = (reviewId: string) => {
-    setReviews(reviews.map(r =>
-      r.id === reviewId ? { ...r, status: r.status === "shown" ? "hidden" : "shown" } : r
-    ));
+  const handleToggleStatus = async (reviewId: string) => {
     setOpenDropdownId(null);
+    const target = reviews.find((r) => r.id === reviewId);
+    if (!target) return;
+    const nextVisible = target.status !== "shown";
+    // Optimistic update
+    setReviews((prev) =>
+      prev.map((r) =>
+        r.id === reviewId ? { ...r, status: nextVisible ? "shown" : "hidden" } : r
+      )
+    );
+    try {
+      await reviewsApi.setVisibility(reviewId, nextVisible);
+      // Refresh stats from server (cards rely on serverStats)
+      loadReviews();
+    } catch (e) {
+      // Revert on failure
+      setReviews((prev) =>
+        prev.map((r) =>
+          r.id === reviewId ? { ...r, status: target.status } : r
+        )
+      );
+      setLoadError(e instanceof Error ? e.message : "Failed to update visibility");
+    }
   };
 
   const handleReset = () => {
@@ -200,9 +223,9 @@ export default function ReviewsPage() {
   ];
 
   const stats = {
-    total: reviews.length,
-    shown: reviews.filter(r => r.status === "shown").length,
-    avgRating: (reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length).toFixed(1),
+    total: serverStats.total,
+    shown: serverStats.visible,
+    avgRating: serverStats.avg_rating.toFixed(1),
   };
 
   const renderStars = (rating: number) => {
@@ -235,6 +258,18 @@ export default function ReviewsPage() {
             : "Manage customer reviews and evaluate security guard performance"}
         </p>
       </div>
+
+      {loadError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm flex items-center justify-between">
+          <span>{loadError}</span>
+          <button
+            onClick={loadReviews}
+            className="text-red-700 font-medium hover:underline"
+          >
+            {locale === "th" ? "ลองใหม่" : "Retry"}
+          </button>
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
@@ -540,7 +575,16 @@ export default function ReviewsPage() {
           </table>
         </div>
 
-        {filteredReviews.length === 0 && (
+        {isLoading && (
+          <div className="py-16 text-center">
+            <Loader2 className="h-8 w-8 text-primary animate-spin mx-auto" />
+            <p className="text-slate-500 text-sm mt-3">
+              {locale === "th" ? "กำลังโหลด..." : "Loading..."}
+            </p>
+          </div>
+        )}
+
+        {!isLoading && filteredReviews.length === 0 && (
           <div className="py-16 text-center">
             <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Users className="h-8 w-8 text-slate-400" />

@@ -711,6 +711,85 @@ pub struct RatingSummaryRow {
 }
 
 // =============================================================================
+// Admin Reviews (admin-only listing across all guards)
+// =============================================================================
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct AdminReviewsQuery {
+    /// Filter by guard user_id
+    pub guard_id: Option<Uuid>,
+    /// Filter by exact star rating (1-5)
+    pub rating: Option<i32>,
+    /// Filter by visibility status: true | false
+    pub is_visible: Option<bool>,
+    /// Free-text search on customer_name / guard_name / review_text
+    pub search: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminReviewResponse {
+    pub id: Uuid,
+    pub assignment_id: Uuid,
+    pub request_id: Uuid,
+    pub customer_id: Uuid,
+    pub customer_name: Option<String>,
+    pub guard_id: Uuid,
+    pub guard_name: Option<String>,
+    pub overall_rating: f64,
+    pub punctuality: Option<f64>,
+    pub professionalism: Option<f64>,
+    pub communication: Option<f64>,
+    pub appearance: Option<f64>,
+    pub review_text: Option<String>,
+    pub address: Option<String>,
+    pub is_visible: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct AdminReviewRow {
+    pub id: Uuid,
+    pub assignment_id: Uuid,
+    pub request_id: Uuid,
+    pub customer_id: Uuid,
+    pub customer_name: Option<String>,
+    pub guard_id: Uuid,
+    pub guard_name: Option<String>,
+    pub overall_rating: rust_decimal::Decimal,
+    pub punctuality: Option<rust_decimal::Decimal>,
+    pub professionalism: Option<rust_decimal::Decimal>,
+    pub communication: Option<rust_decimal::Decimal>,
+    pub appearance: Option<rust_decimal::Decimal>,
+    pub review_text: Option<String>,
+    pub address: Option<String>,
+    pub is_visible: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaginatedAdminReviews {
+    pub data: Vec<AdminReviewResponse>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+    pub stats: AdminReviewStats,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminReviewStats {
+    pub total: i64,
+    pub visible: i64,
+    pub avg_rating: f64,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ToggleReviewVisibilityDto {
+    pub is_visible: bool,
+}
+
+// =============================================================================
 // Service Rates (Pricing)
 // =============================================================================
 

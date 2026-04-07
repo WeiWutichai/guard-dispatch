@@ -556,6 +556,73 @@ export const pricingApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Admin Reviews API
+// ---------------------------------------------------------------------------
+
+export interface AdminReviewItem {
+  id: string;
+  assignment_id: string;
+  request_id: string;
+  customer_id: string;
+  customer_name: string | null;
+  guard_id: string;
+  guard_name: string | null;
+  overall_rating: number;
+  punctuality: number | null;
+  professionalism: number | null;
+  communication: number | null;
+  appearance: number | null;
+  review_text: string | null;
+  address: string | null;
+  is_visible: boolean;
+  created_at: string;
+}
+
+export interface AdminReviewStats {
+  total: number;
+  visible: number;
+  avg_rating: number;
+}
+
+export interface PaginatedAdminReviews {
+  data: AdminReviewItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  stats: AdminReviewStats;
+}
+
+export const reviewsApi = {
+  list: (params?: {
+    guard_id?: string;
+    rating?: number;
+    is_visible?: boolean;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.guard_id) query.set("guard_id", params.guard_id);
+    if (params?.rating !== undefined) query.set("rating", String(params.rating));
+    if (params?.is_visible !== undefined)
+      query.set("is_visible", String(params.is_visible));
+    if (params?.search) query.set("search", params.search);
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    if (params?.offset !== undefined) query.set("offset", String(params.offset));
+    const qs = query.toString();
+    return apiFetch<PaginatedAdminReviews>(
+      `/booking/admin/reviews${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  setVisibility: (id: string, is_visible: boolean) =>
+    apiFetch<null>(`/booking/admin/reviews/${id}/visibility`, {
+      method: "PUT",
+      body: JSON.stringify({ is_visible }),
+    }),
+};
+
+// ---------------------------------------------------------------------------
 // Reverse Geocoding (OpenStreetMap Nominatim)
 // ---------------------------------------------------------------------------
 

@@ -46,6 +46,8 @@ use crate::state::AppState;
         handlers::guard_work_history,
         handlers::guard_ratings,
         handlers::get_guard_reviews,
+        handlers::list_admin_reviews,
+        handlers::set_review_visibility,
         handlers::list_service_rates,
         handlers::get_service_rate,
         handlers::create_service_rate,
@@ -79,6 +81,10 @@ use crate::state::AppState;
         models::WorkHistoryItem,
         models::GuardRatingsSummary,
         models::ReviewItem,
+        models::AdminReviewResponse,
+        models::PaginatedAdminReviews,
+        models::AdminReviewStats,
+        models::ToggleReviewVisibilityDto,
         models::ServiceRate,
         models::CreateServiceRateDto,
         models::UpdateServiceRateDto,
@@ -205,6 +211,12 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/guards/{guard_id}/reviews",
             get(handlers::get_guard_reviews),
+        )
+        // Admin Reviews — list across all guards + toggle visibility
+        .route("/admin/reviews", get(handlers::list_admin_reviews))
+        .route(
+            "/admin/reviews/{id}/visibility",
+            put(handlers::set_review_visibility),
         )
         // Guard-specific endpoints
         .route("/guard/dashboard", get(handlers::guard_dashboard))

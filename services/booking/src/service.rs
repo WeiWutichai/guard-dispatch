@@ -7,14 +7,16 @@ use uuid::Uuid;
 use shared::error::AppError;
 
 use crate::models::{
-    AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse, AssignmentRow,
-    AssignmentStatus, AvailableGuardResponse, AvailableGuardRow, AvailableGuardsQuery,
-    CreatePaymentDto, CreateRequestDto, CreateServiceRateDto, DailyEarning, GuardDashboardSummary,
-    GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary, GuardRequestResponse,
-    GuardRequestRow, ListRequestsQuery, PaymentResponse, PaymentRow, ProgressReportMediaItem,
-    ProgressReportMediaRow, ProgressReportResponse, ProgressReportRow, RatingSummaryRow,
-    RequestStatus, ReviewItem, ReviewRow, ServiceRate, UpdateAssignmentStatusDto,
-    UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse, WorkHistoryRow,
+    AcceptDeclineDto, ActiveJobResponse, AdminReviewResponse, AdminReviewRow, AdminReviewStats,
+    AdminReviewsQuery, AssignGuardDto, AssignmentResponse, AssignmentRow, AssignmentStatus,
+    AvailableGuardResponse, AvailableGuardRow, AvailableGuardsQuery, CreatePaymentDto,
+    CreateRequestDto, CreateServiceRateDto, DailyEarning, GuardDashboardSummary, GuardEarnings,
+    GuardJobResponse, GuardJobRow, GuardRatingsSummary, GuardRequestResponse, GuardRequestRow,
+    ListRequestsQuery, PaginatedAdminReviews, PaymentResponse, PaymentRow,
+    ProgressReportMediaItem, ProgressReportMediaRow, ProgressReportResponse, ProgressReportRow,
+    RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate,
+    UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse,
+    WorkHistoryRow,
 };
 
 /// Validate and sanitise optional lat/lng. Returns (None, None) if invalid or (0,0).
@@ -1341,6 +1343,188 @@ pub async fn get_guard_ratings(
             })
             .collect(),
     })
+}
+
+// =============================================================================
+// Admin Reviews — list across all guards + toggle visibility
+// =============================================================================
+
+pub async fn list_admin_reviews(
+    db: &PgPool,
+    query: AdminReviewsQuery,
+) -> Result<PaginatedAdminReviews, AppError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Build dynamic WHERE on a single SQL string with bound params.
+    // Using sqlx::query_as::<_, AdminReviewRow> with QueryBuilder would be
+    // cleaner, but we already use this pattern elsewhere in the file.
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut bind_idx = 0;
+
+    if query.guard_id.is_some() {
+        bind_idx += 1;
+        where_clauses.push(format!("r.guard_id = ${bind_idx}"));
+    }
+    if query.rating.is_some() {
+        bind_idx += 1;
+        where_clauses.push(format!("FLOOR(r.overall_rating) = ${bind_idx}"));
+    }
+    if query.is_visible.is_some() {
+        bind_idx += 1;
+        where_clauses.push(format!("r.is_visible = ${bind_idx}"));
+    }
+    if query.search.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+        bind_idx += 1;
+        where_clauses.push(format!(
+            "(COALESCE(cp.full_name, cu.full_name) ILIKE ${bind_idx} \
+             OR gu.full_name ILIKE ${bind_idx} \
+             OR r.review_text ILIKE ${bind_idx})"
+        ));
+    }
+
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+
+    let limit_idx = bind_idx + 1;
+    let offset_idx = bind_idx + 2;
+
+    let list_sql = format!(
+        r#"
+        SELECT
+            r.id, r.assignment_id, r.request_id,
+            r.customer_id,
+            COALESCE(cp.full_name, cu.full_name) AS customer_name,
+            r.guard_id,
+            gu.full_name AS guard_name,
+            r.overall_rating,
+            r.punctuality, r.professionalism, r.communication, r.appearance,
+            r.review_text,
+            req.address,
+            r.is_visible,
+            r.created_at
+        FROM reviews.guard_reviews r
+        INNER JOIN auth.users cu ON cu.id = r.customer_id
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = r.customer_id
+        INNER JOIN auth.users gu ON gu.id = r.guard_id
+        LEFT JOIN booking.guard_requests req ON req.id = r.request_id
+        {where_sql}
+        ORDER BY r.created_at DESC
+        LIMIT ${limit_idx} OFFSET ${offset_idx}
+        "#
+    );
+
+    let count_sql = format!(
+        r#"
+        SELECT COUNT(*) AS count
+        FROM reviews.guard_reviews r
+        INNER JOIN auth.users cu ON cu.id = r.customer_id
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = r.customer_id
+        INNER JOIN auth.users gu ON gu.id = r.guard_id
+        {where_sql}
+        "#
+    );
+
+    // Bind helper closures aren't possible because each builder is its own
+    // type — duplicate the bind chain for both queries.
+    let mut list_query = sqlx::query_as::<_, AdminReviewRow>(&list_sql);
+    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+
+    if let Some(gid) = query.guard_id {
+        list_query = list_query.bind(gid);
+        count_query = count_query.bind(gid);
+    }
+    if let Some(rating) = query.rating {
+        list_query = list_query.bind(rating);
+        count_query = count_query.bind(rating);
+    }
+    if let Some(visible) = query.is_visible {
+        list_query = list_query.bind(visible);
+        count_query = count_query.bind(visible);
+    }
+    if let Some(search) = query.search.as_deref().filter(|s| !s.trim().is_empty()) {
+        let pattern = format!("%{}%", search.trim());
+        list_query = list_query.bind(pattern.clone());
+        count_query = count_query.bind(pattern);
+    }
+
+    list_query = list_query.bind(limit).bind(offset);
+
+    let (rows, total) = tokio::try_join!(
+        async { list_query.fetch_all(db).await.map_err(AppError::from) },
+        async { count_query.fetch_one(db).await.map_err(AppError::from) },
+    )?;
+
+    // Compute global stats (NOT filtered) so the cards reflect the whole dataset.
+    let stats_row = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<rust_decimal::Decimal>)>(
+        r#"
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE is_visible = true) AS visible,
+            AVG(overall_rating) AS avg_rating
+        FROM reviews.guard_reviews
+        "#,
+    )
+    .fetch_one(db)
+    .await?;
+
+    let stats = AdminReviewStats {
+        total: stats_row.0.unwrap_or(0),
+        visible: stats_row.1.unwrap_or(0),
+        avg_rating: stats_row.2.and_then(|d| d.to_f64()).unwrap_or(0.0),
+    };
+
+    let data = rows
+        .into_iter()
+        .map(|r| AdminReviewResponse {
+            id: r.id,
+            assignment_id: r.assignment_id,
+            request_id: r.request_id,
+            customer_id: r.customer_id,
+            customer_name: r.customer_name,
+            guard_id: r.guard_id,
+            guard_name: r.guard_name,
+            overall_rating: r.overall_rating.to_f64().unwrap_or(0.0),
+            punctuality: r.punctuality.and_then(|d| d.to_f64()),
+            professionalism: r.professionalism.and_then(|d| d.to_f64()),
+            communication: r.communication.and_then(|d| d.to_f64()),
+            appearance: r.appearance.and_then(|d| d.to_f64()),
+            review_text: r.review_text,
+            address: r.address,
+            is_visible: r.is_visible,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(PaginatedAdminReviews {
+        data,
+        total,
+        limit,
+        offset,
+        stats,
+    })
+}
+
+pub async fn set_review_visibility(
+    db: &PgPool,
+    review_id: Uuid,
+    is_visible: bool,
+) -> Result<(), AppError> {
+    let result = sqlx::query(
+        "UPDATE reviews.guard_reviews SET is_visible = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(is_visible)
+    .bind(review_id)
+    .execute(db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Review not found".to_string()));
+    }
+    Ok(())
 }
 
 // =============================================================================

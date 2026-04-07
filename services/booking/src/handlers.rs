@@ -13,11 +13,12 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AcceptDeclineDto, ActiveJobResponse, AssignGuardDto, AssignmentResponse,
+    AcceptDeclineDto, ActiveJobResponse, AdminReviewsQuery, AssignGuardDto, AssignmentResponse,
     AvailableGuardResponse, AvailableGuardsQuery, CreatePaymentDto, CreateRequestDto,
     CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
-    GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListRequestsQuery, PaymentResponse,
-    ProgressReportResponse, ReviewCompletionDto, ServiceRate, StartJobDto, SubmitReviewResponse,
+    GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListRequestsQuery,
+    PaginatedAdminReviews, PaymentResponse, ProgressReportResponse, ReviewCompletionDto,
+    ServiceRate, StartJobDto, SubmitReviewResponse, ToggleReviewVisibilityDto,
     UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryResponse,
 };
 use crate::state::AppState;
@@ -459,6 +460,65 @@ pub async fn get_guard_reviews(
 ) -> Result<Json<ApiResponse<GuardRatingsSummary>>, AppError> {
     let ratings = crate::service::get_guard_ratings(&state.db, guard_id).await?;
     Ok(Json(ApiResponse::success(ratings)))
+}
+
+// =============================================================================
+// Admin Reviews — list across all guards / toggle visibility
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/admin/reviews",
+    tag = "Admin Reviews",
+    security(("bearer" = [])),
+    params(AdminReviewsQuery),
+    responses(
+        (status = 200, description = "Paginated reviews with global stats", body = PaginatedAdminReviews),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin only", body = ErrorBody),
+    ),
+)]
+pub async fn list_admin_reviews(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<AdminReviewsQuery>,
+) -> Result<Json<ApiResponse<PaginatedAdminReviews>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden(
+            "Only admins can list all reviews".to_string(),
+        ));
+    }
+    let result = crate::service::list_admin_reviews(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(result)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/admin/reviews/{id}/visibility",
+    tag = "Admin Reviews",
+    security(("bearer" = [])),
+    request_body = ToggleReviewVisibilityDto,
+    params(("id" = Uuid, Path, description = "Review ID")),
+    responses(
+        (status = 200, description = "Visibility updated"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin only", body = ErrorBody),
+        (status = 404, description = "Review not found", body = ErrorBody),
+    ),
+)]
+pub async fn set_review_visibility(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ToggleReviewVisibilityDto>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden(
+            "Only admins can change review visibility".to_string(),
+        ));
+    }
+    crate::service::set_review_visibility(&state.db, id, req.is_visible).await?;
+    Ok(Json(ApiResponse::success(())))
 }
 
 // =============================================================================
