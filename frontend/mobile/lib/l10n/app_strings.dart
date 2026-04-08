@@ -1712,6 +1712,61 @@ class CustomerActiveJobStrings {
       pendingReview = isThai ? 'เจ้าหน้าที่ขอปิดงาน รอตรวจสอบ' : 'Guard requested completion';
 }
 
+class JobCompletionSummaryStrings {
+  final String title;
+  final String subtitle;
+  final String hoursWorked;
+  final String bookedHours;
+  final String actualHours;
+  final String hourlyRate;
+  final String hoursUnit;
+  final String costBreakdown;
+  final String originalPrice;
+  final String proratedPrice;
+  final String refundAmount;
+  final String refundNote;
+  final String tipPaid;
+  final String totalToPay;
+  final String tipTitle;
+  final String tipDescription;
+  final String tipHint;
+  final String tipButton;
+  final String continueButton;
+  final String loadError;
+  final String retry;
+
+  JobCompletionSummaryStrings({required bool isThai})
+      : title = isThai ? 'สรุปค่าใช้จ่าย' : 'Cost Summary',
+        subtitle = isThai
+            ? 'รายละเอียดค่าใช้จ่ายตามชั่วโมงการทำงานจริง'
+            : 'Final billing based on actual hours worked',
+        hoursWorked = isThai ? 'ชั่วโมงการทำงาน' : 'Hours Worked',
+        bookedHours = isThai ? 'ชั่วโมงที่จอง' : 'Booked Hours',
+        actualHours = isThai ? 'ชั่วโมงจริง' : 'Actual Hours',
+        hourlyRate = isThai ? 'อัตราต่อชั่วโมง' : 'Hourly Rate',
+        hoursUnit = isThai ? 'ชั่วโมง' : 'hrs',
+        costBreakdown = isThai ? 'รายละเอียดค่าใช้จ่าย' : 'Cost Breakdown',
+        originalPrice = isThai ? 'ราคาที่จ่ายไปแล้ว' : 'Amount Paid',
+        proratedPrice = isThai ? 'ราคาหลังคำนวณตามชั่วโมง' : 'Prorated Price',
+        refundAmount = isThai ? 'ยอดคืนเงิน' : 'Refund Amount',
+        refundNote = isThai
+            ? 'ยอดคืนเงินจะถูกดำเนินการโดยทีมแอดมินภายหลัง'
+            : 'Refund will be processed by admin team later.',
+        tipPaid = isThai ? 'ทิปที่ส่งไปแล้ว' : 'Tip Paid',
+        totalToPay = isThai ? 'ยอดรวมสุทธิ' : 'Net Total',
+        tipTitle = isThai ? 'มอบทิปให้เจ้าหน้าที่' : 'Tip the Guard',
+        tipDescription = isThai
+            ? 'หากต้องการให้ค่าตอบแทนเพิ่มเติมแก่เจ้าหน้าที่ สามารถกรอกจำนวนเงินด้านล่าง'
+            : 'Optional bonus you would like to give the guard.',
+        tipHint = isThai ? 'จำนวนเงิน' : 'Amount',
+        tipButton = isThai ? 'ส่งทิป' : 'Send Tip',
+        continueButton = isThai ? 'ดำเนินการต่อ' : 'Continue',
+        loadError = isThai
+            ? 'ไม่สามารถโหลดข้อมูลได้'
+            : 'Unable to load cost summary',
+        retry = isThai ? 'ลองอีกครั้ง' : 'Retry';
+}
+
 class ReviewRatingStrings {
   final String title;
   final String subtitle;

@@ -11,7 +11,7 @@ import '../../providers/booking_provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
-import 'review_rating_screen.dart';
+import 'job_completion_summary_screen.dart';
 
 /// Customer view of guard's active job countdown — read-only, no pause/stop.
 class CustomerActiveJobScreen extends StatefulWidget {
@@ -606,10 +606,11 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
       _wsSub?.cancel();
       _wsChannel?.sink.close();
 
+      // Show cost summary first (with optional tip), then ReviewRatingScreen.
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => ReviewRatingScreen(
+          builder: (_) => JobCompletionSummaryScreen(
             assignmentId: assignmentId,
             guardName: _guardName,
           ),

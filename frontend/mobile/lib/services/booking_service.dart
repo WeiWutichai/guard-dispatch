@@ -300,6 +300,31 @@ class BookingService {
     return response.data['data'] as Map<String, dynamic>;
   }
 
+  /// GET /booking/assignments/{id}/cost-summary — fetch the cost breakdown
+  /// (booked hours, actual hours, prorated final amount, refund, tip).
+  /// Available at any assignment status; fields that aren't computed yet
+  /// (e.g. final_amount while job is still active) come back as null.
+  Future<Map<String, dynamic>> getCostSummary(String assignmentId) async {
+    final response = await _apiClient.dio.get(
+      '/booking/assignments/$assignmentId/cost-summary',
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
+  /// POST /booking/assignments/{id}/tip — customer adds an optional tip
+  /// for the guard from the completion-summary screen. Backend returns the
+  /// refreshed cost summary.
+  Future<Map<String, dynamic>> addTip({
+    required String assignmentId,
+    required double amount,
+  }) async {
+    final response = await _apiClient.dio.post(
+      '/booking/assignments/$assignmentId/tip',
+      data: {'amount': amount},
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
   // =========================================================================
   // Active Job (guard countdown)
   // =========================================================================

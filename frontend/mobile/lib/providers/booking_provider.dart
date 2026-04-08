@@ -194,6 +194,33 @@ class BookingProvider extends ChangeNotifier {
     return await _service.reviewCompletion(assignmentId, approve);
   }
 
+  /// Fetch the prorated cost summary for an assignment.
+  /// Returns null + sets _error on failure (UI can show retry).
+  Future<Map<String, dynamic>?> fetchCostSummary(String assignmentId) async {
+    try {
+      return await _service.getCostSummary(assignmentId);
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Customer adds an optional tip from the completion-summary screen.
+  /// Returns the refreshed cost summary on success.
+  Future<Map<String, dynamic>?> addTip(
+    String assignmentId,
+    double amount,
+  ) async {
+    try {
+      return await _service.addTip(assignmentId: assignmentId, amount: amount);
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+
   /// Customer submits star rating review for completed assignment
   Future<Map<String, dynamic>> submitReview(
     String assignmentId, {

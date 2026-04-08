@@ -37,6 +37,8 @@ use crate::state::AppState;
         handlers::get_assignments,
         handlers::available_guards,
         handlers::create_payment,
+        handlers::get_cost_summary,
+        handlers::add_tip,
         handlers::start_job,
         handlers::get_active_job,
         handlers::get_customer_active_job,
@@ -68,6 +70,8 @@ use crate::state::AppState;
         models::CreateReviewDto,
         models::SubmitReviewResponse,
         models::CreatePaymentDto,
+        models::AddTipDto,
+        models::CostSummaryResponse,
         models::GuardRequestResponse,
         models::AssignmentResponse,
         models::PaymentResponse,
@@ -206,6 +210,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/ws/assignments", get(handlers::ws_assignment_status))
         // Payments
         .route("/payments", post(handlers::create_payment))
+        .route(
+            "/assignments/{id}/cost-summary",
+            get(handlers::get_cost_summary),
+        )
+        .route("/assignments/{id}/tip", post(handlers::add_tip))
         // Available guards (customer discovery)
         .route("/available-guards", get(handlers::available_guards))
         .route(

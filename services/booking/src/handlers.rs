@@ -13,13 +13,14 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AcceptDeclineDto, ActiveJobResponse, AdminReviewsQuery, AssignGuardDto, AssignmentResponse,
-    AvailableGuardResponse, AvailableGuardsQuery, CreatePaymentDto, CreateRequestDto,
-    CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse,
-    GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListRequestsQuery,
-    PaginatedAdminReviews, PaymentResponse, ProgressReportResponse, ReviewCompletionDto,
-    ServiceRate, StartJobDto, SubmitReviewResponse, ToggleReviewVisibilityDto,
-    UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryResponse,
+    AcceptDeclineDto, ActiveJobResponse, AddTipDto, AdminReviewsQuery, AssignGuardDto,
+    AssignmentResponse, AvailableGuardResponse, AvailableGuardsQuery, CostSummaryResponse,
+    CreatePaymentDto, CreateRequestDto, CreateReviewDto, CreateServiceRateDto,
+    GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary,
+    GuardRequestResponse, ListRequestsQuery, PaginatedAdminReviews, PaymentResponse,
+    ProgressReportResponse, ReviewCompletionDto, ServiceRate, StartJobDto, SubmitReviewResponse,
+    ToggleReviewVisibilityDto, UpdateAssignmentStatusDto, UpdateServiceRateDto,
+    WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -581,6 +582,58 @@ pub async fn create_payment(
     let payment =
         crate::service::create_payment(&state.db, user.user_id, req, &state.redis_conn).await?;
     Ok(Json(ApiResponse::success(payment)))
+}
+
+// =============================================================================
+// Cost Summary (read) + Add Tip (write)
+// =============================================================================
+
+#[utoipa::path(
+    get,
+    path = "/assignments/{id}/cost-summary",
+    tag = "Payments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment UUID")),
+    responses(
+        (status = 200, description = "Cost summary", body = CostSummaryResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_cost_summary(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<CostSummaryResponse>>, AppError> {
+    let summary =
+        crate::service::get_cost_summary(&state.db, id, user.user_id, &user.role).await?;
+    Ok(Json(ApiResponse::success(summary)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/assignments/{id}/tip",
+    tag = "Payments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment UUID")),
+    request_body = AddTipDto,
+    responses(
+        (status = 200, description = "Tip added — refreshed cost summary", body = CostSummaryResponse),
+        (status = 400, description = "Invalid amount or job not completed", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
+pub async fn add_tip(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<AddTipDto>,
+) -> Result<Json<ApiResponse<CostSummaryResponse>>, AppError> {
+    let summary = crate::service::add_tip(&state.db, id, user.user_id, req.amount).await?;
+    Ok(Json(ApiResponse::success(summary)))
 }
 
 // =============================================================================

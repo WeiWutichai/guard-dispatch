@@ -109,6 +109,14 @@ pub struct CreatePaymentDto {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub struct AddTipDto {
+    /// Extra amount the customer wants to give the guard on top of the
+    /// (possibly prorated) final price. Must be > 0.
+    #[schema(value_type = f64)]
+    pub amount: rust_decimal::Decimal,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateReviewDto {
     #[schema(value_type = f64)]
     pub overall_rating: rust_decimal::Decimal,
@@ -218,6 +226,70 @@ pub struct PaymentResponse {
     pub status: String,
     pub paid_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Hours actually worked (clamped to booked_hours). NULL until job completes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<f64>)]
+    pub actual_hours_worked: Option<rust_decimal::Decimal>,
+    /// Prorated price the customer actually owes after job completion.
+    /// Equals `amount * (actual_hours / booked_hours)`. NULL until job completes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<f64>)]
+    pub final_amount: Option<rust_decimal::Decimal>,
+    /// Difference customer overpaid (`amount - final_amount`). Recorded for the
+    /// admin refund flow — no real refund is processed by this service.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<f64>)]
+    pub refund_amount: Option<rust_decimal::Decimal>,
+    /// Optional bonus the customer added on the completion-summary screen.
+    #[schema(value_type = f64)]
+    pub tip_amount: rust_decimal::Decimal,
+}
+
+/// Cost breakdown returned by `GET /assignments/{id}/cost-summary`.
+/// Designed to drive the customer's job-completion screen.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CostSummaryResponse {
+    pub assignment_id: Uuid,
+    pub request_id: Uuid,
+    pub status: AssignmentStatus,
+
+    /// Hours the customer originally booked (e.g. 4).
+    pub booked_hours: i32,
+    /// Hours the guard actually worked (clamped to booked_hours).
+    /// `None` while the job is still active.
+    #[schema(value_type = Option<f64>)]
+    pub actual_hours_worked: Option<rust_decimal::Decimal>,
+
+    /// Original amount the customer paid upfront.
+    #[schema(value_type = f64)]
+    pub original_amount: rust_decimal::Decimal,
+    /// Prorated final price after the job ends. Equals `original_amount`
+    /// when the guard finishes the full booked time.
+    #[schema(value_type = Option<f64>)]
+    pub final_amount: Option<rust_decimal::Decimal>,
+    /// Amount to refund to the customer (computed; admin processes the
+    /// real refund). Always >= 0.
+    #[schema(value_type = Option<f64>)]
+    pub refund_amount: Option<rust_decimal::Decimal>,
+
+    /// Optional tip the customer added.
+    #[schema(value_type = f64)]
+    pub tip_amount: rust_decimal::Decimal,
+
+    /// Net amount charged to the customer = `final_amount + tip_amount`
+    /// (after refund). Useful for UI display.
+    #[schema(value_type = Option<f64>)]
+    pub net_amount: Option<rust_decimal::Decimal>,
+
+    /// Hourly rate derived from `original_amount / booked_hours`. Helps the
+    /// UI explain the proration math to the customer.
+    #[schema(value_type = Option<f64>)]
+    pub hourly_rate: Option<rust_decimal::Decimal>,
+
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+
+    pub payment_id: Uuid,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -579,6 +651,10 @@ pub struct PaymentRow {
     pub status: String,
     pub paid_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub actual_hours_worked: Option<rust_decimal::Decimal>,
+    pub final_amount: Option<rust_decimal::Decimal>,
+    pub refund_amount: Option<rust_decimal::Decimal>,
+    pub tip_amount: rust_decimal::Decimal,
 }
 
 impl From<PaymentRow> for PaymentResponse {
@@ -592,6 +668,10 @@ impl From<PaymentRow> for PaymentResponse {
             status: row.status,
             paid_at: row.paid_at,
             created_at: row.created_at,
+            actual_hours_worked: row.actual_hours_worked,
+            final_amount: row.final_amount,
+            refund_amount: row.refund_amount,
+            tip_amount: row.tip_amount,
         }
     }
 }

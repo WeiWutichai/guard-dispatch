@@ -1,6 +1,7 @@
 use chrono::Utc;
 use redis::AsyncCommands;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -9,10 +10,10 @@ use shared::error::AppError;
 use crate::models::{
     AcceptDeclineDto, ActiveJobResponse, AdminReviewResponse, AdminReviewRow, AdminReviewStats,
     AdminReviewsQuery, AssignGuardDto, AssignmentResponse, AssignmentRow, AssignmentStatus,
-    AvailableGuardResponse, AvailableGuardRow, AvailableGuardsQuery, CreatePaymentDto,
-    CreateRequestDto, CreateServiceRateDto, DailyEarning, GuardDashboardSummary, GuardEarnings,
-    GuardJobResponse, GuardJobRow, GuardRatingsSummary, GuardRequestResponse, GuardRequestRow,
-    ListRequestsQuery, PaginatedAdminReviews, PaymentResponse, PaymentRow,
+    AvailableGuardResponse, AvailableGuardRow, AvailableGuardsQuery, CostSummaryResponse,
+    CreatePaymentDto, CreateRequestDto, CreateServiceRateDto, DailyEarning, GuardDashboardSummary,
+    GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary, GuardRequestResponse,
+    GuardRequestRow, ListRequestsQuery, PaginatedAdminReviews, PaymentResponse, PaymentRow,
     ProgressReportMediaItem, ProgressReportMediaRow, ProgressReportResponse, ProgressReportRow,
     RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate,
     UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse,
@@ -1898,12 +1899,15 @@ pub async fn create_payment(
         ));
     }
 
-    // Create payment record (simulated — immediately completed)
+    // Create payment record (simulated — immediately completed). final_amount /
+    // refund_amount / actual_hours_worked stay NULL until the job ends; the
+    // proration step in `review_completion` fills them in.
     let payment = sqlx::query_as::<_, PaymentRow>(
         r#"
         INSERT INTO booking.payments (request_id, customer_id, amount, payment_method, status, paid_at)
         VALUES ($1, $2, $3, $4, 'completed', NOW())
-        RETURNING id, request_id, customer_id, amount, payment_method, status, paid_at, created_at
+        RETURNING id, request_id, customer_id, amount, payment_method, status, paid_at, created_at,
+                  actual_hours_worked, final_amount, refund_amount, tip_amount
         "#,
     )
     .bind(req.request_id)
@@ -2293,6 +2297,364 @@ pub async fn get_customer_active_job(
 }
 
 // =============================================================================
+// Payment Proration (cost summary on job completion)
+// =============================================================================
+
+/// Compute the prorated final amount and the resulting refund.
+///
+/// Rules:
+/// - `actual_hours` is clamped to `[0, booked_hours]` — overtime never adds
+///   to the bill (the customer can tip separately if they want to give more).
+/// - `booked_hours <= 0` is treated as a no-op: keep the original price.
+/// - `final_amount = original * (actual / booked)`, rounded to 2 dp.
+/// - `refund_amount = max(0, original - final)`.
+fn compute_proration(
+    original_amount: Decimal,
+    booked_hours: i32,
+    actual_seconds: i64,
+) -> (Decimal, Decimal, Decimal) {
+    // Clamp hours worked to non-negative seconds first to avoid surprises
+    // from clock-skew or out-of-order timestamps.
+    let secs = actual_seconds.max(0);
+    let raw_hours = Decimal::from(secs) / Decimal::from(3600_i64);
+
+    if booked_hours <= 0 {
+        // No booking duration recorded → can't prorate; keep original.
+        return (raw_hours, original_amount, Decimal::ZERO);
+    }
+
+    let booked_dec = Decimal::from(booked_hours);
+    let actual = if raw_hours > booked_dec {
+        booked_dec
+    } else {
+        raw_hours
+    };
+
+    let final_amount = if actual.is_zero() {
+        Decimal::ZERO
+    } else {
+        (original_amount * actual / booked_dec).round_dp(2)
+    };
+
+    let refund = if original_amount > final_amount {
+        original_amount - final_amount
+    } else {
+        Decimal::ZERO
+    };
+
+    // Round actual hours to 2 dp to match DB DECIMAL(5,2)
+    (actual.round_dp(2), final_amount, refund)
+}
+
+/// Apply proration to the customer's payment row inside an open transaction.
+///
+/// Looks up the latest completed payment for the request and updates
+/// `actual_hours_worked`, `final_amount`, `refund_amount`. If no payment
+/// exists yet (e.g. customer never paid), this is a silent no-op so the
+/// completion flow still succeeds.
+async fn prorate_payment_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    request_id: Uuid,
+    started_at: Option<chrono::DateTime<Utc>>,
+    completed_at: Option<chrono::DateTime<Utc>>,
+) -> Result<(), AppError> {
+    // Look up the request's booked_hours + the latest completed payment row.
+    // If either is missing, skip silently — the completion flow still succeeds
+    // (payment proration is best-effort, not a hard requirement).
+    let row: Option<(Option<i32>, Option<Uuid>, Option<Decimal>)> = sqlx::query_as(
+        r#"
+        SELECT
+            r.booked_hours,
+            p.id,
+            p.amount
+        FROM booking.guard_requests r
+        LEFT JOIN LATERAL (
+            SELECT id, amount
+            FROM booking.payments
+            WHERE request_id = r.id AND status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) p ON TRUE
+        WHERE r.id = $1
+        "#,
+    )
+    .bind(request_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let Some((booked_hours, payment_id, original_amount)) = row else {
+        return Ok(());
+    };
+    let (Some(payment_id), Some(original_amount), Some(booked_hours)) =
+        (payment_id, original_amount, booked_hours)
+    else {
+        return Ok(());
+    };
+
+    // If the assignment was completed without ever being started (e.g. an
+    // admin override), we have no factual basis for proration. Skip the
+    // payment update entirely so the customer keeps the original amount —
+    // proration columns stay NULL and the cost-summary endpoint will show
+    // the original price as the final price. Computing `final = 0 * rate`
+    // here would be a billing data corruption (customer billed 0 for work
+    // that did happen). (code-reviewer MEDIUM fix)
+    let (Some(start), Some(end)) = (started_at, completed_at) else {
+        return Ok(());
+    };
+    let actual_seconds = (end - start).num_seconds();
+
+    let (actual_hours, final_amount, refund_amount) =
+        compute_proration(original_amount, booked_hours, actual_seconds);
+
+    sqlx::query(
+        r#"
+        UPDATE booking.payments
+        SET actual_hours_worked = $2,
+            final_amount        = $3,
+            refund_amount       = $4
+        WHERE id = $1
+        "#,
+    )
+    .bind(payment_id)
+    .bind(actual_hours)
+    .bind(final_amount)
+    .bind(refund_amount)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+// =============================================================================
+// Cost Summary (read) + Tip (write)
+// =============================================================================
+
+/// Build a `CostSummaryResponse` for an assignment.
+///
+/// Visibility:
+/// - Admin: any assignment
+/// - Customer: only assignments tied to their own requests
+/// - Guard: only assignments where they are the assigned guard
+///
+/// Returns 404 if the assignment / payment can't be found, 403 on visibility
+/// failure. Works at any assignment status — fields that are still unknown
+/// (e.g. `actual_hours_worked` while job is active) come back as `None`.
+pub async fn get_cost_summary(
+    db: &PgPool,
+    assignment_id: Uuid,
+    user_id: Uuid,
+    role: &str,
+) -> Result<CostSummaryResponse, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        // assignment
+        request_id: Uuid,
+        guard_id: Uuid,
+        status: AssignmentStatus,
+        started_at: Option<chrono::DateTime<Utc>>,
+        completed_at: Option<chrono::DateTime<Utc>>,
+        // request
+        customer_id: Uuid,
+        booked_hours: Option<i32>,
+        // payment (LEFT JOIN — may be NULL if customer never paid)
+        payment_id: Option<Uuid>,
+        original_amount: Option<Decimal>,
+        actual_hours_worked: Option<Decimal>,
+        final_amount: Option<Decimal>,
+        refund_amount: Option<Decimal>,
+        tip_amount: Option<Decimal>,
+    }
+
+    let row = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT
+            a.request_id,
+            a.guard_id,
+            a.status,
+            a.started_at,
+            a.completed_at,
+            r.customer_id,
+            r.booked_hours,
+            p.id           AS payment_id,
+            p.amount       AS original_amount,
+            p.actual_hours_worked,
+            p.final_amount,
+            p.refund_amount,
+            p.tip_amount
+        FROM booking.assignments a
+        JOIN booking.guard_requests r ON r.id = a.request_id
+        LEFT JOIN LATERAL (
+            SELECT id, amount, actual_hours_worked, final_amount, refund_amount, tip_amount
+            FROM booking.payments
+            WHERE request_id = a.request_id AND status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) p ON TRUE
+        WHERE a.id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    // Authorization
+    let allowed = match role {
+        "admin" => true,
+        "guard" => row.guard_id == user_id,
+        _ => row.customer_id == user_id,
+    };
+    if !allowed {
+        return Err(AppError::Forbidden(
+            "You do not have access to this cost summary".to_string(),
+        ));
+    }
+
+    let payment_id = row.payment_id.ok_or_else(|| {
+        AppError::NotFound("No payment recorded for this assignment yet".to_string())
+    })?;
+    let original_amount = row.original_amount.unwrap_or(Decimal::ZERO);
+    let booked_hours = row.booked_hours.unwrap_or(0);
+    let tip_amount = row.tip_amount.unwrap_or(Decimal::ZERO);
+
+    // Hourly rate is helpful for the UI to explain proration math.
+    let hourly_rate = if booked_hours > 0 {
+        Some((original_amount / Decimal::from(booked_hours)).round_dp(2))
+    } else {
+        None
+    };
+
+    // Net is final + tip — only meaningful when proration has run.
+    let net_amount = row
+        .final_amount
+        .map(|fa| (fa + tip_amount).round_dp(2));
+
+    Ok(CostSummaryResponse {
+        assignment_id,
+        request_id: row.request_id,
+        status: row.status,
+        booked_hours,
+        actual_hours_worked: row.actual_hours_worked,
+        original_amount,
+        final_amount: row.final_amount,
+        refund_amount: row.refund_amount,
+        tip_amount,
+        net_amount,
+        hourly_rate,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+        payment_id,
+    })
+}
+
+/// Customer adds a tip to the guard from the completion-summary screen.
+///
+/// Rules:
+/// - Only the request owner can tip.
+/// - Tip can only be added once the assignment is `completed` (so the
+///   customer has seen the summary first).
+/// - Tip amount must be > 0.
+/// - Tips accumulate — calling this twice adds both amounts.
+/// - Notifies the guard via `spawn_notification`.
+pub async fn add_tip(
+    db: &PgPool,
+    assignment_id: Uuid,
+    user_id: Uuid,
+    amount: Decimal,
+) -> Result<CostSummaryResponse, AppError> {
+    if amount <= Decimal::ZERO {
+        return Err(AppError::BadRequest(
+            "Tip amount must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut tx = db.begin().await?;
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        request_id: Uuid,
+        guard_id: Uuid,
+        status: AssignmentStatus,
+        customer_id: Uuid,
+        payment_id: Option<Uuid>,
+    }
+
+    let row = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT
+            a.request_id,
+            a.guard_id,
+            a.status,
+            r.customer_id,
+            p.id AS payment_id
+        FROM booking.assignments a
+        JOIN booking.guard_requests r ON r.id = a.request_id
+        LEFT JOIN LATERAL (
+            SELECT id
+            FROM booking.payments
+            WHERE request_id = a.request_id AND status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) p ON TRUE
+        WHERE a.id = $1
+        FOR UPDATE OF a
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    if row.customer_id != user_id {
+        return Err(AppError::Forbidden(
+            "Only the request owner can add a tip".to_string(),
+        ));
+    }
+
+    if row.status != AssignmentStatus::Completed {
+        return Err(AppError::BadRequest(
+            "Tips can only be added after the job is completed".to_string(),
+        ));
+    }
+
+    let payment_id = row.payment_id.ok_or_else(|| {
+        AppError::NotFound("No payment recorded for this assignment".to_string())
+    })?;
+
+    sqlx::query(
+        r#"
+        UPDATE booking.payments
+        SET tip_amount = tip_amount + $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(payment_id)
+    .bind(amount)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    // Notify guard about the tip
+    spawn_notification(
+        db.clone(),
+        row.guard_id,
+        "ลูกค้ามอบทิปให้คุณ".to_string(),
+        format!("คุณได้รับทิปเพิ่มเติม {} บาท", amount),
+        "system",
+        Some(serde_json::json!({
+            "request_id": row.request_id.to_string(),
+            "assignment_id": assignment_id.to_string(),
+            "tip_amount": amount.to_string(),
+            "target_role": "guard",
+        })),
+    );
+
+    // Return the refreshed summary
+    get_cost_summary(db, assignment_id, user_id, "customer").await
+}
+
+// =============================================================================
 // Review Completion (customer approves or holds guard's completion request)
 // =============================================================================
 
@@ -2372,6 +2734,13 @@ pub async fn review_completion(
         .bind(existing.request_id)
         .execute(&mut *tx)
         .await?;
+
+        // Prorate the customer's payment by actual hours worked.
+        // We do this inside the same transaction so that "completed" and the
+        // billing snapshot are committed atomically — if the proration update
+        // fails, the completion approval rolls back and the customer can retry.
+        prorate_payment_in_tx(&mut tx, existing.request_id, row.started_at, row.completed_at)
+            .await?;
 
         tx.commit().await?;
         publish_assignment_event(redis_conn, existing.request_id, assignment_id, "completed");
