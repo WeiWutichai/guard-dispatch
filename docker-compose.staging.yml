@@ -30,19 +30,24 @@ services:
 
   web-admin:
     restart: always
+    # Join the backend network so Next.js rewrites() can reach each
+    # Rust service container directly by its service name, bypassing
+    # nginx's HTTP→HTTPS redirect for internal traffic.
+    networks:
+      - frontend
+      - backend
     build:
       # NEXT_PUBLIC_* env vars are inlined at BUILD time by Next.js, not
-      # runtime. Pass the staging API URL + basePath as build args so the
-      # bundle's rewrites() function points to the correct destination.
-      # Inside the Docker network, web-admin can reach nginx via the
-      # `nginx-gateway` service name on the `frontend` network.
-      #   browser → https://pguard.innoveraappcenter.com/p-guard-app/api/auth/login
-      #     → web-admin Next.js server (in container)
-      #     → http://nginx-gateway/auth/login  (inlined at build time)
-      #     → nginx proxies → rust-auth:3001/login
+      # runtime. Build args are required. Defaults in the Dockerfile
+      # already point at the Rust service names; this block is here
+      # mostly as documentation and a future override surface.
       args:
         NEXT_PUBLIC_BASE_PATH: /p-guard-app
-        NEXT_PUBLIC_API_URL: http://nginx-gateway
+        NEXT_PUBLIC_AUTH_URL: http://rust-auth:3001
+        NEXT_PUBLIC_BOOKING_URL: http://rust-booking:3002
+        NEXT_PUBLIC_TRACKING_URL: http://rust-tracking:3003
+        NEXT_PUBLIC_NOTIFICATION_URL: http://rust-notification:3004
+        NEXT_PUBLIC_CHAT_URL: http://rust-chat:3006
 
   rust-auth:
     restart: always

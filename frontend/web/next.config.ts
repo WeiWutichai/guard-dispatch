@@ -5,15 +5,26 @@ const nextConfig: NextConfig = {
   // basePath ใช้เฉพาะ production (ผ่าน Nginx) — dev เข้า localhost:3000 ตรงได้เลย
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
   async rewrites() {
-    // In development, proxy API calls to the backend Nginx gateway
-    // In production (Docker), the Nginx gateway handles routing
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:80";
+    // Staging/production: each NEXT_PUBLIC_*_URL points directly at the
+    // Rust service container on the `backend` Docker network. This bypasses
+    // nginx entirely for server-to-server calls, which avoids:
+    //   1. HTTP→HTTPS redirects leaking the internal hostname to the browser
+    //   2. Needing to terminate TLS twice inside the network
+    //   3. Hitting nginx rate limits on legitimate internal traffic
+    //
+    // Dev (docker-compose.yml / localhost): fallback to the nginx gateway on
+    // localhost so a developer running `next dev` still works.
+    const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:80/auth";
+    const bookingUrl = process.env.NEXT_PUBLIC_BOOKING_URL || "http://localhost:80/booking";
+    const trackingUrl = process.env.NEXT_PUBLIC_TRACKING_URL || "http://localhost:80/tracking";
+    const notificationUrl = process.env.NEXT_PUBLIC_NOTIFICATION_URL || "http://localhost:80/notification";
+    const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || "http://localhost:80/chat";
     return [
-      { source: "/api/auth/:path*", destination: `${apiUrl}/auth/:path*` },
-      { source: "/api/booking/:path*", destination: `${apiUrl}/booking/:path*` },
-      { source: "/api/tracking/:path*", destination: `${apiUrl}/tracking/:path*` },
-      { source: "/api/notification/:path*", destination: `${apiUrl}/notification/:path*` },
-      { source: "/api/chat/:path*", destination: `${apiUrl}/chat/:path*` },
+      { source: "/api/auth/:path*", destination: `${authUrl}/:path*` },
+      { source: "/api/booking/:path*", destination: `${bookingUrl}/:path*` },
+      { source: "/api/tracking/:path*", destination: `${trackingUrl}/:path*` },
+      { source: "/api/notification/:path*", destination: `${notificationUrl}/:path*` },
+      { source: "/api/chat/:path*", destination: `${chatUrl}/:path*` },
     ];
   },
 };

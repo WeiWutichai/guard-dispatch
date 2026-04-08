@@ -23,13 +23,25 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # so they MUST be passed as build args, not just runtime environment.
 #
 # basePath matches nginx.prod.conf's /p-guard-app location (note the dash).
-# API URL defaults to the nginx-gateway container hostname on the Docker
-# `frontend` network (works for staging/prod). For dev (docker-compose.yml)
-# override to http://localhost:80 so host-side dev browsers still work.
+#
+# Per-service URLs point directly at the Rust service containers on the
+# `backend` Docker network. web-admin joins `backend` via the compose override
+# and resolves each container by its service name. This bypasses nginx for
+# server-to-server calls entirely, avoiding the HTTP→HTTPS redirect loop that
+# otherwise forces the browser to try to reach `http://nginx-gateway` and fail.
 ARG NEXT_PUBLIC_BASE_PATH=/p-guard-app
-ARG NEXT_PUBLIC_API_URL=http://nginx-gateway
+ARG NEXT_PUBLIC_AUTH_URL=http://rust-auth:3001
+ARG NEXT_PUBLIC_BOOKING_URL=http://rust-booking:3002
+ARG NEXT_PUBLIC_TRACKING_URL=http://rust-tracking:3003
+ARG NEXT_PUBLIC_NOTIFICATION_URL=http://rust-notification:3004
+ARG NEXT_PUBLIC_CHAT_URL=http://rust-chat:3006
+
 ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_AUTH_URL=${NEXT_PUBLIC_AUTH_URL}
+ENV NEXT_PUBLIC_BOOKING_URL=${NEXT_PUBLIC_BOOKING_URL}
+ENV NEXT_PUBLIC_TRACKING_URL=${NEXT_PUBLIC_TRACKING_URL}
+ENV NEXT_PUBLIC_NOTIFICATION_URL=${NEXT_PUBLIC_NOTIFICATION_URL}
+ENV NEXT_PUBLIC_CHAT_URL=${NEXT_PUBLIC_CHAT_URL}
 
 RUN npm run build
 
