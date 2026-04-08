@@ -17,8 +17,13 @@ COPY . .
 
 # Build-time env vars
 ENV NEXT_TELEMETRY_DISABLED=1
-# Production uses basePath /pguard-app (served behind Nginx)
-ENV NEXT_PUBLIC_BASE_PATH=/pguard-app
+
+# basePath baked into the build. Next.js needs this at BUILD time (not runtime)
+# because asset URLs and router paths are generated at build. The default
+# matches nginx.prod.conf's /p-guard-app location (note the dash).
+# Override via: docker compose build --build-arg NEXT_PUBLIC_BASE_PATH=/your-path
+ARG NEXT_PUBLIC_BASE_PATH=/p-guard-app
+ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
 
 RUN npm run build
 
