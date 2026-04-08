@@ -18,12 +18,18 @@ COPY . .
 # Build-time env vars
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# basePath baked into the build. Next.js needs this at BUILD time (not runtime)
-# because asset URLs and router paths are generated at build. The default
-# matches nginx.prod.conf's /p-guard-app location (note the dash).
-# Override via: docker compose build --build-arg NEXT_PUBLIC_BASE_PATH=/your-path
+# IMPORTANT: Next.js inlines NEXT_PUBLIC_* env vars at BUILD time, not runtime.
+# These values are baked into the static bundle and the rewrites() function,
+# so they MUST be passed as build args, not just runtime environment.
+#
+# basePath matches nginx.prod.conf's /p-guard-app location (note the dash).
+# API URL defaults to the nginx-gateway container hostname on the Docker
+# `frontend` network (works for staging/prod). For dev (docker-compose.yml)
+# override to http://localhost:80 so host-side dev browsers still work.
 ARG NEXT_PUBLIC_BASE_PATH=/p-guard-app
+ARG NEXT_PUBLIC_API_URL=http://nginx-gateway
 ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 RUN npm run build
 

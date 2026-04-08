@@ -30,15 +30,19 @@ services:
 
   web-admin:
     restart: always
-    environment:
-      # Next.js rewrites resolve server-side at request time. Inside the
-      # Docker network we can reach nginx via its service name. The rewrite
-      # chain becomes:
+    build:
+      # NEXT_PUBLIC_* env vars are inlined at BUILD time by Next.js, not
+      # runtime. Pass the staging API URL + basePath as build args so the
+      # bundle's rewrites() function points to the correct destination.
+      # Inside the Docker network, web-admin can reach nginx via the
+      # `nginx-gateway` service name on the `frontend` network.
       #   browser → https://pguard.innoveraappcenter.com/p-guard-app/api/auth/login
-      #     → (Next.js server inside web-admin container)
-      #     → http://nginx-gateway/auth/login
-      #     → (nginx proxies) rust-auth:3001/login
-      NEXT_PUBLIC_API_URL: http://nginx-gateway
+      #     → web-admin Next.js server (in container)
+      #     → http://nginx-gateway/auth/login  (inlined at build time)
+      #     → nginx proxies → rust-auth:3001/login
+      args:
+        NEXT_PUBLIC_BASE_PATH: /p-guard-app
+        NEXT_PUBLIC_API_URL: http://nginx-gateway
 
   rust-auth:
     restart: always
