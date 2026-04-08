@@ -490,8 +490,14 @@ pub async fn register_with_otp(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterWithOtpRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<RegisterWithOtpResponse>>), AppError> {
-    let response =
-        crate::service::register_with_otp(&state.db, &state.redis, &state.jwt_config, req).await?;
+    let response = crate::service::register_with_otp(
+        &state.db,
+        &state.redis,
+        &state.jwt_config,
+        &state.otp_config,
+        req,
+    )
+    .await?;
     Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(response))))
 }
 
@@ -747,6 +753,37 @@ pub async fn reissue_profile_token(
     })))
 }
 
+/// Best-effort optional auth extraction. Returns `Some(user_id)` only if all
+/// of the following hold: Authorization: Bearer header present + JWT decodes
+/// successfully (signature, exp, aud) + jti is not in the revocation blocklist.
+/// On any failure (missing header, malformed, expired, revoked, Redis error)
+/// it returns `None` so the caller can fall through to its non-authenticated path.
+///
+/// Used by `update_role` to support two auth modes: OTP-based (registration
+/// flow) and access-token-based (already-authenticated users adding a profile).
+async fn try_extract_user_id_from_bearer(
+    headers: &HeaderMap,
+    state: &Arc<AppState>,
+) -> Option<Uuid> {
+    use redis::AsyncCommands;
+
+    let token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))?;
+    let claims =
+        shared::auth::decode_jwt_with_key(token, &state.jwt_config.decoding_key).ok()?;
+
+    let mut redis = state.redis.clone();
+    let revoked_key = format!("revoked_jti:{}", claims.jti);
+    let is_revoked: bool = redis.exists(&revoked_key).await.unwrap_or(false);
+    if is_revoked {
+        return None;
+    }
+
+    Some(claims.sub)
+}
+
 /// Set the role of a pending user (step 2 of 3-step registration).
 /// Public endpoint — user identified by phone (no JWT needed).
 #[utoipa::path(
@@ -761,14 +798,25 @@ pub async fn reissue_profile_token(
 )]
 pub async fn update_role(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<UpdateRoleRequest>,
 ) -> Result<Json<ApiResponse<UpdateRoleResponse>>, AppError> {
+    // Optional auth: if a valid Bearer token is present, the caller is an
+    // already-authenticated user (e.g. approved guard adding a customer
+    // profile). Decode + check revocation; if any step fails, fall through
+    // to the OTP-based flow which requires a phone_verified_token.
+    // (security-reviewer HIGH regression fix)
+    let authenticated_user_id =
+        try_extract_user_id_from_bearer(&headers, &state).await;
+
     let (user_id, profile_token) = crate::service::update_user_role(
         &state.db,
         &state.redis,
         &state.jwt_config,
         &req.phone,
         req.role,
+        req.phone_verified_token.as_deref(),
+        authenticated_user_id,
     )
     .await?;
 
@@ -880,6 +928,16 @@ pub async fn update_own_expiry(
     user: AuthUser,
     Json(req): Json<AdminUpdateGuardProfileRequest>,
 ) -> Result<Json<shared::models::ApiResponse<()>>, AppError> {
+    // Restrict to guard role — without this, customers/admins/null-role users
+    // could call the endpoint and silently UPDATE 0 rows on `auth.guard_profiles`,
+    // which violates least-privilege. If guard_profiles ever gains rows via
+    // another path, this would become a direct IDOR. (security-reviewer MEDIUM)
+    if user.role != "guard" {
+        return Err(AppError::Forbidden(
+            "Guard access only".to_string(),
+        ));
+    }
+
     // Only allow expiry fields — strip everything else for safety
     let expiry_only = AdminUpdateGuardProfileRequest {
         gender: None,

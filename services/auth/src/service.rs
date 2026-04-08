@@ -972,6 +972,7 @@ pub async fn register_with_otp(
     db: &PgPool,
     redis: &redis::aio::MultiplexedConnection,
     jwt_config: &JwtConfig,
+    otp_config: &shared::otp::OtpConfig,
     req: RegisterWithOtpRequest,
 ) -> Result<RegisterWithOtpResponse, AppError> {
     // Decode and validate the phone_verified_token
@@ -1101,10 +1102,33 @@ pub async fn register_with_otp(
         None
     };
 
+    // Re-issue a fresh phone_verified_token for the next step (POST /profile/role).
+    // The original phone_verify_jti was just consumed at the start of this function,
+    // so the mobile client needs a new one to prove phone ownership in step 2 of the
+    // 3-step registration flow. Without this, /profile/role would have to either
+    // (a) be unauthenticated → MEDIUM finding (profile hijacking via known phone)
+    // or (b) require a fresh OTP cycle → bad UX.
+    let (next_phone_verified_token, next_jti) = encode_phone_verify_token(
+        &phone,
+        &jwt_config.encoding_key,
+        otp_config.phone_verify_ttl_minutes,
+    )?;
+    let next_jti_key = format!("phone_verify_jti:{next_jti}");
+    let next_ttl_secs = (otp_config.phone_verify_ttl_minutes * 60 + 30) as u64;
+    redis::cmd("SET")
+        .arg(&next_jti_key)
+        .arg("valid")
+        .arg("EX")
+        .arg(next_ttl_secs)
+        .query_async::<()>(&mut redis.clone())
+        .await
+        .map_err(AppError::Redis)?;
+
     Ok(RegisterWithOtpResponse {
         message: "Registration successful. Your account is pending admin approval.".to_string(),
         user_id: user.id,
         profile_token,
+        phone_verified_token: next_phone_verified_token,
     })
 }
 
@@ -1302,6 +1326,8 @@ pub async fn update_user_role(
     jwt_config: &JwtConfig,
     phone: &str,
     role: UserRole,
+    phone_verified_token: Option<&str>,
+    authenticated_user_id: Option<Uuid>,
 ) -> Result<(Uuid, Option<String>), AppError> {
     use shared::models::UserRole;
 
@@ -1314,36 +1340,73 @@ pub async fn update_user_role(
         ));
     }
 
-    // Guard: do NOT set role yet — role is set atomically in submit_guard_profile.
-    // Customer: do NOT set role yet — role is set atomically in submit_customer_profile.
-    // Both paths SELECT verify + issue profile_token.
-    // Allow any existing user (pending or approved) to add a profile for a different role
-    // (e.g., approved guard adding customer profile).
+    // Look up user by phone first — needed by both auth paths.
     let user: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM auth.users WHERE phone = $1")
         .bind(&phone_clean)
         .fetch_optional(db)
         .await
         .map_err(AppError::Database)?;
 
-    let (user_id,) = match user {
-        Some(u) => u,
-        None => {
-            // Constant-time: generate a dummy token + Redis SET to equalize timing
-            // (prevents phone enumeration via response time difference)
-            let dummy_id = Uuid::new_v4();
-            let _ = encode_profile_token(dummy_id, &jwt_config.encoding_key, 1, "dummy");
-            let _ = redis::cmd("SET")
-                .arg("dummy_enumeration_padding")
-                .arg("1")
-                .arg("EX")
-                .arg(1_i64)
-                .query_async::<()>(&mut redis.clone())
-                .await;
-            return Err(AppError::BadRequest(
-                "Unable to process request".to_string(),
+    let (user_id,) = user.ok_or_else(|| {
+        // Generic message — don't leak existence (the constant-time padding
+        // for the unauthenticated path was removed because the OTP path now
+        // requires a valid phone_verified_token, which already proves phone
+        // ownership; an attacker can't reach this branch without OTP access).
+        AppError::BadRequest("Unable to process request".to_string())
+    })?;
+
+    // === Two authentication paths ===
+    //
+    // (a) Authenticated path: caller already has a valid access token. Verify
+    //     that the token's `sub` matches the user looked up by phone. This
+    //     handles the case of an approved guard adding a customer profile —
+    //     they shouldn't be forced to re-do OTP. (security-reviewer HIGH fix)
+    //
+    // (b) OTP path: no Bearer token, must provide a single-use
+    //     `phone_verified_token` re-issued by /register/otp. Decode + verify
+    //     phone match + GETDEL the jti from Redis. (security-reviewer MEDIUM fix)
+    if let Some(caller_id) = authenticated_user_id {
+        if caller_id != user_id {
+            // The caller's token belongs to someone else. Refuse.
+            return Err(AppError::Forbidden(
+                "You can only set the role for your own account".to_string(),
             ));
         }
-    };
+        // Authenticated identity confirmed — skip phone_verified_token entirely.
+    } else {
+        // OTP path — phone_verified_token is required.
+        let token = phone_verified_token.ok_or_else(|| {
+            AppError::BadRequest(
+                "Missing phone_verified_token (or send a valid Bearer access token)".to_string(),
+            )
+        })?;
+
+        let (verified_phone, jti) = shared::auth::decode_phone_verify_token(
+            token,
+            &jwt_config.decoding_key,
+        )?;
+        if verified_phone != phone_clean {
+            return Err(AppError::BadRequest(
+                "Phone number does not match verified token".to_string(),
+            ));
+        }
+        let consumed: Option<String> = redis::cmd("GETDEL")
+            .arg(format!("phone_verify_jti:{jti}"))
+            .query_async(&mut redis.clone())
+            .await
+            .map_err(AppError::Redis)?;
+        if consumed.as_deref() != Some("valid") {
+            return Err(AppError::BadRequest(
+                "Verification token expired or already used".to_string(),
+            ));
+        }
+    }
+
+    // Guard: do NOT set role yet — role is set atomically in submit_guard_profile.
+    // Customer: do NOT set role yet — role is set atomically in submit_customer_profile.
+    // Both paths SELECT verify + issue profile_token.
+    // Allow any existing user (pending or approved) to add a profile for a different role
+    // (e.g., approved guard adding customer profile).
 
     // Invalidate user cache
     invalidate_user_cache(redis, &user_id).await?;

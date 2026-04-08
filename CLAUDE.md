@@ -175,19 +175,25 @@ CREATE TABLE chat.read_receipts (
 ### Payments Table
 ```sql
 CREATE TABLE booking.payments (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  request_id      UUID NOT NULL REFERENCES booking.guard_requests(id),
-  customer_id     UUID NOT NULL REFERENCES auth.users(id),
-  amount          DECIMAL(10,2) NOT NULL,
-  payment_method  TEXT NOT NULL,
-  status          TEXT NOT NULL DEFAULT 'pending',
-  transaction_ref TEXT,
-  paid_at         TIMESTAMPTZ,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id           UUID NOT NULL REFERENCES booking.guard_requests(id),
+  customer_id          UUID NOT NULL REFERENCES auth.users(id),
+  amount               DECIMAL(10,2) NOT NULL,           -- original upfront price
+  payment_method       TEXT NOT NULL,
+  status               TEXT NOT NULL DEFAULT 'pending',
+  transaction_ref      TEXT,
+  paid_at              TIMESTAMPTZ,
+  -- Cost summary fields (migration 036), populated when assignment completes:
+  actual_hours_worked  DECIMAL(5,2),                     -- clamped to booked_hours
+  final_amount         DECIMAL(10,2),                    -- prorated price (= amount * actual/booked)
+  refund_amount        DECIMAL(10,2),                    -- amount - final_amount, ledger only
+  tip_amount           DECIMAL(10,2) NOT NULL DEFAULT 0, -- optional bonus added by customer
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 > **Simulated payments** — ready for real gateway integration. Status: `pending` → `completed` / `failed`.
+> **Cost summary on completion (migration 036):** When `review_completion()` approves a job, it prorates `payments.amount` by `actual_hours / booked_hours` and stores `final_amount` + `refund_amount` + `actual_hours_worked` atomically in the same transaction. Overtime is **never** auto-charged (`actual_hours` is clamped to `booked_hours`); customers can optionally tip via `POST /assignments/{id}/tip`. `refund_amount` is **ledger-only** — admin processes the real refund flow later.
 > `booking.assignments` has `started_at TIMESTAMPTZ` for countdown tracking.
 > `booking.guard_requests` has `booked_hours INTEGER` for countdown calculation.
 > `assignment_status` enum extended: `pending_acceptance` → `accepted` / `declined` (guard acceptance flow).
@@ -234,6 +240,7 @@ CREATE TABLE reviews.guard_reviews (
 CREATE INDEX idx_guard_reviews_guard_id ON reviews.guard_reviews(guard_id, created_at DESC);
 CREATE INDEX idx_guard_reviews_customer_id ON reviews.guard_reviews(customer_id);
 ```
+> **Visibility flag (migration 035):** `reviews.guard_reviews.is_visible BOOLEAN NOT NULL DEFAULT true` — admin toggle ผ่าน `PUT /admin/reviews/{id}/visibility`. Public guard discovery queries ต้อง filter `is_visible = true`.
 > **One review per assignment** — UNIQUE constraint on `assignment_id` prevents duplicate reviews.
 > **Category ratings optional** — only `overall_rating` is required; category breakdowns (punctuality, professionalism, communication, appearance) are optional.
 > **Real ratings in guard discovery** — `list_available_guards()` JOINs `reviews.guard_reviews` with `AVG(overall_rating)` and `COUNT(*)` instead of placeholder values.
@@ -341,10 +348,19 @@ CREATE TABLE notification.fcm_tokens (
   - Web: httpOnly + Secure + SameSite=Lax **cookies** (ห้ามใช้ localStorage เด็ดขาด)
   - Mobile (Flutter): Bearer token ใน Authorization header — เก็บใน `FlutterSecureStorage` เท่านั้น
   - AuthUser extractor อ่านจาก Authorization header ก่อน → fallback ไป cookie
+- **Mobile/Web Login Isolation (security commit 016cd6f):**
+  - **Web:** `POST /auth/login/phone` → tokens ออกใน httpOnly cookies เท่านั้น (response body ไม่มี token)
+  - **Mobile:** `POST /auth/login/mobile` + `POST /auth/refresh/mobile` → tokens อยู่ใน JSON body
+  - ห้าม trust `X-Client-Type` header เพื่อสลับ behavior — XSS spoof ได้ → token ถูกขโมย; ใช้ endpoint แยกแทน
+  - ห้าม return tokens ใน body จาก `/login/phone` (web endpoint) เด็ดขาด
 - **JWT Key Caching:** `JwtConfig` เก็บ pre-computed `encoding_key` และ `decoding_key` — ใช้ `encode_jwt_with_key()` / `decode_jwt_with_key()` แทน `encode_jwt()` / `decode_jwt()` ใน production code
   - `HasJwtSecret` trait: `decoding_key()` returns `&DecodingKey` (reference, ไม่ clone) — implement ใน AppState ให้ return `&self.jwt_config.decoding_key`
   - ห้าม return owned `DecodingKey` จาก trait — ต้อง return reference เพื่อ zero-copy performance
-- **JWT Validation:** ใช้ explicit `Validation` struct — `validate_exp = true`, iss/aud prepared สำหรับอนาคต (commented-out)
+- **JWT Validation:** ใช้ explicit `Validation` struct — `validate_exp = true`, **`validate_aud = true` ด้วย `aud = "guard-dispatch"`** (active แล้ว ตั้งแต่ commit 016cd6f) — ป้องกัน cross-system token reuse ถ้า `JWT_SECRET` รั่วไปโปรเจกต์อื่น
+- **Token Revocation (Logout Blocklist):**
+  - Logout เพิ่ม access token `jti` ลง Redis key `revoked_jti:{jti}` พร้อม TTL = remaining lifetime
+  - `AuthUser` extractor ต้อง `EXISTS revoked_jti:{jti}` ทุก request — ถ้าเจอ → `Unauthorized`
+  - Logout เป็น **single-session** — DELETE เฉพาะ refresh_token ที่ส่งมา (ไม่ใช่ทุก session); fallback: ไม่มี refresh token → DELETE all (backward compat)
 - **Cookie Architecture:**
   - `access_token` → httpOnly, Secure, SameSite=Lax, Path=/
   - `refresh_token` → httpOnly, Secure, SameSite=Lax, Path=/auth
@@ -370,6 +386,10 @@ CREATE TABLE notification.fcm_tokens (
   - `list_all_locations` ต้อง restrict เฉพาะ admin — ห้ามให้ customer เห็น bulk guard locations. รองรับ `?online_only=true` query param. Response มี `is_online` field
   - `get_latest_location` / `get_location_history`: customer ต้องมี active booking กับ guard (`has_active_booking()` check) — ห้ามดู location guard ที่ไม่เกี่ยวข้อง (IDOR prevention)
   - **Online Status:** `tracking.guard_locations.is_online` (BOOLEAN) — set `true` ใน `upsert_location()` ทุก GPS update, set `false` ใน `set_offline()` ตอน WebSocket disconnect. `list_available_guards()` filter `gl.is_online = true`
+  - **`set_online()` ห้ามแตะ `recorded_at`** — flip แค่ `is_online = true` เท่านั้น (commit 1a8e56c). `recorded_at` ต้องถูก update โดย **real GPS data ผ่าน `upsert_location()`** เท่านั้น เพื่อให้ admin map และ available-guards ใช้ threshold 5 นาทีได้ตรงกับสถานะจริง
+  - **Pong handler ห้ามเรียก `set_online()` หรือแตะ `recorded_at`** — Pong เป็น keep-alive อย่างเดียว (commit dd2d223). ถ้า Pong refresh `recorded_at` → guard ที่หมดสัญญาณ GPS แต่ WS ยัง alive จะค้างเขียวบน admin map
+  - **Heartbeat Rate Limit:** จำกัด max **1 heartbeat / 10 วินาที per connection** — ป้องกัน CPU DoS จาก authenticated guard spam (commit 57f0ddc). Heartbeat skip ต้องอยู่ **ก่อน** GPS rate limit check — ห้ามให้ heartbeat กิน slot 1/sec ของ GPS update (commit cac6973)
+  - **Server ACK Validation:** Mobile `_handleAck()` ต้องตรวจ `ack['recorded_at']` non-null ก่อน set `_serverConfirmed` — ป้องกัน trivial `{"status":"ok"}` injection ที่ confirm GPS โดยไม่มี real upsert
 - **Audit Middleware:** ต้อง validate JWT signature ด้วย real secret ก่อน trust user_id — ห้ามใช้ `insecure_disable_signature_validation()`
   - ใช้ `middleware::from_fn_with_state(state.clone(), audit_middleware::<Arc<AppState>>)` — ต้อง turbofish type annotation เพราะ `HasJwtSecret` implement ทั้ง `AppState` และ `Arc<T>`
   - **ทุก service ต้องมี audit middleware** — ปัจจุบัน 5 services (auth, booking, tracking, notification, chat) ทั้งหมดมีแล้ว
@@ -586,6 +606,17 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 - **Data Source:** `authApi.listCustomerApplicants({ approval_status: 'approved' })` — queries `customer_profiles` with approved status (NOT `listUsers` with `role='customer'` — guards who added customer profiles keep `role='guard'` in `auth.users`)
 - **Modal:** fetches `getCustomerProfile()` → shows full_name, contact_phone, email, company_name, address
 
+### Reviews Page (/reviews) — commit 1609605
+- **Data Source:** `reviewsApi.list({ rating?, visibility?, search?, limit?, offset? })` → `GET /booking/admin/reviews` (admin JWT)
+- **API Object:** `reviewsApi` in `lib/api.ts` — `list()`, `setVisibility(reviewId, isVisible)`
+- **Replaced mock data:** เดิม hardcoded `initialReviews`; ตอนนี้โหลดจริงผ่าน `reviewsApi.list` ใน `useEffect` + debounced search (300ms)
+- **Filters:**
+  - **Server-side:** rating, visibility (`visible`/`hidden`), search — ส่งเป็น query params
+  - **Client-side:** guard และ area filters derive จาก loaded data (เพื่อให้ dropdown options มาจากข้อมูลจริง)
+- **Stats Cards:** ใช้ `stats` field จาก API response — backend คำนวณ unfiltered (whole dataset) เสมอ; ห้ามคำนวณ stats จาก filtered list
+- **Visibility Toggle:** **optimistic** — flip local state ก่อน, call `setVisibility()` background, **rollback** local state ถ้า API fail + แสดง error banner
+- **States:** `Loader2` spinner ระหว่าง loading; error banner พร้อม retry button เมื่อ API fail
+
 ### Pricing Page (/pricing)
 - **Data Source:** `pricingApi.listServiceRates()` → `GET /booking/pricing/services` (public, no JWT)
 - **API Object:** `pricingApi` in `lib/api.ts` — `listServiceRates()`, `createServiceRate()`, `updateServiceRate()`, `deleteServiceRate()`
@@ -601,7 +632,7 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 - **Map Library:** react-leaflet (Leaflet) — loaded via `dynamic(() => import("./map-area"), { ssr: false })` เพราะ Leaflet ต้องการ DOM
 - **Shared Type:** `DisplayGuard` interface อยู่ใน `map/types.ts` — ใช้ร่วมระหว่าง `page.tsx` และ `map-area.tsx`
 - **Search:** Unified search across `name`, `id`, `location` — debounced 300ms ป้องกัน keystroke lag
-- **Filter:** Status filter (all/active/idle/alert) + search ทำงานร่วมกันผ่าน `filteredGuards` useMemo
+- **Filter:** Status filter — **3 statuses เท่านั้น** (commit 21e1ff7): `active` (🟢 พร้อมรับงาน — online + GPS + no active job), `idle` (🟡 กำลังดำเนินงาน — online + GPS + active job), `offline` (🔴 ไม่พร้อมรับงาน — no GPS or offline). **ห้ามใช้ "alert" (gray) status อีก** — ลบออกจาก `DisplayGuard` type union, map filter buttons (4→3), และ stat cards (5→4) แล้ว
 - **Memoization:** Demo data เป็น module-level constant (`DEMO_GUARDS`) → `displayGuards` wrapped ใน `useMemo([guards])` → downstream useMemo/useCallback ทำงานถูกต้อง
 - **Markers:** `GuardMarker` component — conditional Popup render เฉพาะ selected guard + `markerRef.openPopup()` auto-open
 - **Icon Cache:** Module-level `Map<string, L.DivIcon>` — 6 variants (3 statuses × 2 selected states) สร้างครั้งเดียว
@@ -674,9 +705,11 @@ PinSetupScreen(phone, phoneVerifiedToken)
   ▼
 RoleSelectionScreen(phone)
   ├─ ★ STEP 2: updateRole(phone, role)     POST /profile/role
-  │   authProvider.updateRole(phone,   ──► ├─ validate_thai_phone()
-  │     'guard'/'customer')                 ├─ Guard: SELECT id (verify user) — ไม่ UPDATE role
-  │                                         ├─ Customer: SELECT id (verify user) — ไม่ UPDATE role
+  │   authProvider.updateRole(phone,   ──► ├─ decode_phone_verify_token() — verify phone matches
+  │     'guard'/'customer')                 ├─ GETDEL phone_verify_jti:{jti} (single-use)
+  │   reads phone_verified_token from       ├─ validate_thai_phone()
+  │   secure storage (re-issued by          ├─ Guard: SELECT id (verify user) — ไม่ UPDATE role
+  │   /register/otp)                        ├─ Customer: SELECT id (verify user) — ไม่ UPDATE role
   │   ◄── profile_token (both) ───────────┤ └─ encode_profile_token(purpose) → Redis EX 15min
   │                                              Guard: purpose="guard_profile"
   │                                              Customer: purpose="customer_profile"
@@ -749,11 +782,15 @@ RegistrationPendingScreen({role})
 **Auth Service OTP & Profile Endpoints (main.rs):**
 - `POST /otp/request` → `handlers::request_otp` (public, no JWT)
 - `POST /otp/verify` → `handlers::verify_otp` (public, no JWT)
-- `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`. Password param = SHA-256 hash of user's PIN.
-- `POST /login/phone` → `handlers::login_with_phone` (public) — login with `{phone, password}` (PIN hash). Returns `{access_token, refresh_token, role}`. Used by mobile after admin approval. Generic 401 for all non-approved states (no user enumeration).
+- `POST /register/otp` → `handlers::register_with_otp` (public, requires phone_verified_token) — returns **202**, no session/tokens. Called in `PinSetupScreen` with `role=null`. Password param = SHA-256 hash of user's PIN. **Re-issues a fresh single-use `phone_verified_token`** in the response body (security-reviewer MEDIUM fix) so the next step (`POST /profile/role`) can prove phone ownership without requiring a fresh OTP cycle.
+- `POST /login/phone` → `handlers::login_with_phone` (public, **web only**) — login with `{phone, password}` (PIN hash). Tokens ออกใน **httpOnly cookies เท่านั้น** (response body ไม่มี token). Generic 401 สำหรับ non-approved states (no user enumeration).
+- `POST /login/mobile` → `handlers::login_mobile` (public, **mobile only**) — เหมือน `/login/phone` แต่ tokens อยู่ใน JSON body (`{access_token, refresh_token, role}`) ไม่ set cookie. Mobile ใช้ endpoint นี้แทน
+- `POST /refresh` → `handlers::refresh_token` (public, web) — รับ refresh token จาก body **หรือ** cookie (raw String body parsing — ทน empty body + Content-Type quirks); set cookies ใหม่ใน response
+- `POST /refresh/mobile` → `handlers::mobile_refresh_token` (public, mobile) — refresh token ใน JSON body, returns tokens ใหม่ใน body. ใช้ raw String extractor เหมือน web refresh เพื่อ tolerate empty body
+- `POST /logout` → ลบ refresh_token แถวเดียวที่ตรงกับ token ที่ส่งมา + เพิ่ม access_token `jti` ลง `revoked_jti:{jti}` Redis blocklist (TTL = remaining lifetime)
 - `POST /check-status` → `handlers::check_status` (public, no JWT) — check user state by `{phone, password}`. Returns `{exists, role, approval_status, has_guard_profile, has_customer_profile, customer_approval_status}`. Constant-time: dummy Argon2 for non-existent users. Used by `checkAuthStatus()` as DB source of truth instead of SharedPreferences.
-- `POST /profile/role` → `handlers::update_role` (public, no JWT) — guard: verify user + issue `profile_token` (**ไม่ set role**); customer: verify user + issue `profile_token` (**ไม่ set role**). Returns `profile_token` for both.
-- `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for pending user. Accepts optional `role` param to determine purpose (`"guard_profile"` / `"customer_profile"`)
+- `POST /profile/role` → `handlers::update_role` (public, **two auth modes**) — body: `{phone, role, phone_verified_token?}`. **Mode 1 (OTP path, unauthenticated):** body must include `phone_verified_token` (the fresh one re-issued by `/register/otp`); handler decodes + verifies phone matches + GETDEL's jti (single-use). **Mode 2 (authenticated path):** caller sends `Authorization: Bearer <access_token>`; `try_extract_user_id_from_bearer()` decodes JWT + checks revocation blocklist; backend verifies the token's `sub` matches the user looked up by phone, then skips `phone_verified_token` entirely. Mode 2 exists so approved guards can add a customer profile without re-doing OTP (code-reviewer HIGH regression fix). Returns `profile_token` for both guard and customer (**ไม่ set role** — role set in `submit_*_profile`).
+- `POST /profile/reissue` → `handlers::reissue_profile_token` (public) — reissues profile_token for **pending** user เท่านั้น. **Approved users ต้องถูก reject** (commit 016cd6f) — ป้องกัน profile hijacking; approved user ต้อง re-OTP + login ก่อนแก้ profile. Accepts optional `role` param (`"guard_profile"` / `"customer_profile"`). มี dummy token + Redis SET เมื่อ phone ไม่พบ — เพื่อ equalize timing (phone enumeration prevention)
 - `POST /profile/guard` → `handlers::submit_guard_profile` (profile_token auth, purpose=`"guard_profile"` — single-use)
 - `POST /profile/customer` → `handlers::submit_customer_profile` (profile_token auth, purpose=`"customer_profile"` — single-use) — UPSERT `auth.customer_profiles`, SET role='customer' if role IS NULL
 - `GET /admin/guard-profile/:user_id` → `handlers::get_guard_profile` (admin JWT) — returns guard profile with document signed URLs + expiry dates (`id_card_expiry`, `security_license_expiry`, `training_cert_expiry`, `criminal_check_expiry`, `driver_license_expiry`)
@@ -770,7 +807,7 @@ RegistrationPendingScreen({role})
 
 **Auth Service — Guard & Customer Profile:**
 - `service::register_with_otp()`: if role=guard (explicit), calls `encode_profile_token(purpose="guard_profile")` → stores jti in Redis `SET EX 900` (15 min). When role=null (3-step flow), does NOT issue profile_token.
-- `service::update_user_role()`: Guard path: SELECT verify user (pending + role IS NULL or guard) + issue profile_token (purpose=`"guard_profile"`) — **ไม่ UPDATE role**. Customer path: SELECT verify user + issue profile_token (purpose=`"customer_profile"`) — **ไม่ UPDATE role**. Rejects admin role.
+- `service::update_user_role()`: signature takes `phone_verified_token: Option<&str>` + `authenticated_user_id: Option<Uuid>`. Lookup user by phone first. **If `authenticated_user_id` is `Some`** (authenticated path, code-reviewer HIGH fix): verify it matches the lookup user (Forbidden if not), skip `phone_verified_token` entirely. **Else** (OTP path): require `phone_verified_token`, decode + verify phone matches + GETDEL jti from Redis (single-use). Guard path: SELECT verify user + issue profile_token (purpose=`"guard_profile"`) — **ไม่ UPDATE role**. Customer path: SELECT verify user + issue profile_token (purpose=`"customer_profile"`) — **ไม่ UPDATE role**. Rejects admin role.
 - `service::validate_profile_token(expected_purpose)`: async, takes redis + expected_purpose param — decodes JWT with purpose check, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
 - `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles`; then **SET role='guard'** + `invalidate_user_cache()` — role set only after successful save (atomic, no partial state on error)
 - `service::submit_customer_profile()`: validates address not empty; UPSERTs `auth.customer_profiles` with `approval_status='pending'`; then **SET role='customer' WHERE role IS NULL** + `invalidate_user_cache()` — guards keep their role if they also register as customer
@@ -810,7 +847,9 @@ RegistrationPendingScreen({role})
 **Booking Service — Guard Acceptance & Payment Endpoints (main.rs):**
 - `PUT /assignments/{id}/accept` → `handlers::accept_decline_assignment` (guard JWT) — guard accepts or declines assigned job. Body: `AcceptDeclineDto { action: "accept" | "decline" }`. Updates `assignment_status` to `accepted` / `declined`.
 - `PUT /assignments/{id}/start` → `handlers::start_job` (guard JWT) — guard starts accepted job. Sets `started_at = NOW()` on assignment.
-- `POST /payments` → `handlers::create_payment` (JWT) — create simulated payment. Body: `CreatePaymentDto { request_id, amount, payment_method }`. Returns `PaymentResponse`.
+- `POST /payments` → `handlers::create_payment` (JWT) — create simulated payment. Body: `CreatePaymentDto { request_id, amount, payment_method }`. Returns `PaymentResponse`. Cost summary fields (`final_amount`/`refund_amount`/`actual_hours_worked`) start as `NULL` and are filled in by `review_completion()` when the job ends.
+- `GET /assignments/{id}/cost-summary` → `handlers::get_cost_summary` (JWT: customer=owner, guard=assigned, admin=any) — returns `CostSummaryResponse { booked_hours, actual_hours_worked, original_amount, final_amount, refund_amount, tip_amount, net_amount, hourly_rate, started_at, completed_at, payment_id }`. Works at any assignment status; fields that aren't computed yet come back as `null` (e.g. `final_amount` while job is still active).
+- `POST /assignments/{id}/tip` → `handlers::add_tip` (JWT, customer-only) — customer adds an optional bonus from the completion-summary screen. Body: `AddTipDto { amount }` (must be > 0). Only allowed when `assignment.status = 'completed'`. Tips **accumulate** (multiple calls add up). Triggers "ลูกค้ามอบทิปให้คุณ" notification to guard. Returns the refreshed `CostSummaryResponse`.
 - `GET /guard/active-job` → `handlers::get_active_job` (guard JWT) — returns active job for guard (accepted/in_progress assignment with request details, started_at, booked_hours for countdown)
 
 **Booking Service — Guard Endpoints (main.rs):**
@@ -821,12 +860,18 @@ RegistrationPendingScreen({role})
 - `GET /guard/ratings` → `handlers::guard_ratings` (guard JWT)
 
 **Booking Service — Review & Completion Endpoints (main.rs):**
-- `PUT /assignments/{id}/review-completion` → `handlers::review_completion` (JWT) — customer approves/rejects guard's pending_completion. Body: `{ action: "approve" | "reject" }`. Approve → status=`completed`, triggers "งานเสร็จสมบูรณ์" notification to guard. Reject → status=`accepted` (back to active).
+- `PUT /assignments/{id}/review-completion` → `handlers::review_completion` (JWT) — customer approves/rejects guard's pending_completion. Body: `{ action: "approve" | "reject" }`. **Approve path (atomic transaction):** status=`completed` → `compute_proration()` calculates `actual_hours_worked` from `(completed_at - started_at)` (clamped to `booked_hours`) → `prorate_payment_in_tx()` UPDATEs the latest completed payment row with `final_amount`/`refund_amount`/`actual_hours_worked` → commit → triggers "งานเสร็จสมบูรณ์" notification to guard. If no payment row exists, proration is a silent no-op (completion still succeeds). **Reject path:** status=`arrived` (guard resumes), payment unchanged — admin handles any refund manually.
 - `POST /assignments/{id}/review` → `handlers::submit_review` (JWT) — customer submits star rating after job completion. Body: `{ overall_rating, punctuality?, professionalism?, communication?, appearance?, review_text? }`. INSERTs into `reviews.guard_reviews`. Triggers "คะแนนรีวิวใหม่" notification to guard.
+
+**Booking Service — Admin Reviews Endpoints (main.rs, commit 1609605):**
+- `GET /admin/reviews` → `handlers::list_admin_reviews` (admin JWT) — list all reviews with filters. Query params: `rating` (1-5), `visibility` (`visible`/`hidden`), `search` (matches guard name/customer name/text), `limit`, `offset`. JOINs `auth.users` (guard + customer) + `auth.customer_profiles` + `booking.guard_requests` (for address). Returns `{ reviews: [...], stats: {...}, total }`.
+  - **Stats unfiltered:** `stats` (total count, avg rating, hidden count) คำนวณบน whole dataset เสมอ — ไม่ใช้ filter — เพื่อให้ stats cards บนหน้า admin reflect ทั้งระบบ
+  - **Dynamic WHERE:** สร้าง bound params แบบ dynamic เพื่อป้องกัน SQL injection
+- `PUT /admin/reviews/{id}/visibility` → `handlers::set_review_visibility` (admin JWT) — toggle `is_visible`. Body: `{ is_visible: bool }`.
 
 **Booking Service — Cross-Service Notification Generation:**
 - `spawn_notification(db, user_id, title, body, notification_type, payload)` — fire-and-forget helper using `tokio::spawn`. INSERTs directly into `notification.notification_logs` table (shared PostgreSQL). Uses `sqlx::query` (runtime) since notification schema types aren't in booking crate.
-- **9 notification trigger points:**
+- **10 notification trigger points:**
   - `create_request()` → customer: "การจองสำเร็จ" (`booking_created`)
   - `assign_guard()` → guard: "งานใหม่ที่ได้รับ" (`guard_assigned`)
   - `accept_or_decline()` accept → customer: "เจ้าหน้าที่ตอบรับแล้ว" (`guard_assigned`)
@@ -836,6 +881,7 @@ RegistrationPendingScreen({role})
   - `update_assignment_status()` arrived → customer: "เจ้าหน้าที่ถึงแล้ว" (`guard_arrived`)
   - `review_completion()` approve → guard: "งานเสร็จสมบูรณ์" (`booking_completed`)
   - `submit_review()` → guard: "คะแนนรีวิวใหม่" (`system`)
+  - `add_tip()` → guard: "ลูกค้ามอบทิปให้คุณ" (`system`) — fired after customer adds optional tip
 - Customer ID lookups for guard-triggered events use lightweight `query_scalar` inside the spawned task
 
 **Notification Service Endpoints (main.rs, port 3004):**
@@ -861,8 +907,9 @@ RegistrationPendingScreen({role})
 - `AuthProvider`: `requestOtp(phone)`, `verifyOtp(phone, code)`, `registerWithOtp(token, password, fullName, email, role)` → returns `String?` (profile_token for guard, null for others), `updateRole(phone, role)` → returns `String?` (profile_token for both guard & customer), `reissueProfileToken(phone, {role})` (optional role param: `'guard'`/`'customer'`), `submitGuardProfile({profileToken, ...fields, files: Map<String, File>})`, `submitCustomerProfile({profileToken, address, companyName?})`, `loginWithPhone(phone, pinHash)`, `fetchProfile()`
   - `AuthStatus` enum: `unknown` | `authenticated` | `unauthenticated` | `pendingApproval`
   - `registerWithOtp()` sets `_status = AuthStatus.pendingApproval` — **never** sets `authenticated`
-  - `updateRole()` calls `POST /auth/profile/role`, updates local pending state with role
-  - `loginWithPhone(phone, pinHash)` calls `POST /auth/login/phone` → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval.
+  - `updateRole()` calls `POST /auth/profile/role` with `{phone, role, phone_verified_token?}`. **Two modes based on `_status`:** (1) `authenticated` → omit `phone_verified_token`; ApiClient interceptor attaches `Authorization: Bearer <access_token>` automatically (because `/auth/profile/role` is **not** in `publicPaths` anymore). (2) `pendingApproval` / `unknown` → reads `phone_verified_token` from `AuthService.getPhoneVerifiedData()` (saved by `registerWithOtp()`) and includes it in body; throws if missing. Updates local pending state with role.
+  - `registerWithOtp()` reads `phone_verified_token` from response body (re-issued by backend) and saves it to secure storage via `AuthService.storePhoneVerifiedData(phone, renewedToken)` so `updateRole()` can pick it up next.
+  - `loginWithPhone(phone, pinHash)` calls **`POST /auth/login/mobile`** (mobile-only endpoint, returns tokens in body) → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval. ห้ามเรียก `/auth/login/phone` (web endpoint, no body tokens)
   - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_email`, `_approvalStatus`, `_createdAt`, `_avatarUrl`, `_gender`, `_dateOfBirth`, `_yearsOfExperience`, `_previousWorkplace`, `_customerApprovalStatus`, `_customerFullName`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
   - `fetchGuardDocs()` calls `GET /auth/guards/{userId}/profile` → populates `_guardDocUrls` map (id_card, security_license, training_cert, criminal_check, driver_license). Called from `ProfileSettingsScreen.initState()`.
   - `checkAuthStatus()`: checks stored access token **first** → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout ≠ invalid tokens) → else no token: calls `POST /auth/check-status` (DB source of truth) with stored phone + PIN hash → if approved: `loginWithPhone()` → authenticated → if pending: syncs local pending state from DB (`setPendingApproval` per profile) → `pendingApproval` → if network error: fallback to local SharedPreferences → else unauthenticated. Has `_isCheckingAuth` guard against concurrent calls.
@@ -878,7 +925,7 @@ RegistrationPendingScreen({role})
   - **Pending profile per-role:** `savePendingProfile(data)` stores per-role key (`pending_profile_guard` / `pending_profile_customer`) based on `data['role']`. Data map **MUST** include `'role'` key. `getPendingProfileForRole(role)` retrieves correct profile.
   - `savePendingProfile()` stores **masked** account number (last 4 digits only) — full number goes to backend only
   - `clearPendingApproval()` removes all pending flags + all profile caches
-- `ApiClient`: auto-detects platform for default base URL — iOS → `http://localhost:80`, Android → `http://10.0.2.2:80` (override via `--dart-define=API_URL=...`). Skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/role`, `/auth/profile/customer`, `/auth/login/phone`, `/auth/check-status`
+- `ApiClient`: auto-detects platform for default base URL — iOS → `http://localhost:80`, Android → `http://10.0.2.2:80` (override via `--dart-define=API_URL=...`). Skip auth for `/auth/otp/request`, `/auth/otp/verify`, `/auth/register/otp`, `/auth/profile/reissue`, `/auth/profile/guard`, `/auth/profile/customer`, `/auth/login/mobile`, `/auth/refresh/mobile`, `/auth/check-status`. **`/auth/profile/role` is intentionally NOT in publicPaths** — its backend handler does optional auth: if a Bearer token is present, skip the phone_verified_token requirement (lets approved guards add a customer profile without re-OTP). **401 interceptor calls `POST /auth/refresh/mobile`** (ไม่ใช่ `/auth/refresh`) — parse tokens จาก `response.data['data']` (ApiResponse wrapper)
 - `main.dart` `home`: `Consumer<AuthProvider>` — shows loading spinner when `status == unknown` (async auth check in progress), routes to `RegistrationPendingScreen` when `status == pendingApproval`, `PinLockScreen` when authenticated + PIN set, else `PhoneInputScreen`
 - `PinSetupScreen._finishSetup()`: calls `registerWithOtp(phoneVerifiedToken, role=null)` immediately after PIN — creates user with no role. Navigates to `RoleSelectionScreen(phone)` without phoneVerifiedToken (consumed). **Returning approved user handling:** if `registerWithOtp` returns "Please log in instead" (Conflict), auto-tries `loginWithPhone(phone, pinHash)` with the PIN just entered — if success → RoleSelectionScreen (authenticated → dashboard); if fail → `PinLoginScreen(phone)` for retry with original PIN.
 - `PinLoginScreen`: simple PIN entry screen for returning approved users whose tokens were cleared. Calls `loginWithPhone(phone, hashPin(pin))` → success → RoleSelectionScreen (authenticated → dashboard). Shows "บัญชีได้รับอนุมัติแล้ว" badge. i18n via `PinLoginStrings`.
@@ -902,7 +949,8 @@ RegistrationPendingScreen({role})
   - `WaitingForGuardScreen`: shows assignment status (pending → accepted/declined). Polls `getAssignments(requestId)` every 5 seconds. Guard accepted → `PaymentScreen(requestId, guardName, amount)`. Guard declined → shows decline message + retry search. Timer auto-decline after 5 minutes.
   - `PaymentScreen`: simulated payment — amount display, payment method selection (QR/bank transfer/credit card). Confirm → `createPayment(requestId, amount, method)` → `PaymentSuccessScreen`.
   - `PaymentSuccessScreen`: success animation + booking summary. "กลับหน้าหลัก" → pop to hirer dashboard.
-  - `CustomerActiveJobScreen`: customer view of active job with countdown. Progress reports: during job shows only reported + missed (not future); when `pending_completion` or time-up shows ALL slots 0..bookedHours. Badge: `reported/totalSlots` (totalSlots = bookedHours + 1). Hour 0 label = "เริ่มงาน". Polls `_fetchProgressReports()` every ~9s (throttled via `_lastReportPoll % 3`). Debug speed multiplier must match guard's `_debugTickAmount`.
+  - `CustomerActiveJobScreen`: customer view of active job with countdown. Progress reports: during job shows only reported + missed (not future); when `pending_completion` or time-up shows ALL slots 0..bookedHours. Badge: `reported/totalSlots` (totalSlots = bookedHours + 1). Hour 0 label = "เริ่มงาน". Polls `_fetchProgressReports()` every ~9s (throttled via `_lastReportPoll % 3`). Debug speed multiplier must match guard's `_debugTickAmount`. **`_handleApprove()` flow:** `reviewCompletion(approve)` → `pushReplacement` to `JobCompletionSummaryScreen` (NOT directly to `ReviewRatingScreen`) so the customer always sees the cost summary first.
+  - `JobCompletionSummaryScreen` (`hirer/job_completion_summary_screen.dart`): cost breakdown shown right after the customer approves a job. `initState()` → `BookingProvider.fetchCostSummary(assignmentId)` → renders three cards: hours worked (booked vs actual + hourly rate), cost breakdown (original price, prorated price if partial, refund amount + admin-refund note, tip if any, **net total**), and tip input (optional, customer can add ฿ extra → `BookingProvider.addTip()` accumulates). "ดำเนินการต่อ" button → `pushReplacement` to `ReviewRatingScreen`. Wrapped in `PopScope(canPop: false)` so customer can't dodge the summary by swiping back. i18n via `JobCompletionSummaryStrings`.
   - `GuardJobDetailScreen`: shows progress reports section for started/pending_completion/completed jobs. Displays all slots 0..bookedHours with reported (green check) vs missed (red warning). Badge: `reported/totalSlots`. `pending_completion` status label = "รอลูกค้าตรวจสอบ" (orange).
   - `GuardJobDetailScreen`: guard views job detail — customer info, location, booking time, service type. Actions: accept/decline (calls `acceptDeclineAssignment(assignmentId, action)`), start job (calls `startJob(assignmentId)`), complete job. Chat button → `getOrCreateConversation()` → `ChatScreen`. Call button → `CallScreen`.
   - `ActiveJobScreen`: guard active job with countdown timer. Shows remaining hours/minutes from `started_at` + `booked_hours`. Location map placeholder. Complete job button. Chat/Call shortcuts.
@@ -917,6 +965,7 @@ RegistrationPendingScreen({role})
   - Guard: `fetchDashboard()`, `fetchJobs()`, `fetchEarnings()`, `updateAssignmentStatus()`, `acceptDeclineAssignment(assignmentId, action)`, `startJob(assignmentId)`, `fetchActiveJob()`, `fetchWorkHistory()`, `fetchRatings()`
   - Customer: `fetchMyRequests()`, `createRequest()`, `cancelRequest()`, `fetchAvailableGuards(lat, lng)`, `assignGuardToRequest(requestId, guardId)`, `createPayment(requestId, amount, method)`
   - Review: `reviewCompletion(assignmentId, action)`, `submitReview(assignmentId, {overallRating, punctuality?, professionalism?, communication?, appearance?, reviewText?})`
+  - Cost summary / tip: `fetchCostSummary(assignmentId)` → returns `Map?` (null on error, sets `_error`), `addTip(assignmentId, amount)` → returns refreshed summary
   - Pricing: `fetchServiceRates()` — uses separate `_isLoadingRates` flag (not shared `_isLoading`)
   - State: `serviceRates` (list), `myRequests` (list), `availableGuards` (list), `dashboard`, `currentJobs`, `completedJobs`, `earnings`, `workHistory`, `ratings`, `activeJob`
   - `_isLoadingGuards`: separate flag for available guards loading (not shared with `_isLoading` or `_isLoadingRates`)
@@ -924,6 +973,7 @@ RegistrationPendingScreen({role})
   - Guard: `getGuardDashboard()`, `getGuardJobs()`, `getGuardEarnings()`, `updateAssignmentStatus()`, `acceptDeclineAssignment(assignmentId, action)`, `startJob(assignmentId)`, `getActiveJob()`, `getGuardWorkHistory()`, `getGuardRatings()`
   - Customer: `createRequest()`, `listMyRequests()`, `getRequest()`, `cancelRequest()`, `getAssignments()`, `listAvailableGuards({lat, lng, radiusKm, limit})`, `assignGuardToRequest(requestId, guardId)`, `createPayment({requestId, amount, paymentMethod})`
   - Review: `reviewCompletion(assignmentId, action)` → `PUT /booking/assignments/$id/review-completion`, `submitReview(assignmentId, body)` → `POST /booking/assignments/$id/review`
+  - Cost summary / tip: `getCostSummary(assignmentId)` → `GET /booking/assignments/$id/cost-summary`, `addTip({assignmentId, amount})` → `POST /booking/assignments/$id/tip`
   - Pricing: `listServiceRates()` → `GET /booking/pricing/services` — public, returns `List<Map<String, dynamic>>`
 - `main.dart`: `ChangeNotifierProvider(create: (_) => BookingProvider(BookingService(apiClient)))` registered in `MultiProvider`
 
@@ -994,15 +1044,21 @@ RegistrationPendingScreen({role})
   - Uses `IOWebSocketChannel.connect(uri, headers: {'Authorization': 'Bearer $token'})` — Bearer token for mobile WS auth
   - Converts `API_URL` from `http://` → `ws://` for WebSocket endpoint `/ws/track`
   - GPS: `Geolocator.getPositionStream(accuracy: high, distanceFilter: 10m)` — streams only when moved ≥10m
+  - **Field sanitization (commit cdf472b):** ก่อนส่ง ต้อง sanitize `heading`/`speed`/`accuracy` — reject `NaN`/`Infinite`/out-of-range → set เป็น `null` (backend skip range check). iOS CLLocation คืน `-1` สำหรับ invalid course/speed → ถ้าไม่ sanitize, backend `GpsUpdate::validate()` จะ reject ทุก update เงียบ ๆ → guard ค้าง offline
   - Sends `GpsUpdate` JSON: `{"lat", "lng", "accuracy", "heading", "speed", "assignment_id": null}`
   - GPS stream starts **only after** WebSocket connected (`_isConnected == true`) — never before
-  - Auto-reconnect with exponential backoff (2s, 4s, 6s, 8s, 10s), max 5 retries
+  - **Unbounded reconnect with exponential backoff capped at 60s** (commit cdf472b) — เดิม max 5 retries / 30s ต้อง toggle off/on; ตอนนี้ retry ไปเรื่อย ๆ
+  - **WS reconnect with token refresh** (commit a2f4c33): เมื่อ `_connectWebSocket()` catch error → ลอง `POST /auth/refresh/mobile` หนึ่งครั้ง ก่อน schedule reconnect — ป้องกัน infinite loop เมื่อ access token หมดอายุกลาง WS session
   - Reconnect cleans up old `_wsSub` before creating new one (prevents orphaned listeners)
   - Reconnect restarts GPS stream after successful WS reconnect
+  - **GPS stuck detection** (commit cdf472b): ถ้าไม่ได้ fix ภายใน ~90s → emit `'gps_unavailable'` error
+  - **Permission whitelist** (commit cdf472b): accept เฉพาะ `always` / `whileInUse` — reject `restricted` / `unableToDetermine` (ห้าม fall through ไป granted)
 - **TrackingProvider** (`tracking_provider.dart`): `ChangeNotifier` state management
   - States: `isOnline` (toggle), `isConnecting`, `isConnected` (WS), `lastPosition`, `error`
   - `toggle()` → `goOnline()` / `goOffline()` — wired to `GuardHomeTab` switch
   - Permission errors auto-revert toggle to OFF
+  - **`hasRecentGps` ใช้ `_isOnline` toggle state + `_isConnected` (WS state)** (commits 318bc53 + 05ad21f) — ไม่ใช้ position timestamp/server ACK เพราะมี timing issues. `_lastPosition` persist ข้าม reconnect gaps ทำให้ guard ไม่กระพริบเทาตอน reconnect; แต่ถ้า WS dies → gray ทันที (sync กับ admin map ที่แสดง red)
+  - **15s watchdog** (commit cdf472b): หลัง `goOnline()` → ถ้า WS up แต่ first GPS fix ไม่มาภายใน 15s → emit `'gps_slow'` hint
 - **main.dart**: `ChangeNotifierProvider(create: (_) => TrackingProvider(TrackingService()))` registered in `MultiProvider`
 - **GuardHomeTab**: `context.watch<TrackingProvider>()` replaces local `_isReady` state; shows GPS accuracy when online
 
@@ -1173,7 +1229,8 @@ REDIS_PASSWORD=<strong-redis-password>
 REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6379
 REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6379
 JWT_SECRET=<strong-secret-at-least-64-chars>
-JWT_EXPIRY_HOURS=24
+JWT_EXPIRY_MINUTES=15          # Access token lifetime (default 15 min, OWASP recommendation). Lowered from 60→15 per security-reviewer HIGH/MEDIUM. Mobile interceptor + WS reconnect handle 401 → /refresh/mobile → retry. Replaces deprecated JWT_EXPIRY_HOURS.
+ENABLE_SWAGGER=                # Set to any value to mount Swagger UI. Omit in production → 404 on /swagger-ui + /api-docs.
 FCM_SERVER_KEY=<firebase-key>
 FCM_PROJECT_ID=<firebase-project-id>
 S3_ENDPOINT=http://minio:9000
@@ -1260,6 +1317,15 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามเรียก `registerWithOtp()` ใน `RoleSelectionScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `PinSetupScreen._finishSetup()` เท่านั้น (3-step flow: register ก่อน, เลือก role ทีหลัง)
 - ❌ ห้ามเรียก `updateRole()` ใน `PinSetupScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `RoleSelectionScreen._onRoleTap()` เท่านั้น
 - ❌ ห้าม `update_user_role()` SET role ใน DB ทั้ง guard และ customer path — ต้องแค่ SELECT verify + issue profile_token เท่านั้น → role จะถูก set ใน `submit_guard_profile()` / `submit_customer_profile()` หลัง save สำเร็จ (atomic, no partial state)
+- ❌ ห้าม `update_user_role()` ออก profile_token โดยไม่มี **proof of identity** — ต้องเป็นหนึ่งในสองทาง: (1) `authenticated_user_id == user_id` จาก lookup (Bearer access token, post-login flow), หรือ (2) `phone_verified_token` ที่ decode + verify phone match + GETDEL jti สำเร็จ (OTP registration flow). ถ้าไม่มีทั้งสอง → reject (security-reviewer MEDIUM); ป้องกัน profile hijacking
+- ❌ ห้าม `update_user_role()` accept `authenticated_user_id` ที่ != lookup user — ต้อง `Forbidden` (ป้องกัน A พยายาม set role ของ B ผ่าน B's phone + A's access token)
+- ❌ ห้าม `register_with_otp()` return response โดยไม่มี `phone_verified_token` ใหม่ — ต้อง re-issue token (single-use, ~10 min TTL) และ store jti ใน Redis เสมอ เพื่อให้ `/profile/role` (OTP path) ตรวจสอบได้
+- ❌ ห้าม mobile `updateRole()` ส่ง `phone_verified_token` ใน body เมื่อ `_status == authenticated` — Bearer token ทำหน้าที่นี้แทน; ส่งทั้งคู่ไม่ใช่ปัญหาเชิง security แต่ก็ไม่ควรเก็บ token ที่ไม่จำเป็นอยู่ใน storage
+- ❌ ห้ามใส่ `/auth/profile/role` กลับเข้าไปใน `publicPaths` ของ ApiClient — endpoint นี้ทำ optional auth ที่ฝั่ง backend: ต้องให้ Bearer header attach อัตโนมัติ (เมื่อ user authenticated) เพื่อให้ "approved guard adding customer profile" flow ทำงาน
+- ❌ ห้าม mobile `registerWithOtp()` ทิ้ง `response.data['data']['phone_verified_token']` — ต้อง overwrite secure storage เสมอเพื่อให้ `updateRole()` (OTP path) มี token ใช้
+- ❌ ห้าม `prorate_payment_in_tx()` เรียก `compute_proration()` เมื่อ `started_at` หรือ `completed_at` เป็น `None` — ต้อง early return Ok(()) (skip proration) เพื่อรักษา original `payments.amount` ไว้; ถ้าคำนวณ `0 * rate` จะเกิด billing data corruption (customer ถูกคิดเงิน 0 บาทสำหรับงานที่ทำจริง) (code-reviewer MEDIUM fix)
+- ❌ ห้าม `JobCompletionSummaryScreen._submitTip()` เงียบเมื่อ `addTip()` คืน null — ต้อง show error SnackBar เสมอ; ปุ่ม re-enable อย่างเดียวทำให้ user เข้าใจผิดว่าสำเร็จ (code-reviewer MEDIUM fix)
+- ❌ ห้าม `update_own_expiry()` (`PUT /guards/me/expiry`) ไม่ตรวจ `user.role == "guard"` — ต้องเป็นบรรทัดแรกของ handler (security-reviewer MEDIUM); customer/admin/null-role ห้ามเข้าถึง endpoint นี้
 - ❌ ห้าม `submit_guard_profile()` สำเร็จโดยไม่ set role='guard' — ต้อง UPDATE role + `invalidate_user_cache()` หลัง UPSERT profile เสมอ
 - ❌ ห้าม `submit_customer_profile()` สำเร็จโดยไม่ set role='customer' (เมื่อ role IS NULL) — ต้อง UPDATE role + `invalidate_user_cache()` หลัง UPSERT profile เสมอ
 - ❌ ห้ามใช้ profile_token ข้าม purpose — guard token ใช้กับ `submit_customer_profile()` ไม่ได้ และในทางกลับกัน (`decode_profile_token(expected_purpose)` ตรวจ purpose)
@@ -1283,6 +1349,17 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม block response path ด้วย notification INSERT — ต้องใช้ `tokio::spawn` (fire-and-forget) เสมอสำหรับ `spawn_notification()`
 - ❌ ห้ามลงทะเบียน notification routes `{id}/read` ก่อน `unread-count` / `read-all` — Axum จะ match `unread-count` เป็น `{id}` ถ้าลำดับผิด
 - ❌ ห้าม `review_completion()` สำเร็จโดยไม่ส่ง notification ให้ guard — approve ต้อง trigger "งานเสร็จสมบูรณ์" notification
+- ❌ ห้าม `review_completion()` approve path commit transaction โดยไม่เรียก `prorate_payment_in_tx()` — ต้องคำนวณ + UPDATE `payments` (final_amount/refund_amount/actual_hours_worked) ภายใน transaction เดียวกันกับการ set status='completed' (atomic — ห้าม split)
+- ❌ ห้ามให้ `compute_proration()` คิดเงินเพิ่มเมื่อ guard ทำเกินเวลา — ต้อง clamp `actual_hours = MIN(raw, booked_hours)` เสมอ; overtime ไม่ auto-charge — customer ต้อง opt-in ผ่าน tip endpoint
+- ❌ ห้ามให้ `prorate_payment_in_tx()` fail แล้วทำให้ completion approval rollback ทั้งหมดเมื่อไม่มี payment row — ต้อง silent no-op (return Ok) ถ้า payment row หาย เพื่อ tolerant กับ legacy data
+- ❌ ห้าม `add_tip()` accept assignment ที่ status ≠ `completed` — ต้อง reject เพื่อบังคับให้ customer เห็น cost summary ก่อน (กันทิปก่อนงานจบ)
+- ❌ ห้าม `add_tip()` accept tip ≤ 0 — ต้อง `BadRequest`
+- ❌ ห้าม `add_tip()` overwrite ค่า `tip_amount` เดิม — ต้อง `UPDATE payments SET tip_amount = tip_amount + $2` (accumulate) เพื่อรองรับ multiple tips
+- ❌ ห้ามให้ `get_cost_summary()` return ข้อมูลของ assignment ที่ user ไม่เกี่ยวข้อง — ต้องตรวจ admin / customer (owner) / guard (assigned) ก่อนเสมอ (IDOR prevention)
+- ❌ ห้าม mobile `_handleApprove()` ใน `CustomerActiveJobScreen` `pushReplacement` ตรงไป `ReviewRatingScreen` — ต้องผ่าน `JobCompletionSummaryScreen` ก่อนเสมอ เพื่อให้ลูกค้าเห็นค่าใช้จ่ายสุทธิ (รวมกรณี prorate) ก่อนรีวิว
+- ❌ ห้าม `JobCompletionSummaryScreen` ไม่มี `PopScope(canPop: false)` — ลูกค้าต้องไม่สามารถ swipe-back ข้าม cost summary ไปได้
+- ❌ ห้ามแสดง refund amount โดยไม่บอกว่าจะได้คืนยังไง — ต้องมี note ระบุว่า "ยอดคืนเงินจะถูกดำเนินการโดยทีมแอดมินภายหลัง" (refund_amount เป็น ledger only ไม่มี gateway integration)
+- ❌ ห้าม mobile fetch tip/cost summary ผ่าน raw `Dio` — ต้องผ่าน `BookingService.getCostSummary()` / `addTip()` ที่ parse `response.data['data']` (ApiResponse wrapper)
 - ❌ ห้าม `submit_review()` สำเร็จโดยไม่ส่ง notification ให้ guard — ต้อง trigger "คะแนนรีวิวใหม่" notification
 - ❌ ห้ามใช้ placeholder ratings ใน `list_available_guards()` — ต้อง JOIN `reviews.guard_reviews` ด้วย `AVG(overall_rating)` + `COUNT(*)` สำหรับ real ratings
 
@@ -1325,7 +1402,29 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม fire-and-forget `fetchProfile()` ใน `PinLockScreen._navigateToApp()` สำหรับ authenticated users — ต้อง `await` (with timeout 5s) เพื่อให้ `customerApprovalStatus` พร้อมก่อน routing
 - ❌ ห้ามใช้ `AuthService.isRegistered('guard')` เพื่อตรวจสอบว่าควรแสดง Dashboard — ใช้ `context.watch<AuthProvider>().isAuthenticated` แทน (SharedPreferences key อาจไม่ถูก set ในทุก flow)
 - ❌ ห้ามใช้ hardcoded mock data ใน Dashboard screens (ชื่อ, avatar, รหัส) — ใช้ `AuthProvider.fullName`, `AuthProvider.phone`, `AuthProvider.avatarUrl` จาก `GET /auth/me`
-- ❌ ห้าม login ด้วย email-based endpoint จาก mobile — ใช้ `POST /auth/login/phone` (phone + PIN hash) เท่านั้น
+- ❌ ห้าม login จาก mobile ผ่าน `POST /auth/login/phone` (web endpoint, ไม่ส่ง token ใน body) — mobile ต้องใช้ **`POST /auth/login/mobile`** เท่านั้น (commit 016cd6f)
+- ❌ ห้ามให้ mobile interceptor refresh token ผ่าน `/auth/refresh` (web endpoint) — ต้องใช้ **`/auth/refresh/mobile`** เท่านั้น (commit 05ad21f)
+- ❌ ห้าม trust `X-Client-Type` header เพื่อสลับ web/mobile token delivery — XSS spoof ได้ → token leak; ใช้ endpoint แยก (`/login/phone` vs `/login/mobile`) เสมอ
+- ❌ ห้าม `/login/phone` (web) return tokens ใน response body — ต้องออกใน httpOnly cookies เท่านั้น
+- ❌ ห้ามตั้ง `JWT_EXPIRY_HOURS` — env var deprecated แล้ว ต้องใช้ `JWT_EXPIRY_MINUTES` (default 15, OWASP recommendation)
+- ❌ ห้ามตั้ง `JWT_EXPIRY_MINUTES` > 30 ใน production — เกิน OWASP recommendation; access token blocklist เป็น per-token revoke เท่านั้น (ไม่มี forced revoke ทั้ง user) → window ที่ stolen token ใช้งานได้ต้องสั้น
+- ❌ ห้ามใช้ JWT โดยไม่มี `aud = "guard-dispatch"` claim — `Validation` ต้อง `validate_aud = true` (commit 016cd6f)
+- ❌ ห้ามให้ logout เป็น all-sessions — ต้อง DELETE เฉพาะ refresh_token ที่ส่งมา + เพิ่ม access token `jti` ลง `revoked_jti:{jti}` Redis blocklist
+- ❌ ห้าม `AuthUser` extractor trust JWT โดยไม่ตรวจ Redis blocklist — ทุก request ต้อง check `revoked_jti:{jti}` ก่อน accept
+- ❌ ห้าม mount Swagger UI โดยไม่ตรวจ `ENABLE_SWAGGER` env var — production ต้องไม่ตั้ง var นี้ (404 บน `/swagger-ui` + `/api-docs`)
+- ❌ ห้าม `/profile/reissue` accept approved users — ต้อง reject เพื่อป้องกัน profile hijacking; approved user ต้อง re-OTP + login ก่อนแก้ profile
+- ❌ ห้าม web `/refresh` หรือ mobile `/refresh/mobile` ใช้ `Json<RefreshRequest>` extractor — ต้องใช้ raw `String` body + parse manually (`Option<Json<T>>` ก็ไม่พอ เพราะ frontend ส่ง empty body พร้อม `Content-Type: application/json` → EOF error). ต้อง tolerate empty body แล้ว fallback ไป cookie
+- ❌ ห้าม `set_online()` แตะ `recorded_at` — flip `is_online` เท่านั้น (commit 1a8e56c) — ป้องกัน guard ที่ไม่มี real GPS แต่ค้างเขียวบน admin map
+- ❌ ห้าม Pong handler เรียก `set_online()` หรือแตะ `recorded_at` — Pong เป็น keep-alive อย่างเดียว (commit dd2d223)
+- ❌ ห้าม heartbeat unlimited — ต้อง rate limit max 1/10s per connection (CPU DoS) + heartbeat skip ต้องอยู่ก่อน GPS rate limit check (ห้ามกิน 1/sec slot)
+- ❌ ห้าม mobile `_handleAck()` set `_serverConfirmed` โดยไม่ตรวจ `ack['recorded_at']` non-null — ป้องกัน trivial ACK injection
+- ❌ ห้ามส่ง GPS field ที่เป็น `NaN`/`Infinite`/out-of-range จาก mobile — ต้อง sanitize → `null` ก่อนส่ง (iOS CLLocation `-1` → drop ทุก update เงียบ ๆ)
+- ❌ ห้าม mobile reconnect แบบ bounded retries — ต้อง unbounded exponential backoff capped 60s (commit cdf472b); 5 retries / 30s ทำให้ user ต้อง toggle off/on
+- ❌ ห้าม `_connectWebSocket()` schedule reconnect โดยไม่ลอง refresh token หนึ่งครั้งก่อน — ป้องกัน infinite reconnect loop เมื่อ access token หมดอายุ (commit a2f4c33)
+- ❌ ห้ามใช้ status `"alert"` หรือสีเทา (gray) ใน DisplayGuard type / map filters / mobile guard tab — มีแค่ 3 statuses: 🟢 active / 🟡 idle / 🔴 offline (commit 21e1ff7)
+- ❌ ห้ามใช้ hardcoded mock data ใน `/reviews` page — ต้องโหลดผ่าน `reviewsApi.list()` (admin-only API). Stats cards ใช้ `stats` field ที่ backend คำนวณ unfiltered (whole dataset) — ห้ามคำนวณจาก filtered list
+- ❌ ห้าม visibility toggle ใน `/reviews` page เป็น non-optimistic — ต้อง flip local state ก่อน, call API background, rollback ถ้า fail
+- ❌ ห้าม query public guard discovery โดยไม่ filter `reviews.guard_reviews.is_visible = true` — admin hide แล้ว ต้องไม่โผล่ใน guard listing
 - ❌ ห้าม start GPS stream ก่อน WebSocket connected — `_startGpsStream()` เรียกเฉพาะเมื่อ `_isConnected == true`
 - ❌ ห้ามสร้าง WS listener ใหม่โดยไม่ cancel อันเก่า — `_connectWebSocket()` ต้อง `await _wsSub?.cancel()` ก่อนเสมอ (ป้องกัน orphaned subscriptions)
 - ❌ ห้ามใช้ local state (`_isReady`) สำหรับ guard online toggle — ใช้ `context.watch<TrackingProvider>().isOnline` เท่านั้น

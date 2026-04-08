@@ -51,8 +51,16 @@ class _AuthInterceptor extends Interceptor {
     RequestInterceptorHandler handler,
   ) async {
     // Skip auth header for public endpoints and profile-token endpoints
-    // (profile/guard and profile/customer use their own Bearer profile_token)
-    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/login/mobile', '/auth/check-status', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/role', '/auth/profile/guard', '/auth/profile/customer', '/auth/refresh/mobile'];
+    // (profile/guard and profile/customer use their own Bearer profile_token).
+    //
+    // Note: /auth/profile/role is intentionally NOT in this list — its
+    // backend handler does optional auth: if a Bearer access_token is
+    // present, it skips the phone_verified_token requirement. This lets
+    // approved guards add a customer profile without re-doing OTP.
+    // Unauthenticated callers (during 3-step registration) have no stored
+    // access token, so the `if (token != null)` check below skips the
+    // header for them and they fall through to the body's phone_verified_token.
+    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/login/mobile', '/auth/check-status', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/guard', '/auth/profile/customer', '/auth/refresh/mobile'];
     final isPublic = publicPaths.any((p) => options.path.contains(p));
 
     if (!isPublic) {

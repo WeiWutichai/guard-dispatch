@@ -361,6 +361,19 @@ class AuthProvider extends ChangeNotifier {
     _role = role;
     notifyListeners();
 
+    // Backend (security-reviewer MEDIUM fix) re-issues a fresh single-use
+    // phone_verified_token here so the next step (POST /profile/role) can
+    // prove phone ownership. Persist it to secure storage so updateRole()
+    // can pick it up — fall back gracefully if the field is missing
+    // (older backend that hasn't been deployed yet).
+    final renewedToken = response.data['data']?['phone_verified_token'];
+    if (renewedToken is String && renewedToken.isNotEmpty) {
+      final phoneFromCaller = (await AuthService.getPhoneVerifiedData()).$1;
+      if (phoneFromCaller != null) {
+        await AuthService.storePhoneVerifiedData(phoneFromCaller, renewedToken);
+      }
+    }
+
     // Return the profile_token for guard registrations (null for other roles).
     final raw = response.data['data']?['profile_token'];
     return raw is String ? raw : null;
@@ -385,13 +398,40 @@ class AuthProvider extends ChangeNotifier {
     return token;
   }
 
-  /// Set the role of a pending user (step 2 of 3-step registration).
-  /// Calls POST /auth/profile/role with phone + role.
-  /// Returns profile_token for guard role (null for customer).
+  /// Set the role of a pending user (step 2 of 3-step registration) OR
+  /// add a new profile to an already-authenticated user (e.g. approved guard
+  /// adding a customer profile).
+  ///
+  /// Two auth modes — picked automatically based on `_status`:
+  /// 1. **Authenticated**: ApiClient interceptor adds the Bearer access_token
+  ///    header automatically; backend verifies it matches the phone-lookup
+  ///    user. No `phone_verified_token` needed.
+  /// 2. **Unauthenticated** (3-step OTP registration): reads the
+  ///    `phone_verified_token` from secure storage (saved by the previous
+  ///    `registerWithOtp()` call) and sends it in the body. Backend validates
+  ///    it via decode + GETDEL.
+  ///
+  /// Returns profile_token for both guard and customer.
+  /// (security-reviewer HIGH regression fix)
   Future<String?> updateRole(String phone, String role) async {
+    final data = <String, dynamic>{'phone': phone, 'role': role};
+
+    if (_status != AuthStatus.authenticated) {
+      // Unauthenticated path — must include phone_verified_token from storage.
+      final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
+      if (phoneVerifiedToken == null || phoneVerifiedToken.isEmpty) {
+        throw Exception(
+          'Missing phone verification token. Please verify your phone number again.',
+        );
+      }
+      data['phone_verified_token'] = phoneVerifiedToken;
+    }
+    // Authenticated path — Dio interceptor attaches Bearer header automatically;
+    // backend's optional auth extractor in `update_role` will pick it up.
+
     final response = await _apiClient.dio.post(
       '/auth/profile/role',
-      data: {'phone': phone, 'role': role},
+      data: data,
     );
 
     // DON'T set pending_role here — wait until profile is actually submitted.

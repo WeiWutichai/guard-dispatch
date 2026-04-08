@@ -130,12 +130,15 @@ impl JwtConfig {
         let decoding_key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
         Ok(Self {
             secret,
-            // Default 60 min — short enough to limit theft window, long enough
-            // to survive WebSocket reconnect cycles. Production should lower
-            // to 15-30 min once mobile WS reconnect logic refreshes tokens.
+            // Default 15 min (OWASP recommendation for high-sensitivity contexts).
+            // Lowered from 60 → 15 (security-reviewer HIGH/MEDIUM finding) now that:
+            //   - Mobile interceptor handles 401 → POST /auth/refresh/mobile → retry
+            //   - WS reconnect tries refresh once before scheduling reconnect (a2f4c33)
+            // Combined with the logout blocklist, this caps any stolen token's
+            // exploitation window at 15 min instead of 60.
             expiry_minutes: optional_env("JWT_EXPIRY_MINUTES")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(60),
+                .unwrap_or(15),
             encoding_key,
             decoding_key,
         })

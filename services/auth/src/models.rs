@@ -249,6 +249,14 @@ pub struct RegisterWithOtpResponse {
     /// Short-lived JWT for guard profile submission only (guard role only, 15 min TTL).
     /// Null for non-guard registrations.
     pub profile_token: Option<String>,
+    /// Re-issued phone-verified token (single-use, ~10 min TTL) that the mobile
+    /// client must pass to `POST /profile/role` as proof of phone ownership.
+    /// The original phone_verify_token from `/otp/verify` was just consumed by
+    /// this registration call, so the client needs a fresh one for the next step
+    /// of the 3-step registration flow. Without this, an attacker who knows a
+    /// registered phone number could call `/profile/role` and overwrite a
+    /// pending user's profile data. (security-reviewer MEDIUM)
+    pub phone_verified_token: String,
 }
 
 // =============================================================================
@@ -305,12 +313,25 @@ pub struct ReissueProfileTokenResponse {
 // Update Role DTOs (step 2 of 3-step registration)
 // =============================================================================
 
-/// Request to set the role of a pending user (registered with role=null).
-/// Public endpoint — user identified by phone (no JWT, they have no tokens yet).
+/// Request to set the role of a pending user OR to add a profile to an
+/// already-authenticated user (e.g. approved guard adding a customer profile).
+///
+/// **Two auth paths:**
+/// 1. **OTP path** (3-step registration, no tokens yet): `phone_verified_token`
+///    is required and must match the requested phone — single-use, GETDEL'd.
+/// 2. **Authenticated path** (approved user adding a new role): omit
+///    `phone_verified_token`. The handler verifies a valid `Authorization:
+///    Bearer <access_token>` is present and that its `sub` matches the user
+///    looked up by phone. This avoids forcing approved guards to re-do OTP
+///    when they want to use the hirer side of the app.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateRoleRequest {
     pub phone: String,
     pub role: UserRole,
+    /// Re-issued single-use phone-verified token from `POST /register/otp`.
+    /// Omit when calling as an authenticated user (Bearer token in headers).
+    #[serde(default)]
+    pub phone_verified_token: Option<String>,
 }
 
 /// Response after successfully setting a user's role.
