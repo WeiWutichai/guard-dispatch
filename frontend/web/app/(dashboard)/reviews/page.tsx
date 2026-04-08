@@ -38,8 +38,14 @@ interface Review {
   guardName: string;
   guardId: string;
   rating: number;
+  ratingExact: number;
+  punctuality: number | null;
+  professionalism: number | null;
+  communication: number | null;
+  appearance: number | null;
   comment: string;
   date: string;
+  createdAt: string;
   status: ReviewStatus;
   area?: string;
 }
@@ -51,8 +57,14 @@ function toReview(item: AdminReviewItem): Review {
     guardName: item.guard_name ?? "-",
     guardId: item.guard_id,
     rating: Math.round(item.overall_rating),
+    ratingExact: item.overall_rating,
+    punctuality: item.punctuality,
+    professionalism: item.professionalism,
+    communication: item.communication,
+    appearance: item.appearance,
     comment: item.review_text ?? "",
     date: item.created_at.slice(0, 10),
+    createdAt: item.created_at,
     status: item.is_visible ? "shown" : "hidden",
     area: item.address ?? undefined,
   };
@@ -125,6 +137,7 @@ export default function ReviewsPage() {
   // Modal states
   const [warningModalOpen, setWarningModalOpen] = useState(false);
   const [badgeModalOpen, setBadgeModalOpen] = useState(false);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [selectedReview, setSelectedReview] = useState<Review | null>(null);
   const [warningMessage, setWarningMessage] = useState("");
   const [selectedBadge, setSelectedBadge] = useState<string | null>(null);
@@ -179,6 +192,12 @@ export default function ReviewsPage() {
     setStatusFilter("ทั้งหมด");
     setGuardFilter("ทั้งหมด");
     setAreaFilter("ทั้งหมด");
+  };
+
+  const handleOpenDetailModal = (review: Review) => {
+    setSelectedReview(review);
+    setDetailModalOpen(true);
+    setOpenDropdownId(null);
   };
 
   const handleOpenWarningModal = (review: Review) => {
@@ -488,7 +507,11 @@ export default function ReviewsPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredReviews.map((review) => (
-                <tr key={review.id} className="hover:bg-slate-50/50 transition-colors">
+                <tr
+                  key={review.id}
+                  onClick={() => handleOpenDetailModal(review)}
+                  className="hover:bg-slate-50/50 transition-colors cursor-pointer"
+                >
                   <td className="py-4 px-5">
                     <p className="font-medium text-slate-900">{review.customerName}</p>
                   </td>
@@ -500,7 +523,7 @@ export default function ReviewsPage() {
                   </td>
                   <td className="py-4 px-5">
                     <p className="text-sm text-slate-600 max-w-xs truncate" title={review.comment}>
-                      {review.comment}
+                      {review.comment || (locale === "th" ? "(ไม่มีความเห็น)" : "(no comment)")}
                     </p>
                   </td>
                   <td className="py-4 px-5">
@@ -526,7 +549,10 @@ export default function ReviewsPage() {
                       )}
                     </span>
                   </td>
-                  <td className="py-4 px-5 text-right relative">
+                  <td
+                    className="py-4 px-5 text-right relative"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <button
                       onClick={() => setOpenDropdownId(openDropdownId === review.id ? null : review.id)}
                       className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
@@ -536,6 +562,14 @@ export default function ReviewsPage() {
 
                     {openDropdownId === review.id && (
                       <div className="absolute right-5 top-full mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-xl py-2 z-50">
+                        <button
+                          onClick={() => handleOpenDetailModal(review)}
+                          className="w-full px-4 py-2.5 text-sm text-left text-slate-700 hover:bg-slate-50 flex items-center gap-3"
+                        >
+                          <Eye className="h-4 w-4 text-primary" />
+                          {locale === "th" ? "ดูรายละเอียด" : "View details"}
+                        </button>
+                        <div className="my-1 border-t border-slate-100" />
                         <button
                           onClick={() => handleToggleStatus(review.id)}
                           className="w-full px-4 py-2.5 text-sm text-left text-slate-700 hover:bg-slate-50 flex items-center gap-3"
@@ -593,6 +627,247 @@ export default function ReviewsPage() {
           </div>
         )}
       </div>
+
+      {/* Detail Modal */}
+      {detailModalOpen && selectedReview && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in"
+          onClick={() => {
+            setDetailModalOpen(false);
+            setSelectedReview(null);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-primary/10 rounded-xl">
+                  <Star className="h-5 w-5 text-primary fill-primary" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">
+                    {locale === "th" ? "รายละเอียดรีวิว" : "Review Details"}
+                  </h2>
+                  <p className="text-sm text-slate-500">
+                    {new Date(selectedReview.createdAt).toLocaleString(
+                      locale === "th" ? "th-TH" : "en-US",
+                      { dateStyle: "long", timeStyle: "short" }
+                    )}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setDetailModalOpen(false);
+                  setSelectedReview(null);
+                }}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-5 max-h-[70vh] overflow-y-auto">
+              {/* Customer + Guard */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-slate-50 rounded-xl p-4">
+                  <p className="text-xs font-medium text-slate-500 mb-1">
+                    {locale === "th" ? "ลูกค้า" : "Customer"}
+                  </p>
+                  <p className="font-semibold text-slate-900">
+                    {selectedReview.customerName}
+                  </p>
+                </div>
+                <div className="bg-emerald-50 rounded-xl p-4">
+                  <p className="text-xs font-medium text-emerald-600 mb-1">
+                    {locale === "th" ? "เจ้าหน้าที่" : "Guard"}
+                  </p>
+                  <p className="font-semibold text-emerald-900">
+                    {selectedReview.guardName}
+                  </p>
+                </div>
+              </div>
+
+              {/* Overall rating */}
+              <div className="bg-gradient-to-br from-amber-50 to-white rounded-xl p-4 border border-amber-100">
+                <p className="text-xs font-medium text-amber-600 mb-2">
+                  {locale === "th" ? "คะแนนรวม" : "Overall Rating"}
+                </p>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-0.5">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Star
+                        key={star}
+                        className={cn(
+                          "h-6 w-6",
+                          star <= Math.round(selectedReview.ratingExact)
+                            ? "text-amber-400 fill-amber-400"
+                            : "text-slate-200"
+                        )}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-2xl font-bold text-amber-700">
+                    {selectedReview.ratingExact.toFixed(1)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Category ratings */}
+              {(selectedReview.punctuality !== null ||
+                selectedReview.professionalism !== null ||
+                selectedReview.communication !== null ||
+                selectedReview.appearance !== null) && (
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 mb-3">
+                    {locale === "th" ? "คะแนนรายด้าน" : "Category Ratings"}
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      {
+                        label: locale === "th" ? "ตรงต่อเวลา" : "Punctuality",
+                        value: selectedReview.punctuality,
+                      },
+                      {
+                        label: locale === "th" ? "ความเป็นมืออาชีพ" : "Professionalism",
+                        value: selectedReview.professionalism,
+                      },
+                      {
+                        label: locale === "th" ? "การสื่อสาร" : "Communication",
+                        value: selectedReview.communication,
+                      },
+                      {
+                        label: locale === "th" ? "การแต่งกาย" : "Appearance",
+                        value: selectedReview.appearance,
+                      },
+                    ].map((cat) => (
+                      <div
+                        key={cat.label}
+                        className="bg-slate-50 rounded-xl p-3 flex items-center justify-between"
+                      >
+                        <span className="text-sm text-slate-600">{cat.label}</span>
+                        {cat.value !== null ? (
+                          <div className="flex items-center gap-1">
+                            <Star className="h-3.5 w-3.5 text-amber-400 fill-amber-400" />
+                            <span className="text-sm font-semibold text-slate-900">
+                              {cat.value.toFixed(1)}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-400">
+                            {locale === "th" ? "ไม่ได้ให้คะแนน" : "Not rated"}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Comment */}
+              <div>
+                <p className="text-sm font-semibold text-slate-700 mb-2">
+                  {locale === "th" ? "ความเห็นจากลูกค้า" : "Customer Comment"}
+                </p>
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                  {selectedReview.comment ? (
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                      {selectedReview.comment}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-slate-400 italic">
+                      {locale === "th" ? "ลูกค้าไม่ได้แสดงความเห็น" : "No comment provided"}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Address (if available) */}
+              {selectedReview.area && (
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 mb-2">
+                    {locale === "th" ? "สถานที่ปฏิบัติงาน" : "Job Location"}
+                  </p>
+                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                    <p className="text-sm text-slate-700">{selectedReview.area}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Visibility status */}
+              <div className="flex items-center justify-between bg-slate-50 rounded-xl p-4">
+                <span className="text-sm font-medium text-slate-700">
+                  {locale === "th" ? "สถานะการแสดงผล" : "Display Status"}
+                </span>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold",
+                    selectedReview.status === "shown"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-slate-200 text-slate-600"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "w-1.5 h-1.5 rounded-full",
+                      selectedReview.status === "shown" ? "bg-emerald-500" : "bg-slate-400"
+                    )}
+                  />
+                  {selectedReview.status === "shown"
+                    ? locale === "th"
+                      ? "แสดงต่อสาธารณะ"
+                      : "Visible publicly"
+                    : locale === "th"
+                      ? "ซ่อนจากสาธารณะ"
+                      : "Hidden from public"}
+                </span>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 p-5 border-t border-slate-200">
+              <button
+                onClick={() => {
+                  const r = selectedReview;
+                  setDetailModalOpen(false);
+                  handleToggleStatus(r.id);
+                }}
+                className={cn(
+                  "flex-1 px-4 py-2.5 text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-2",
+                  selectedReview.status === "shown"
+                    ? "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                )}
+              >
+                {selectedReview.status === "shown" ? (
+                  <>
+                    <EyeOff className="h-4 w-4" />
+                    {locale === "th" ? "ซ่อนรีวิวนี้" : "Hide review"}
+                  </>
+                ) : (
+                  <>
+                    <Eye className="h-4 w-4" />
+                    {locale === "th" ? "แสดงรีวิวนี้" : "Show review"}
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setDetailModalOpen(false);
+                  setSelectedReview(null);
+                }}
+                className="px-6 py-2.5 text-sm font-medium text-white bg-primary rounded-xl hover:bg-emerald-600 transition-colors"
+              >
+                {locale === "th" ? "ปิด" : "Close"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Warning Modal */}
       {warningModalOpen && selectedReview && (
