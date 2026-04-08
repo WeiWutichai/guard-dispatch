@@ -1,0 +1,78 @@
+# =============================================================================
+# Security Guard Dispatch System — STAGING Overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --build
+#
+# Differences from dev (docker-compose.yml):
+#   - nginx uses nginx.prod.conf (HTTPS + HSTS + server_name bound)
+#   - Let's Encrypt certs mounted read-only at /etc/letsencrypt
+#   - Webroot for cert renewal mounted at /var/www/certbot
+#   - MediaSoup ANNOUNCED_IP set to VPS public IP (required for WebRTC ICE)
+#   - All services have restart: always
+#   - MinIO kept enabled (staging still uses local object storage)
+#   - Postgres/Redis/MinIO host ports removed (no public exposure)
+#
+# Production will eventually use docker-compose.prod.yml instead with
+# Cloudflare R2 + pre-built images from a registry.
+# =============================================================================
+
+services:
+
+  nginx-gateway:
+    restart: always
+    volumes:
+      # Mount the production nginx config (NOT the dev one)
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      # Let's Encrypt live + archive directories (read-only)
+      # nginx.prod.conf references /etc/letsencrypt/live/pguard.innoveraappcenter.com/
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # ACME webroot for future certbot renewals (if we switch from standalone)
+      - /var/www/certbot:/var/www/certbot:ro
+
+  web-admin:
+    restart: always
+
+  rust-auth:
+    restart: always
+
+  rust-booking:
+    restart: always
+
+  rust-tracking:
+    restart: always
+
+  rust-notification:
+    restart: always
+
+  rust-chat:
+    restart: always
+
+  mediasoup-server:
+    restart: always
+    environment:
+      # Required for WebRTC ICE to advertise the correct public IP.
+      # Without this, mobile clients can't connect to the media server
+      # because they'd try to reach the Docker internal IP.
+      MEDIASOUP_ANNOUNCED_IP: ${MEDIASOUP_ANNOUNCED_IP}
+      MEDIASOUP_LISTEN_IP: ${MEDIASOUP_LISTEN_IP:-0.0.0.0}
+      MEDIASOUP_RTC_MIN_PORT: ${MEDIASOUP_RTC_MIN_PORT:-40000}
+      MEDIASOUP_RTC_MAX_PORT: ${MEDIASOUP_RTC_MAX_PORT:-40499}
+      NODE_ENV: ${NODE_ENV:-production}
+
+  postgres-db:
+    restart: always
+    # Remove any host port exposure — internal network only
+    ports: !reset []
+
+  redis-cache:
+    restart: always
+    ports: !reset []
+
+  redis-pubsub:
+    restart: always
+    ports: !reset []
+
+  minio:
+    restart: always
+    # Keep MinIO enabled for staging. Remove host port exposure — access via
+    # /minio-files/ proxy on nginx instead.
+    ports: !reset []
