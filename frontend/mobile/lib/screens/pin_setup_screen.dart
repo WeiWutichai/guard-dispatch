@@ -104,6 +104,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
         await authProvider.registerWithOtp(
           phoneVerifiedToken: widget.phoneVerifiedToken!,
           password: pinHash,
+          phone: widget.phone,
         );
         // Store phone for post-approval login (loginWithPhone needs it).
         if (widget.phone != null) {

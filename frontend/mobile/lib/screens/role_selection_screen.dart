@@ -29,7 +29,23 @@ class RoleSelectionScreen extends StatefulWidget {
 }
 
 class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
+  // Guard against double-tap / rapid re-taps while an updateRole call is
+  // in flight. phone_verified_token is single-use — every retry would
+  // fail with "Verification token expired or already used".
+  bool _isNavigating = false;
+
   Future<void> _onRoleTap(String role, Widget dashboard) async {
+    if (_isNavigating) return;
+    setState(() => _isNavigating = true);
+
+    try {
+      await _onRoleTapInner(role, dashboard);
+    } finally {
+      if (mounted) setState(() => _isNavigating = false);
+    }
+  }
+
+  Future<void> _onRoleTapInner(String role, Widget dashboard) async {
     final auth = context.read<AuthProvider>();
 
     // Resolve phone FIRST — needed for all subsequent operations.
@@ -87,14 +103,11 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       return;
     }
 
-    // Check if already registered (approved) → go to dashboard directly.
-    final isRegistered = await AuthService.isRegistered(role);
-    if (!mounted) return;
-
-    if (isRegistered) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => dashboard));
-      return;
-    }
+    // NOTE: removed `AuthService.isRegistered(role)` check — `markRegistered`
+    // is never called in the current 3-step OTP registration flow, so the
+    // check always returned false and the path was dead. Approved users are
+    // routed to the dashboard via the `auth.status == authenticated` branch
+    // above. (security-reviewer LOW #2)
 
     // If pending AND this specific role's profile was already submitted → pending screen.
     final hasSubmitted = await AuthService.hasSubmittedRole(role);
@@ -128,9 +141,11 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       try {
         final authProvider = context.read<AuthProvider>();
         if (pendingRole == 'guard') {
-          // Role already set but token expired — re-verify via OTP
+          // Role already set but token expired — re-verify via OTP.
+          // pushReplacement so RoleSelection isn't left dangling on the
+          // stack after the user completes the new OTP cycle.
           if (!mounted) return;
-          Navigator.push(
+          Navigator.pushReplacement(
             context,
             MaterialPageRoute(
               builder: (_) => PhoneInputScreen(),
@@ -148,10 +163,31 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
           SnackBar(content: Text(message ?? 'Failed to set role')),
         );
         return;
+      } catch (e) {
+        // Non-Dio exceptions — typically "Missing phone verification token"
+        // after the token was consumed and cleared. Redirect the user to
+        // the OTP flow automatically instead of leaving them on a dead-end
+        // role screen with only a snackbar. (security-reviewer MEDIUM M3)
+        if (!mounted) return;
+        final msg = e.toString().replaceFirst('Exception: ', '');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+        if (msg.toLowerCase().contains('phone verification token') ||
+            msg.toLowerCase().contains('verify your phone')) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+          );
+        }
+        return;
       }
 
       if (!mounted) return;
-      Navigator.push(
+      // pushReplacement so the back gesture doesn't return to RoleSelection.
+      // phone_verified_token has been consumed — coming back here would
+      // always fail with "Missing phone verification token".
+      Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (_) => GuardRegistrationScreen(
@@ -171,9 +207,11 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
     try {
       final authProvider = context.read<AuthProvider>();
       if (pendingRole == 'customer') {
-        // Role already set but token expired — re-verify via OTP
+        // Role already set but token expired — re-verify via OTP.
+        // pushReplacement so RoleSelection isn't left dangling on the
+        // stack after the user completes the new OTP cycle.
         if (!mounted) return;
-        Navigator.push(
+        Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (_) => PhoneInputScreen(),
@@ -190,6 +228,22 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message ?? 'Failed to set role')),
       );
+      return;
+    } catch (e) {
+      // Non-Dio exceptions — typically "Missing phone verification token".
+      // Redirect to OTP flow automatically. (security-reviewer MEDIUM M3)
+      if (!mounted) return;
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+      if (msg.toLowerCase().contains('phone verification token') ||
+          msg.toLowerCase().contains('verify your phone')) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+        );
+      }
       return;
     }
 

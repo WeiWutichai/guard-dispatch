@@ -366,7 +366,13 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
     final isThai = LanguageProvider.of(context).isThai;
     final s = GuardRegistrationStrings(isThai: isThai);
 
-    return Scaffold(
+    // Block system back gesture — if the user swipes back after reaching
+    // this screen the phone_verified_token has already been consumed, so
+    // returning to RoleSelectionScreen would strand them on a dead screen.
+    // They must either submit the profile or kill the app.
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
@@ -447,6 +453,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

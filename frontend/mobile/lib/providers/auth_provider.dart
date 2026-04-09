@@ -118,14 +118,16 @@ class AuthProvider extends ChangeNotifier {
       final stillHasToken = await AuthService.getAccessToken();
       if (stillHasToken == null) {
         // Tokens were cleared by interceptor (401 + refresh failure) — truly unauthenticated
-        debugPrint('[AuthProvider] tokens cleared after fetchProfile, falling back to unauthenticated');
+        if (kDebugMode) {
+          debugPrint('[AuthProvider] tokens cleared after fetchProfile, falling back to unauthenticated');
+        }
         _status = AuthStatus.unauthenticated;
         notifyListeners();
         return;
       }
       // Tokens still valid — user is authenticated even if profile fetch failed
       // (e.g. network timeout, backend down). Profile data will load on next app open.
-      if (!profileOk) {
+      if (!profileOk && kDebugMode) {
         debugPrint('[AuthProvider] fetchProfile failed but tokens still valid, treating as authenticated');
       }
       _status = AuthStatus.authenticated;
@@ -143,7 +145,9 @@ class AuthProvider extends ChangeNotifier {
           iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
         );
         final pinHash = await secureStorage.read(key: 'pin_hash');
-        debugPrint('[AuthProvider] checkAuth: phone=$phone, hasPinHash=${pinHash != null}');
+        if (kDebugMode) {
+          debugPrint('[AuthProvider] checkAuth: hasPhone=true hasPinHash=${pinHash != null}');
+        }
 
         if (pinHash != null) {
           // Single API call: check-status first, then login only if approved.
@@ -158,7 +162,9 @@ class AuthProvider extends ChangeNotifier {
               final dbRole = data['role'] as String?;
               final hasGuardProfile = data['has_guard_profile'] == true;
               final hasCustomerProfile = data['has_customer_profile'] == true;
-              debugPrint('[AuthProvider] check-status: role=$dbRole guard=$hasGuardProfile customer=$hasCustomerProfile');
+              if (kDebugMode) {
+                debugPrint('[AuthProvider] check-status: role=$dbRole guard=$hasGuardProfile customer=$hasCustomerProfile');
+              }
 
               final approvalStatus = data['approval_status'] as String?;
 
@@ -188,7 +194,9 @@ class AuthProvider extends ChangeNotifier {
               return;
             }
           } catch (e) {
-            debugPrint('[AuthProvider] check-status error: $e');
+            if (kDebugMode) {
+              debugPrint('[AuthProvider] check-status error: $e');
+            }
           }
 
           // check-status failed (network) — fallback to local state
@@ -201,7 +209,9 @@ class AuthProvider extends ChangeNotifier {
           }
         }
       } catch (e) {
-        debugPrint('[AuthProvider] checkAuth error: $e');
+        if (kDebugMode) {
+          debugPrint('[AuthProvider] checkAuth error: $e');
+        }
         // Fallback to local pending state
         if (await AuthService.isPendingApproval()) {
           _status = AuthStatus.pendingApproval;
@@ -227,10 +237,14 @@ class AuthProvider extends ChangeNotifier {
   Future<bool> fetchProfile() async {
     try {
       final response = await _apiClient.dio.get('/auth/me');
-      debugPrint('[AuthProvider] fetchProfile response: ${response.data}');
+      if (kDebugMode) {
+        debugPrint('[AuthProvider] fetchProfile status=${response.statusCode}');
+      }
       final data = response.data['data'];
       if (data == null) {
-        debugPrint('[AuthProvider] fetchProfile: response.data["data"] is null!');
+        if (kDebugMode) {
+          debugPrint('[AuthProvider] fetchProfile: response.data["data"] is null!');
+        }
         return false;
       }
       final rawId = data['id'];
@@ -252,14 +266,20 @@ class AuthProvider extends ChangeNotifier {
       _customerApprovalStatus = data['customer_approval_status'] as String?;
       final role = data['role'] as String?;
       if (role != null) _role = role;
-      debugPrint('[AuthProvider] profile loaded: fullName=$_fullName, phone=$_phone, role=$_role, gender=$_gender, customerApproval=$_customerApprovalStatus');
+      if (kDebugMode) {
+        debugPrint('[AuthProvider] profile loaded: hasName=${_fullName != null} role=$_role customerApproval=$_customerApprovalStatus');
+      }
       notifyListeners();
       return true;
     } on DioException catch (e) {
-      debugPrint('[AuthProvider] fetchProfile DioError: ${e.response?.statusCode} ${e.response?.data} ${e.message}');
+      if (kDebugMode) {
+        debugPrint('[AuthProvider] fetchProfile DioError: status=${e.response?.statusCode}');
+      }
       return false;
     } catch (e) {
-      debugPrint('[AuthProvider] fetchProfile error: $e');
+      if (kDebugMode) {
+        debugPrint('[AuthProvider] fetchProfile error: $e');
+      }
       return false;
     }
   }
@@ -289,7 +309,9 @@ class AuthProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('[AuthProvider] fetchGuardDocs error: $e');
+      if (kDebugMode) {
+        debugPrint('[AuthProvider] fetchGuardDocs error: $e');
+      }
     }
   }
 
@@ -343,6 +365,11 @@ class AuthProvider extends ChangeNotifier {
     String? fullName,
     String? email,
     String? role,
+    /// Phone number owning this registration. Required so the renewed
+    /// `phone_verified_token` re-issued by the backend can be persisted
+    /// against a known phone even if `AuthService.getPhoneVerifiedData()`
+    /// races or returns null (code-reviewer MEDIUM fix).
+    String? phone,
   }) async {
     final data = <String, dynamic>{'phone_verified_token': phoneVerifiedToken};
     if (role != null) data['role'] = role;
@@ -367,10 +394,25 @@ class AuthProvider extends ChangeNotifier {
     // can pick it up — fall back gracefully if the field is missing
     // (older backend that hasn't been deployed yet).
     final renewedToken = response.data['data']?['phone_verified_token'];
+    if (kDebugMode) {
+      debugPrint('[registerWithOtp] renewedTokenPresent=${renewedToken is String && renewedToken.isNotEmpty}');
+    }
     if (renewedToken is String && renewedToken.isNotEmpty) {
-      final phoneFromCaller = (await AuthService.getPhoneVerifiedData()).$1;
-      if (phoneFromCaller != null) {
-        await AuthService.storePhoneVerifiedData(phoneFromCaller, renewedToken);
+      // Prefer the explicitly-passed phone (reliable) over the storage
+      // lookup (racy). Fall back to storage only if the caller didn't
+      // provide one — keeps older call sites working.
+      String? resolvedPhone = phone;
+      if (resolvedPhone == null || resolvedPhone.isEmpty) {
+        resolvedPhone = (await AuthService.getPhoneVerifiedData()).$1;
+        resolvedPhone ??= await AuthService.getStoredPhone();
+      }
+      if (resolvedPhone != null && resolvedPhone.isNotEmpty) {
+        await AuthService.storePhoneVerifiedData(resolvedPhone, renewedToken);
+        if (kDebugMode) {
+          debugPrint('[registerWithOtp] Renewed token saved');
+        }
+      } else if (kDebugMode) {
+        debugPrint('[registerWithOtp] WARNING: phone is null, cannot save renewed token!');
       }
     }
 
@@ -416,9 +458,16 @@ class AuthProvider extends ChangeNotifier {
   Future<String?> updateRole(String phone, String role) async {
     final data = <String, dynamic>{'phone': phone, 'role': role};
 
+    if (kDebugMode) {
+      debugPrint('[updateRole] START role=$role status=$_status');
+    }
+
     if (_status != AuthStatus.authenticated) {
       // Unauthenticated path — must include phone_verified_token from storage.
       final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
+      if (kDebugMode) {
+        debugPrint('[updateRole] tokenPresent=${phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty}');
+      }
       if (phoneVerifiedToken == null || phoneVerifiedToken.isEmpty) {
         throw Exception(
           'Missing phone verification token. Please verify your phone number again.',
@@ -429,19 +478,53 @@ class AuthProvider extends ChangeNotifier {
     // Authenticated path — Dio interceptor attaches Bearer header automatically;
     // backend's optional auth extractor in `update_role` will pick it up.
 
-    final response = await _apiClient.dio.post(
-      '/auth/profile/role',
-      data: data,
-    );
+    try {
+      final response = await _apiClient.dio.post(
+        '/auth/profile/role',
+        data: data,
+      );
 
-    // DON'T set pending_role here — wait until profile is actually submitted.
-    // If we set it now and user abandons the form, they'll be stuck on pending screen.
-    _role = role;
-    notifyListeners();
+      // DON'T set pending_role here — wait until profile is actually submitted.
+      // If we set it now and user abandons the form, they'll be stuck on pending screen.
+      _role = role;
+      notifyListeners();
 
-    // Return profile_token
-    final raw = response.data['data']?['profile_token'];
-    return raw is String ? raw : null;
+      // IMPORTANT: phone_verified_token is single-use — backend GETDEL'd the
+      // jti from Redis. Clear it from local storage so a retry doesn't
+      // re-send a stale token that the server will reject. The caller now
+      // holds a profile_token (returned below) which is what the next step
+      // (POST /profile/guard or /profile/customer) actually needs.
+      await AuthService.clearPhoneVerifiedData();
+      if (kDebugMode) {
+        debugPrint('[updateRole] OK — cleared consumed phone_verified_token');
+      }
+
+      // Return profile_token
+      final raw = response.data['data']?['profile_token'];
+      return raw is String ? raw : null;
+    } on DioException catch (e) {
+      // Clear the local phone_verified_token in two cases:
+      //   (1) status 400/401 — backend explicitly rejected the token
+      //       (already consumed, expired, or signature mismatch).
+      //   (2) e.response == null — network-drop / timeout / SIGTERM
+      //       while the response was in flight. The backend may have
+      //       already GETDEL'd the jti even though we never saw the 200.
+      //       The only safe assumption is that the token is stale; next
+      //       retry would hit case (1) anyway, so clear proactively to
+      //       avoid an extra confusing round-trip.
+      // 422/5xx are NOT cleared — those are either validation errors
+      // thrown before the GETDEL or transient backend issues where the
+      // token is still valid.
+      final status = e.response?.statusCode;
+      final shouldClear = status == 400 || status == 401 || e.response == null;
+      if (shouldClear) {
+        await AuthService.clearPhoneVerifiedData();
+        if (kDebugMode) {
+          debugPrint('[updateRole] FAILED status=$status hasResponse=${e.response != null} — cleared stale token');
+        }
+      }
+      rethrow;
+    }
   }
 
   /// Submit guard profile data after registration.

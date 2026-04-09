@@ -183,6 +183,7 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
           phoneVerifiedToken: widget.phoneVerifiedToken!,
           fullName: _nameController.text,
           role: 'guard',
+          phone: widget.phone,
         );
       } else {
         // Token expired — user needs to re-verify phone via OTP

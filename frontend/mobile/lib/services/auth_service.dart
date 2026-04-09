@@ -78,16 +78,35 @@ class AuthService {
     await prefs.remove(_keyRole);
   }
 
-  /// Store the user's phone number (persisted across app restarts).
+  /// Store the user's phone number (persisted across app restarts) in secure
+  /// storage. Phone numbers are PII under Thailand's PDPA; keeping them out
+  /// of SharedPreferences prevents Android Auto Backup from uploading them
+  /// to Google Drive in plaintext. (security-reviewer MEDIUM M2)
   static Future<void> storePhone(String phone) async {
+    await _secureStorage.write(key: _keyPhone, value: phone);
+    // Transparent migration: if a legacy SharedPreferences entry exists
+    // from a previous app version, delete it so the plaintext copy doesn't
+    // linger on disk / in cloud backups.
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyPhone, phone);
+    if (prefs.containsKey(_keyPhone)) {
+      await prefs.remove(_keyPhone);
+    }
   }
 
-  /// Retrieve stored phone number.
+  /// Retrieve stored phone number. Falls back to the legacy SharedPreferences
+  /// location for a single migration cycle so users upgrading don't lose it.
   static Future<String?> getStoredPhone() async {
+    final secure = await _secureStorage.read(key: _keyPhone);
+    if (secure != null) return secure;
+    // Legacy fallback — migrate on read.
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyPhone);
+    final legacy = prefs.getString(_keyPhone);
+    if (legacy != null) {
+      await _secureStorage.write(key: _keyPhone, value: legacy);
+      await prefs.remove(_keyPhone);
+      return legacy;
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -136,26 +155,45 @@ class AuthService {
   }
 
   /// Store phone + phoneVerifiedToken after OTP verification.
-  /// Used as fallback when RoleSelectionScreen doesn't receive them directly.
+  /// Both values live in secure storage — phone is PII under PDPA.
+  /// (security-reviewer MEDIUM M2)
   static Future<void> storePhoneVerifiedData(String phone, String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyVerifiedPhone, phone);
+    await _secureStorage.write(key: _keyVerifiedPhone, value: phone);
     await _secureStorage.write(key: _keyPhoneVerifiedToken, value: token);
+    // Clean up any legacy plaintext entry from older app versions.
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.containsKey(_keyVerifiedPhone)) {
+      await prefs.remove(_keyVerifiedPhone);
+    }
   }
 
-  /// Retrieve stored phone + phoneVerifiedToken.
+  /// Retrieve stored phone + phoneVerifiedToken. Migrates legacy plaintext
+  /// entries into secure storage on first read after the upgrade.
   static Future<(String?, String?)> getPhoneVerifiedData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final phone = prefs.getString(_keyVerifiedPhone);
+    String? phone = await _secureStorage.read(key: _keyVerifiedPhone);
+    if (phone == null) {
+      // Legacy fallback — migrate on read.
+      final prefs = await SharedPreferences.getInstance();
+      final legacy = prefs.getString(_keyVerifiedPhone);
+      if (legacy != null) {
+        phone = legacy;
+        await _secureStorage.write(key: _keyVerifiedPhone, value: legacy);
+        await prefs.remove(_keyVerifiedPhone);
+      }
+    }
     final token = await _secureStorage.read(key: _keyPhoneVerifiedToken);
     return (phone, token);
   }
 
   /// Clear stored phone verified data (after registration completes).
   static Future<void> clearPhoneVerifiedData() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyVerifiedPhone);
+    await _secureStorage.delete(key: _keyVerifiedPhone);
     await _secureStorage.delete(key: _keyPhoneVerifiedToken);
+    // Legacy cleanup — old builds wrote the phone to SharedPreferences.
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.containsKey(_keyVerifiedPhone)) {
+      await prefs.remove(_keyVerifiedPhone);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -207,19 +245,24 @@ class AuthService {
   static Future<void> clearAllRegistrationData() async {
     final prefs = await SharedPreferences.getInstance();
     await Future.wait([
-      // Pending approval + role
+      // Pending approval + role (SharedPreferences)
       prefs.remove(_keyPendingApproval),
       prefs.remove(_keyPendingRole),
-      // Authenticated role + phone
+      // Authenticated role (SharedPreferences — not PII)
       prefs.remove(_keyRole),
-      prefs.remove(_keyPhone),
-      // Locally saved profile summary
+      // Locally saved profile summary (SharedPreferences — masked)
       prefs.remove(_keyPendingProfileJson),
-      // Phone verified data (SharedPreferences part)
+      prefs.remove(_keyPendingProfileGuard),
+      prefs.remove(_keyPendingProfileCustomer),
+      // Legacy plaintext phone entries (from pre-M2 builds). Safe to remove
+      // unconditionally — the secure-storage version is the source of truth.
+      prefs.remove(_keyPhone),
       prefs.remove(_keyVerifiedPhone),
-      // Phone verified token (secure storage)
+      // Phone (PII) — now in secure storage
+      _secureStorage.delete(key: _keyPhone),
+      _secureStorage.delete(key: _keyVerifiedPhone),
       _secureStorage.delete(key: _keyPhoneVerifiedToken),
-      // Access / refresh tokens (likely null in pending state, clear anyway)
+      // Access / refresh tokens
       _secureStorage.delete(key: _keyAccessToken),
       _secureStorage.delete(key: _keyRefreshToken),
     ]);

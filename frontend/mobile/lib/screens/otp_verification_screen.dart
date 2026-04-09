@@ -151,9 +151,15 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
           await authProvider.registerWithOtp(
             phoneVerifiedToken: phoneVerifiedToken,
             password: storedHash,
+            phone: widget.phone,
           );
-          // New/pending user — clear OTP data, go to RoleSelection
-          await AuthService.clearPhoneVerifiedData();
+          // IMPORTANT: do NOT clearPhoneVerifiedData() here — registerWithOtp()
+          // re-issues a single-use phone_verified_token that the next step
+          // (POST /profile/role) requires to prove phone ownership. That token
+          // was just saved into secure storage by AuthProvider.registerWithOtp().
+          // Clearing it here would strand the user on RoleSelectionScreen with
+          // a "Missing phone verification token" error. Just persist the phone
+          // for the loginWithPhone() fallback; leave the renewed token alone.
           await AuthService.storePhone(widget.phone);
           if (!mounted) return;
           Navigator.pushAndRemoveUntil(
