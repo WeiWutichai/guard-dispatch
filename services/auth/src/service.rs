@@ -1430,12 +1430,21 @@ pub async fn update_user_role(
                 "Phone number does not match verified token".to_string(),
             ));
         }
-        let consumed: Option<String> = redis::cmd("GETDEL")
+        // Use GET (not GETDEL) — we want the token to remain valid until the
+        // user actually submits a profile. This lets a user who registered
+        // via OTP tap "guard" on RoleSelection, back out, and tap "customer"
+        // without going through another OTP cycle. The token's own `exp`
+        // (PHONE_VERIFY_TTL_MINUTES, default 10 min) still bounds the window,
+        // and `submit_guard_profile` / `submit_customer_profile` consume
+        // their own single-use `profile_token` (a different jti) on the
+        // actual terminal action. (UX fix — allow role re-selection
+        // before profile submission)
+        let status: Option<String> = redis::cmd("GET")
             .arg(format!("phone_verify_jti:{jti}"))
             .query_async(&mut redis.clone())
             .await
             .map_err(AppError::Redis)?;
-        if consumed.as_deref() != Some("valid") {
+        if status.as_deref() != Some("valid") {
             return Err(AppError::BadRequest(
                 "Verification token expired or already used".to_string(),
             ));

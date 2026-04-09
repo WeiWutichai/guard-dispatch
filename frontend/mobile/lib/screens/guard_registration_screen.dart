@@ -12,6 +12,7 @@ import '../providers/auth_provider.dart';
 import '../l10n/app_strings.dart';
 import 'registration_pending_screen.dart';
 import 'phone_input_screen.dart';
+import 'role_selection_screen.dart';
 
 class GuardRegistrationScreen extends StatefulWidget {
   final String phone;
@@ -484,21 +485,26 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Back button
+          // Back button — user explicitly tapped "go back"
           GestureDetector(
             onTap: () {
-              if (Navigator.canPop(context)) {
-                Navigator.pop(context);
-              } else {
-                // Edit flow uses pushAndRemoveUntil — no route to pop to.
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const RegistrationPendingScreen(role: 'guard'),
-                  ),
-                  (route) => false,
-                );
-              }
+              // IMPORTANT: do NOT navigate to RegistrationPendingScreen here.
+              // The user hasn't submitted the profile yet — routing them to
+              // "waiting for admin approval" is a lie that also strands them
+              // on a screen they can't escape.
+              //
+              // RoleSelectionScreen was pushReplaced from, so there is no
+              // route to pop to. Jump back to it with pushAndRemoveUntil so
+              // the user can pick a different role (guard ↔ customer). The
+              // profile_token they were holding is still valid server-side
+              // — RoleSelection will reissue a fresh one for the new role.
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => RoleSelectionScreen(phone: widget.phone),
+                ),
+                (route) => false,
+              );
             },
             child: Container(
               width: 36,
