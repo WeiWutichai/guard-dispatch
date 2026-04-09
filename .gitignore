@@ -123,3 +123,16 @@ logs/
 .LSOverride
 Desktop.ini
 $RECYCLE.BIN/
+
+# -----------------------------------------------------------------------------
+# Firebase per-environment config (contains API keys + bundle IDs)
+# Each env (staging / production) downloads its own from Firebase Console.
+# -----------------------------------------------------------------------------
+frontend/mobile/ios/Runner/GoogleService-Info.plist
+frontend/mobile/android/app/google-services.json
+
+# -----------------------------------------------------------------------------
+# Office lock files + build caches
+# -----------------------------------------------------------------------------
+.~lock.*#
+docs/.vitepress/cache/
