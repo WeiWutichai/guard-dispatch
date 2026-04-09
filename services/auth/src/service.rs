@@ -36,6 +36,43 @@ fn escape_ilike(s: &str) -> String {
         .replace('_', "\\_")
 }
 
+/// Register a freshly-issued access token JTI in Redis with TTL equal to the
+/// token's remaining lifetime. This closes the gap where the logout blocklist
+/// could only revoke tokens presented at logout time — without this registry
+/// there was no way to invalidate an access token that a different device
+/// issued (e.g. to force-logout every session of a user under incident
+/// response). The `AuthUser` extractor can now check `issued_jti:{jti}` to
+/// confirm the token was actually minted by us and hasn't been purged.
+///
+/// Best-effort: if Redis is unavailable the issuance still succeeds — the
+/// logout blocklist remains the primary revocation mechanism, and the token
+/// will still expire naturally. A hard error here would turn a Redis hiccup
+/// into a login failure.
+async fn register_access_jti(
+    redis: &redis::aio::MultiplexedConnection,
+    jti: &str,
+    user_id: Uuid,
+    expiry_minutes: i64,
+) {
+    let ttl_secs = (expiry_minutes * 60).max(1);
+    let key = format!("issued_jti:{jti}");
+    let mut conn = redis.clone();
+    let res: Result<(), redis::RedisError> = redis::cmd("SET")
+        .arg(&key)
+        .arg(user_id.to_string())
+        .arg("EX")
+        .arg(ttl_secs)
+        .query_async(&mut conn)
+        .await;
+    if let Err(e) = res {
+        tracing::warn!(
+            "register_access_jti: failed to persist issued jti for user {}: {}",
+            user_id,
+            e
+        );
+    }
+}
+
 use crate::models::{
     AuthResponse, GuardProfileFormData, GuardProfileResponse, GuardProfileRow, ListUsersQuery,
     LoginRequest, OtpRow, PaginatedUsers, PhoneLoginRequest, RegisterRequest,
@@ -238,12 +275,13 @@ pub async fn login(
         .as_ref()
         .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
 
-    let (access_token, _jti) = encode_jwt_with_key(
+    let (access_token, jti) = encode_jwt_with_key(
         user.id,
         &role.to_string(),
         &jwt_config.encoding_key,
         jwt_config.expiry_minutes,
     )?;
+    register_access_jti(redis, &jti, user.id, jwt_config.expiry_minutes).await;
 
     // Enforce max sessions per user — evict oldest sessions beyond limit
     sqlx::query(
@@ -429,12 +467,13 @@ pub async fn login_with_phone(
         .as_ref()
         .ok_or_else(|| AppError::Unauthorized("Invalid phone or password".to_string()))?;
 
-    let (access_token, _jti) = encode_jwt_with_key(
+    let (access_token, jti) = encode_jwt_with_key(
         user.id,
         &role.to_string(),
         &jwt_config.encoding_key,
         jwt_config.expiry_minutes,
     )?;
+    register_access_jti(redis, &jti, user.id, jwt_config.expiry_minutes).await;
 
     // Enforce max sessions per user — evict oldest sessions beyond limit
     sqlx::query(
@@ -540,12 +579,13 @@ pub async fn refresh_token(
         .as_ref()
         .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
 
-    let (access_token, _jti) = encode_jwt_with_key(
+    let (access_token, jti) = encode_jwt_with_key(
         user.id,
         &role.to_string(),
         &jwt_config.encoding_key,
         jwt_config.expiry_minutes,
     )?;
+    register_access_jti(redis, &jti, user.id, jwt_config.expiry_minutes).await;
 
     let role_str = role.to_string();
     let user_response = UserResponse::from(user);
