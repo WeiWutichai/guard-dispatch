@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -82,7 +83,9 @@ class MyApp extends StatelessWidget {
           ),
           home: Consumer<AuthProvider>(
             builder: (context, auth, _) {
-              debugPrint('[MAIN] status=${auth.status} role=${auth.role} isPinSet=${pinService.isPinSet}');
+              if (kDebugMode) {
+                debugPrint('[MAIN] status=${auth.status} role=${auth.role} isPinSet=${pinService.isPinSet}');
+              }
               // Show loading while checking stored auth state.
               if (auth.status == AuthStatus.unknown) {
                 return const Scaffold(

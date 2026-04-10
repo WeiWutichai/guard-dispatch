@@ -463,21 +463,21 @@ class AuthProvider extends ChangeNotifier {
     }
 
     if (_status != AuthStatus.authenticated) {
-      // Include phone_verified_token if available — but don't require it.
-      // Pending users (who already passed OTP + PIN during registration)
-      // can select/re-select roles without a token. The backend checks
-      // approval_status = 'pending' as sufficient proof of identity.
-      // Token is only strictly needed for edge cases where the user row
-      // doesn't exist yet (which shouldn't happen after register_with_otp).
+      // Unauthenticated path — phone_verified_token required.
+      // Pending users must re-verify OTP if their token expired. The
+      // "pending = proof of identity" shortcut was REVERTED because it
+      // allowed an attacker with just a phone number to hijack a pending
+      // user's profile (bank account, national ID, etc.).
       final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
       if (kDebugMode) {
         debugPrint('[updateRole] tokenPresent=${phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty}');
       }
-      if (phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty) {
-        data['phone_verified_token'] = phoneVerifiedToken;
+      if (phoneVerifiedToken == null || phoneVerifiedToken.isEmpty) {
+        throw Exception(
+          'กรุณายืนยันเบอร์โทรศัพท์อีกครั้ง',
+        );
       }
-      // If no token: backend will check if user is pending → allow anyway.
-      // If user is NOT pending AND no token → backend returns 400.
+      data['phone_verified_token'] = phoneVerifiedToken;
     }
     // Authenticated path — Dio interceptor attaches Bearer header automatically;
     // backend's optional auth extractor in `update_role` will pick it up.

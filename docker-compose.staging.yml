@@ -37,17 +37,15 @@ services:
       - frontend
       - backend
     build:
-      # NEXT_PUBLIC_* env vars are inlined at BUILD time by Next.js, not
-      # runtime. Build args are required. Defaults in the Dockerfile
-      # already point at the Rust service names; this block is here
-      # mostly as documentation and a future override surface.
+      # Server-only service URLs — NOT prefixed NEXT_PUBLIC_ to prevent
+      # accidental client-side exposure of internal Docker hostnames.
       args:
         NEXT_PUBLIC_BASE_PATH: /p-guard-app
-        NEXT_PUBLIC_AUTH_URL: http://rust-auth:3001
-        NEXT_PUBLIC_BOOKING_URL: http://rust-booking:3002
-        NEXT_PUBLIC_TRACKING_URL: http://rust-tracking:3003
-        NEXT_PUBLIC_NOTIFICATION_URL: http://rust-notification:3004
-        NEXT_PUBLIC_CHAT_URL: http://rust-chat:3006
+        AUTH_SERVICE_URL: http://rust-auth:3001
+        BOOKING_SERVICE_URL: http://rust-booking:3002
+        TRACKING_SERVICE_URL: http://rust-tracking:3003
+        NOTIFICATION_SERVICE_URL: http://rust-notification:3004
+        CHAT_SERVICE_URL: http://rust-chat:3006
 
   rust-auth:
     restart: always

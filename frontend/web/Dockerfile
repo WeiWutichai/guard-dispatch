@@ -30,18 +30,21 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # server-to-server calls entirely, avoiding the HTTP→HTTPS redirect loop that
 # otherwise forces the browser to try to reach `http://nginx-gateway` and fail.
 ARG NEXT_PUBLIC_BASE_PATH=/p-guard-app
-ARG NEXT_PUBLIC_AUTH_URL=http://rust-auth:3001
-ARG NEXT_PUBLIC_BOOKING_URL=http://rust-booking:3002
-ARG NEXT_PUBLIC_TRACKING_URL=http://rust-tracking:3003
-ARG NEXT_PUBLIC_NOTIFICATION_URL=http://rust-notification:3004
-ARG NEXT_PUBLIC_CHAT_URL=http://rust-chat:3006
+# Server-only service URLs — intentionally NOT prefixed with NEXT_PUBLIC_
+# to prevent accidental client-side inlining that would leak internal
+# Docker hostnames (rust-auth:3001 etc.) to the browser.
+ARG AUTH_SERVICE_URL=http://rust-auth:3001
+ARG BOOKING_SERVICE_URL=http://rust-booking:3002
+ARG TRACKING_SERVICE_URL=http://rust-tracking:3003
+ARG NOTIFICATION_SERVICE_URL=http://rust-notification:3004
+ARG CHAT_SERVICE_URL=http://rust-chat:3006
 
 ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
-ENV NEXT_PUBLIC_AUTH_URL=${NEXT_PUBLIC_AUTH_URL}
-ENV NEXT_PUBLIC_BOOKING_URL=${NEXT_PUBLIC_BOOKING_URL}
-ENV NEXT_PUBLIC_TRACKING_URL=${NEXT_PUBLIC_TRACKING_URL}
-ENV NEXT_PUBLIC_NOTIFICATION_URL=${NEXT_PUBLIC_NOTIFICATION_URL}
-ENV NEXT_PUBLIC_CHAT_URL=${NEXT_PUBLIC_CHAT_URL}
+ENV AUTH_SERVICE_URL=${AUTH_SERVICE_URL}
+ENV BOOKING_SERVICE_URL=${BOOKING_SERVICE_URL}
+ENV TRACKING_SERVICE_URL=${TRACKING_SERVICE_URL}
+ENV NOTIFICATION_SERVICE_URL=${NOTIFICATION_SERVICE_URL}
+ENV CHAT_SERVICE_URL=${CHAT_SERVICE_URL}
 
 RUN npm run build
 

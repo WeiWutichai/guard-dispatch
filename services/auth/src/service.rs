@@ -1389,29 +1389,27 @@ pub async fn update_user_role(
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, approval_status) = user.ok_or_else(|| {
+    let (user_id, _approval_status) = user.ok_or_else(|| {
         AppError::BadRequest("Unable to process request".to_string())
     })?;
 
-    // === Three authentication paths ===
+    // === Two authentication paths ===
     //
     // (a) Authenticated path: caller has a valid Bearer access_token whose
     //     `sub` matches the user looked up by phone. Handles approved guards
     //     adding a customer profile — no OTP re-verify needed.
     //
-    // (b) Pending-user path (NEW): user exists in DB with approval_status =
-    //     'pending'. They already passed OTP + PIN setup via /register/otp,
-    //     which created the user row. That proof-of-identity is permanent —
-    //     they can come back days later, open the app, and pick a role
-    //     without re-doing OTP. No phone_verified_token required.
-    //     Security: an attacker who knows a registered pending phone can
-    //     obtain a profile_token via this path, but profile_token is
-    //     single-use (GETDEL) and the profile data they'd overwrite is
-    //     for a not-yet-approved account with no real data in it.
+    // (b) OTP path: no Bearer token — must provide a valid
+    //     `phone_verified_token`. Decode + verify phone match + GETDEL the
+    //     jti from Redis (single-use enforcement).
     //
-    // (c) OTP path: no Bearer, no pending row — must provide a valid
-    //     phone_verified_token. This is the fallback for edge cases where
-    //     the user row doesn't exist yet or is in a non-pending state.
+    // SECURITY NOTE: a previous version had a "pending user" path that
+    // skipped token verification entirely for users with approval_status =
+    // 'pending'. This was REVERTED because it allowed an attacker who knows
+    // a registered pending phone to obtain a profile_token and overwrite the
+    // victim's profile (bank account, national ID). The correct gate for
+    // returning users is to re-verify OTP — the phone_verified_token proves
+    // current phone ownership, not just historical registration.
     if let Some(caller_id) = authenticated_user_id {
         // Path (a): Authenticated
         if caller_id != user_id {
@@ -1419,18 +1417,14 @@ pub async fn update_user_role(
                 "You can only set the role for your own account".to_string(),
             ));
         }
-    } else if approval_status == "pending" {
-        // Path (b): Pending user — existence of the DB row with
-        // pending status is sufficient proof of prior OTP verification.
-        // No token needed. The user can select/re-select roles at any
-        // time before admin approval.
-        tracing::info!(
-            "update_user_role: pending user {} selected role {:?} without token (identity proven at registration)",
-            user_id,
-            role,
-        );
-    } else if let Some(token) = phone_verified_token {
-        // Path (c): OTP token verification
+    } else {
+        // Path (b): OTP token verification — phone_verified_token required.
+        let token = phone_verified_token.ok_or_else(|| {
+            AppError::BadRequest(
+                "Missing phone_verified_token (or send a valid Bearer access token)".to_string(),
+            )
+        })?;
+
         let (verified_phone, jti) = shared::auth::decode_phone_verify_token(
             token,
             &jwt_config.decoding_key,
@@ -1440,21 +1434,19 @@ pub async fn update_user_role(
                 "Phone number does not match verified token".to_string(),
             ));
         }
-        let status: Option<String> = redis::cmd("GET")
+        // GETDEL — single-use enforcement. The token is consumed on this
+        // call. If the user wants to re-select a different role, they must
+        // re-verify OTP to get a fresh token.
+        let consumed: Option<String> = redis::cmd("GETDEL")
             .arg(format!("phone_verify_jti:{jti}"))
             .query_async(&mut redis.clone())
             .await
             .map_err(AppError::Redis)?;
-        if status.as_deref() != Some("valid") {
+        if consumed.as_deref() != Some("valid") {
             return Err(AppError::BadRequest(
                 "Verification token expired or already used".to_string(),
             ));
         }
-    } else {
-        // No auth at all — reject
-        return Err(AppError::BadRequest(
-            "Missing authentication (Bearer token, pending user status, or phone_verified_token)".to_string(),
-        ));
     }
 
     // Guard: do NOT set role yet — role is set atomically in submit_guard_profile.

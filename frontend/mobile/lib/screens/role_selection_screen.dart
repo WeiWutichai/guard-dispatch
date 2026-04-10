@@ -164,11 +164,17 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
         );
         return;
       } catch (e) {
-        // Non-Dio exceptions — show error in snackbar.
+        // Non-Dio exceptions — typically "กรุณายืนยันเบอร์โทรศัพท์อีกครั้ง"
+        // when the phone_verified_token has expired or been consumed.
+        // Redirect to OTP verification so the user can get a fresh token.
         if (!mounted) return;
         final msg = e.toString().replaceFirst('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg)),
+        );
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
         );
         return;
       }

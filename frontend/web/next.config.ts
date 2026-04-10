@@ -14,11 +14,14 @@ const nextConfig: NextConfig = {
     //
     // Dev (docker-compose.yml / localhost): fallback to the nginx gateway on
     // localhost so a developer running `next dev` still works.
-    const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:80/auth";
-    const bookingUrl = process.env.NEXT_PUBLIC_BOOKING_URL || "http://localhost:80/booking";
-    const trackingUrl = process.env.NEXT_PUBLIC_TRACKING_URL || "http://localhost:80/tracking";
-    const notificationUrl = process.env.NEXT_PUBLIC_NOTIFICATION_URL || "http://localhost:80/notification";
-    const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || "http://localhost:80/chat";
+    // Server-only env vars — NO `NEXT_PUBLIC_` prefix to prevent accidental
+    // client-side exposure of internal Docker hostnames like rust-auth:3001.
+    // These are only read in this file (server-side rewrites function).
+    const authUrl = process.env.AUTH_SERVICE_URL || "http://localhost:80/auth";
+    const bookingUrl = process.env.BOOKING_SERVICE_URL || "http://localhost:80/booking";
+    const trackingUrl = process.env.TRACKING_SERVICE_URL || "http://localhost:80/tracking";
+    const notificationUrl = process.env.NOTIFICATION_SERVICE_URL || "http://localhost:80/notification";
+    const chatUrl = process.env.CHAT_SERVICE_URL || "http://localhost:80/chat";
     return [
       { source: "/api/auth/:path*", destination: `${authUrl}/:path*` },
       { source: "/api/booking/:path*", destination: `${bookingUrl}/:path*` },
