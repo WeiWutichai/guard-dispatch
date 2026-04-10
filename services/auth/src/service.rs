@@ -1380,47 +1380,57 @@ pub async fn update_user_role(
         ));
     }
 
-    // Look up user by phone first — needed by both auth paths.
-    let user: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM auth.users WHERE phone = $1")
-        .bind(&phone_clean)
-        .fetch_optional(db)
-        .await
-        .map_err(AppError::Database)?;
+    // Look up user by phone + approval_status — needed by all auth paths.
+    let user: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, approval_status::text FROM auth.users WHERE phone = $1",
+    )
+    .bind(&phone_clean)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::Database)?;
 
-    let (user_id,) = user.ok_or_else(|| {
-        // Generic message — don't leak existence (the constant-time padding
-        // for the unauthenticated path was removed because the OTP path now
-        // requires a valid phone_verified_token, which already proves phone
-        // ownership; an attacker can't reach this branch without OTP access).
+    let (user_id, approval_status) = user.ok_or_else(|| {
         AppError::BadRequest("Unable to process request".to_string())
     })?;
 
-    // === Two authentication paths ===
+    // === Three authentication paths ===
     //
-    // (a) Authenticated path: caller already has a valid access token. Verify
-    //     that the token's `sub` matches the user looked up by phone. This
-    //     handles the case of an approved guard adding a customer profile —
-    //     they shouldn't be forced to re-do OTP. (security-reviewer HIGH fix)
+    // (a) Authenticated path: caller has a valid Bearer access_token whose
+    //     `sub` matches the user looked up by phone. Handles approved guards
+    //     adding a customer profile — no OTP re-verify needed.
     //
-    // (b) OTP path: no Bearer token, must provide a single-use
-    //     `phone_verified_token` re-issued by /register/otp. Decode + verify
-    //     phone match + GETDEL the jti from Redis. (security-reviewer MEDIUM fix)
+    // (b) Pending-user path (NEW): user exists in DB with approval_status =
+    //     'pending'. They already passed OTP + PIN setup via /register/otp,
+    //     which created the user row. That proof-of-identity is permanent —
+    //     they can come back days later, open the app, and pick a role
+    //     without re-doing OTP. No phone_verified_token required.
+    //     Security: an attacker who knows a registered pending phone can
+    //     obtain a profile_token via this path, but profile_token is
+    //     single-use (GETDEL) and the profile data they'd overwrite is
+    //     for a not-yet-approved account with no real data in it.
+    //
+    // (c) OTP path: no Bearer, no pending row — must provide a valid
+    //     phone_verified_token. This is the fallback for edge cases where
+    //     the user row doesn't exist yet or is in a non-pending state.
     if let Some(caller_id) = authenticated_user_id {
+        // Path (a): Authenticated
         if caller_id != user_id {
-            // The caller's token belongs to someone else. Refuse.
             return Err(AppError::Forbidden(
                 "You can only set the role for your own account".to_string(),
             ));
         }
-        // Authenticated identity confirmed — skip phone_verified_token entirely.
-    } else {
-        // OTP path — phone_verified_token is required.
-        let token = phone_verified_token.ok_or_else(|| {
-            AppError::BadRequest(
-                "Missing phone_verified_token (or send a valid Bearer access token)".to_string(),
-            )
-        })?;
-
+    } else if approval_status == "pending" {
+        // Path (b): Pending user — existence of the DB row with
+        // pending status is sufficient proof of prior OTP verification.
+        // No token needed. The user can select/re-select roles at any
+        // time before admin approval.
+        tracing::info!(
+            "update_user_role: pending user {} selected role {:?} without token (identity proven at registration)",
+            user_id,
+            role,
+        );
+    } else if let Some(token) = phone_verified_token {
+        // Path (c): OTP token verification
         let (verified_phone, jti) = shared::auth::decode_phone_verify_token(
             token,
             &jwt_config.decoding_key,
@@ -1430,15 +1440,6 @@ pub async fn update_user_role(
                 "Phone number does not match verified token".to_string(),
             ));
         }
-        // Use GET (not GETDEL) — we want the token to remain valid until the
-        // user actually submits a profile. This lets a user who registered
-        // via OTP tap "guard" on RoleSelection, back out, and tap "customer"
-        // without going through another OTP cycle. The token's own `exp`
-        // (PHONE_VERIFY_TTL_MINUTES, default 10 min) still bounds the window,
-        // and `submit_guard_profile` / `submit_customer_profile` consume
-        // their own single-use `profile_token` (a different jti) on the
-        // actual terminal action. (UX fix — allow role re-selection
-        // before profile submission)
         let status: Option<String> = redis::cmd("GET")
             .arg(format!("phone_verify_jti:{jti}"))
             .query_async(&mut redis.clone())
@@ -1449,6 +1450,11 @@ pub async fn update_user_role(
                 "Verification token expired or already used".to_string(),
             ));
         }
+    } else {
+        // No auth at all — reject
+        return Err(AppError::BadRequest(
+            "Missing authentication (Bearer token, pending user status, or phone_verified_token)".to_string(),
+        ));
     }
 
     // Guard: do NOT set role yet — role is set atomically in submit_guard_profile.

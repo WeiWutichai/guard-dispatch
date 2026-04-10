@@ -164,22 +164,12 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
         );
         return;
       } catch (e) {
-        // Non-Dio exceptions — typically "Missing phone verification token"
-        // after the token was consumed and cleared. Redirect the user to
-        // the OTP flow automatically instead of leaving them on a dead-end
-        // role screen with only a snackbar. (security-reviewer MEDIUM M3)
+        // Non-Dio exceptions — show error in snackbar.
         if (!mounted) return;
         final msg = e.toString().replaceFirst('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg)),
         );
-        if (msg.toLowerCase().contains('phone verification token') ||
-            msg.toLowerCase().contains('verify your phone')) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
-          );
-        }
         return;
       }
 

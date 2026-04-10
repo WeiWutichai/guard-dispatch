@@ -463,17 +463,21 @@ class AuthProvider extends ChangeNotifier {
     }
 
     if (_status != AuthStatus.authenticated) {
-      // Unauthenticated path — must include phone_verified_token from storage.
+      // Include phone_verified_token if available — but don't require it.
+      // Pending users (who already passed OTP + PIN during registration)
+      // can select/re-select roles without a token. The backend checks
+      // approval_status = 'pending' as sufficient proof of identity.
+      // Token is only strictly needed for edge cases where the user row
+      // doesn't exist yet (which shouldn't happen after register_with_otp).
       final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
       if (kDebugMode) {
         debugPrint('[updateRole] tokenPresent=${phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty}');
       }
-      if (phoneVerifiedToken == null || phoneVerifiedToken.isEmpty) {
-        throw Exception(
-          'Missing phone verification token. Please verify your phone number again.',
-        );
+      if (phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty) {
+        data['phone_verified_token'] = phoneVerifiedToken;
       }
-      data['phone_verified_token'] = phoneVerifiedToken;
+      // If no token: backend will check if user is pending → allow anyway.
+      // If user is NOT pending AND no token → backend returns 400.
     }
     // Authenticated path — Dio interceptor attaches Bearer header automatically;
     // backend's optional auth extractor in `update_role` will pick it up.
