@@ -493,16 +493,15 @@ class AuthProvider extends ChangeNotifier {
       _role = role;
       notifyListeners();
 
-      // IMPORTANT: keep phone_verified_token in storage after a successful
-      // updateRole. The backend only *reads* the jti (GET, not GETDEL), so
-      // the token remains valid until its own exp. This lets the user
-      // re-select a different role (guard ↔ customer) without repeating
-      // the OTP cycle — they tap "guard" → back → "customer" and the
-      // second updateRole call still has a valid token to present.
-      // The token is actually consumed later when submit_guard_profile
-      // or submit_customer_profile GETDELs its own profile_token jti.
+      // phone_verified_token is single-use — backend GETDEL'd the jti.
+      // Clear it from local storage so a retry doesn't re-send a stale
+      // token. The caller now holds a profile_token (returned below)
+      // which is what the next step (POST /profile/guard or /customer)
+      // actually needs. If the user backs out and wants a different role,
+      // they must re-verify OTP — this is the correct security gate.
+      await AuthService.clearPhoneVerifiedData();
       if (kDebugMode) {
-        debugPrint('[updateRole] OK — phone_verified_token kept for possible re-select');
+        debugPrint('[updateRole] OK — cleared consumed phone_verified_token');
       }
 
       // Return profile_token
