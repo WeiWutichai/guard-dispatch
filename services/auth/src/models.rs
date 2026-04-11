@@ -314,24 +314,30 @@ pub struct ReissueProfileTokenResponse {
 // =============================================================================
 
 /// Request to set the role of a pending user OR to add a profile to an
-/// already-authenticated user (e.g. approved guard adding a customer profile).
+/// already-authenticated user.
 ///
-/// **Two auth paths:**
-/// 1. **OTP path** (3-step registration, no tokens yet): `phone_verified_token`
-///    is required and must match the requested phone — single-use, GETDEL'd.
-/// 2. **Authenticated path** (approved user adding a new role): omit
-///    `phone_verified_token`. The handler verifies a valid `Authorization:
-///    Bearer <access_token>` is present and that its `sub` matches the user
-///    looked up by phone. This avoids forcing approved guards to re-do OTP
-///    when they want to use the hirer side of the app.
+/// **Three auth paths:**
+/// 1. **Bearer token** (approved user adding a new role): `Authorization`
+///    header with a valid access_token.
+/// 2. **PIN hash** (returning user, persistent proof): `pin_hash` field
+///    contains the SHA-256 of the user's 6-digit PIN. Backend verifies it
+///    against the stored Argon2 password_hash. Never expires — works forever
+///    after OTP + PIN setup.
+/// 3. **OTP token** (initial registration flow): `phone_verified_token`
+///    field, single-use, GETDEL'd from Redis.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateRoleRequest {
     pub phone: String,
     pub role: UserRole,
     /// Re-issued single-use phone-verified token from `POST /register/otp`.
-    /// Omit when calling as an authenticated user (Bearer token in headers).
+    /// Used during the initial OTP registration flow.
     #[serde(default)]
     pub phone_verified_token: Option<String>,
+    /// SHA-256 hash of the user's 6-digit PIN. Persistent proof-of-identity
+    /// that never expires — backend Argon2-verifies it against password_hash.
+    /// Preferred for returning users who completed OTP + PIN setup earlier.
+    #[serde(default)]
+    pub pin_hash: Option<String>,
 }
 
 /// Response after successfully setting a user's role.

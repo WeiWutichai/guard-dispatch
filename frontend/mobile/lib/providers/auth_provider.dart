@@ -463,24 +463,41 @@ class AuthProvider extends ChangeNotifier {
     }
 
     if (_status != AuthStatus.authenticated) {
-      // Unauthenticated path — phone_verified_token required.
-      // Pending users must re-verify OTP if their token expired. The
-      // "pending = proof of identity" shortcut was REVERTED because it
-      // allowed an attacker with just a phone number to hijack a pending
-      // user's profile (bank account, national ID, etc.).
-      final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
-      if (kDebugMode) {
-        debugPrint('[updateRole] tokenPresent=${phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty}');
+      // Unauthenticated path — try PIN hash first (persistent, never expires),
+      // then fall back to phone_verified_token (single-use, from recent OTP).
+      //
+      // PIN hash is the SHA-256 of the user's 6-digit PIN, stored in
+      // FlutterSecureStorage after PIN setup. Backend Argon2-verifies it
+      // against auth.users.password_hash. This means a user who completed
+      // OTP + PIN can come back days/months later and select any role
+      // without re-doing OTP — the PIN proves they are the device owner.
+      const secureStorage = FlutterSecureStorage(
+        aOptions: AndroidOptions(encryptedSharedPreferences: true),
+        iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+      );
+      final pinHash = await secureStorage.read(key: 'pin_hash');
+
+      if (pinHash != null && pinHash.isNotEmpty) {
+        // Path (b): PIN-hash — persistent, never expires
+        data['pin_hash'] = pinHash;
+        if (kDebugMode) {
+          debugPrint('[updateRole] using PIN hash (persistent auth)');
+        }
+      } else {
+        // Path (c): OTP token — single-use, from recent registration
+        final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
+        if (kDebugMode) {
+          debugPrint('[updateRole] tokenPresent=${phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty}');
+        }
+        if (phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty) {
+          data['phone_verified_token'] = phoneVerifiedToken;
+        } else {
+          // No PIN hash, no OTP token — need to re-verify
+          throw Exception('กรุณายืนยันเบอร์โทรศัพท์อีกครั้ง');
+        }
       }
-      if (phoneVerifiedToken == null || phoneVerifiedToken.isEmpty) {
-        throw Exception(
-          'กรุณายืนยันเบอร์โทรศัพท์อีกครั้ง',
-        );
-      }
-      data['phone_verified_token'] = phoneVerifiedToken;
     }
-    // Authenticated path — Dio interceptor attaches Bearer header automatically;
-    // backend's optional auth extractor in `update_role` will pick it up.
+    // Authenticated path — Dio interceptor attaches Bearer header automatically.
 
     try {
       final response = await _apiClient.dio.post(
