@@ -306,7 +306,10 @@ class _GuardRegistrationScreenState extends State<GuardRegistrationScreen> {
         },
       );
 
-      await AuthService.clearPhoneVerifiedData();
+      // DO NOT clear phone_verified_token here — the user may want to add
+      // a customer profile too (dual role). The token stays valid until its
+      // TTL expires (24h). It will be cleaned up naturally by TTL expiry in
+      // Redis, or when the app calls clearAllRegistrationData() on logout.
 
       if (!mounted) return;
 
