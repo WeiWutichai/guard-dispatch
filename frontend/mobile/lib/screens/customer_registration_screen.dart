@@ -98,20 +98,21 @@ class _CustomerRegistrationScreenState
         }
       }
 
-      // Only save pending state for users who are NOT already authenticated.
+      // Always save pending profile — even for authenticated users — so
+      // RegistrationPendingScreen can show the correct customer data.
+      // Previously this was skipped for authenticated users, causing the
+      // pending screen to fall back to the guard profile cache.
+      await AuthService.savePendingProfile({
+        'phone': widget.phone,
+        'role': 'customer',
+        'full_name': _fullNameController.text.trim(),
+        'contact_phone': _contactPhoneController.text.trim(),
+        'email': _emailController.text.trim(),
+        'company_name': _companyController.text.trim(),
+        'address': _addressController.text.trim(),
+      });
       if (!isAlreadyAuthenticated) {
-        await Future.wait([
-          AuthService.savePendingProfile({
-            'phone': widget.phone,
-            'role': 'customer',
-            'full_name': _fullNameController.text.trim(),
-            'contact_phone': _contactPhoneController.text.trim(),
-            'email': _emailController.text.trim(),
-            'company_name': _companyController.text.trim(),
-            'address': _addressController.text.trim(),
-          }),
-          AuthService.setPendingApproval(role: 'customer'),
-        ]);
+        await AuthService.setPendingApproval(role: 'customer');
       }
 
       // Submit to backend
