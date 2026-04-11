@@ -406,7 +406,7 @@ CREATE TABLE notification.fcm_tokens (
   - **Attempt Counter:** Atomic `UPDATE ... WHERE id = (SELECT ... FOR UPDATE)` ใน PostgreSQL — ห้ามทำ SELECT แล้ว UPDATE แยก
   - **Constant-Time Comparison:** ใช้ `subtle::ConstantTimeEq` เปรียบเทียบ OTP code — ห้ามใช้ `==` (timing side-channel)
   - **Phone Verify Token:** JWT พร้อม `jti` (UUID) สำหรับ single-use enforcement — เก็บ jti เป็น "valid" ใน Redis, consume ด้วย `GETDEL` ตอน register
-  - **Phone Verify TTL:** แยกจาก OTP expiry — `PHONE_VERIFY_TTL_MINUTES` (default 10 นาที) ให้เวลากรอก form registration
+  - **Phone Verify TTL:** แยกจาก OTP expiry — `PHONE_VERIFY_TTL_MINUTES` (recommend **1440 = 24 ชั่วโมง** ใน staging/production) ให้เวลาเลือก role + กรอก form ไม่ต้อง OTP ซ้ำ. Token validated ด้วย `GET` (not GETDEL) ใน `update_user_role` เพื่อให้ re-select role ได้ (guard ↔ customer) ภายใน TTL. Token consumed จริงตอน `submit_guard_profile` / `submit_customer_profile` ผ่าน profile_token (GETDEL แยก)
   - **OTP Cleanup:** Background task (`tokio::spawn`) ลบ expired OTP codes ทุก 1 ชั่วโมง
   - **Phone Format:** `otp::validate_thai_phone()` — strip non-digit, ต้อง 10 หลักขึ้นต้นด้วย `0`
   - **International Format:** `otp::to_international_format()` — แปลง `0812345678` → `66812345678` ก่อนส่ง SMS
@@ -807,7 +807,7 @@ RegistrationPendingScreen({role})
 
 **Auth Service — Guard & Customer Profile:**
 - `service::register_with_otp()`: if role=guard (explicit), calls `encode_profile_token(purpose="guard_profile")` → stores jti in Redis `SET EX 900` (15 min). When role=null (3-step flow), does NOT issue profile_token.
-- `service::update_user_role()`: signature takes `phone_verified_token: Option<&str>` + `authenticated_user_id: Option<Uuid>`. Lookup user by phone first. **If `authenticated_user_id` is `Some`** (authenticated path, code-reviewer HIGH fix): verify it matches the lookup user (Forbidden if not), skip `phone_verified_token` entirely. **Else** (OTP path): require `phone_verified_token`, decode + verify phone matches + GETDEL jti from Redis (single-use). Guard path: SELECT verify user + issue profile_token (purpose=`"guard_profile"`) — **ไม่ UPDATE role**. Customer path: SELECT verify user + issue profile_token (purpose=`"customer_profile"`) — **ไม่ UPDATE role**. Rejects admin role.
+- `service::update_user_role()`: Two auth paths: **(a) Authenticated** (Bearer access_token, `sub` must match lookup user) — for approved guards adding customer profile. **(b) OTP token** (`phone_verified_token` validated via JWT decode + phone match + Redis `GET` — **not GETDEL**). Token stays valid for its full TTL (PHONE_VERIFY_TTL_MINUTES = 1440 = 24h), allowing role re-selection (guard ↔ customer) within the same OTP session. Token is only truly consumed when `submit_guard_profile` / `submit_customer_profile` succeeds (those use their own single-use profile_token via GETDEL). **SECURITY:** a previous version had a "pending user bypass" (no token needed) — REVERTED because it allowed profile hijacking via phone number alone. A "PIN-hash auth" approach was also tried and REVERTED due to brute-force vulnerability (6-digit PIN = 1M combinations) + rainbow table risk (SHA-256 of 6 digits). Guard/customer paths SELECT verify user + issue profile_token (**ไม่ UPDATE role**). Rejects admin role.
 - `service::validate_profile_token(expected_purpose)`: async, takes redis + expected_purpose param — decodes JWT with purpose check, then `GETDEL profile_jti:{jti}` — returns `Err` if value ≠ `"valid"` (expired, used, or forged)
 - `service::submit_guard_profile()`: validates size **before** magic bytes; uploads all doc files to MinIO **in parallel** via `tokio::task::JoinSet`; UPSERTs `auth.guard_profiles`; then **SET role='guard'** + `invalidate_user_cache()` — role set only after successful save (atomic, no partial state on error)
 - `service::submit_customer_profile()`: validates address not empty; UPSERTs `auth.customer_profiles` with `approval_status='pending'`; then **SET role='customer' WHERE role IS NULL** + `invalidate_user_cache()` — guards keep their role if they also register as customer
@@ -1245,7 +1245,7 @@ RUST_LOG=info
 INET_SMS_USERNAME=<username จาก Cheese Digital>
 INET_SMS_PASSWORD=<password จาก Cheese Digital>
 INET_SMS_SENDER=<sender name ที่ลงทะเบียนกับ INET>
-PHONE_VERIFY_TTL_MINUTES=10
+PHONE_VERIFY_TTL_MINUTES=1440       # 24 hours — allows role re-selection without re-OTP
 DAILY_OTP_LIMIT=10
 ```
 
@@ -1317,7 +1317,14 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามเรียก `registerWithOtp()` ใน `RoleSelectionScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `PinSetupScreen._finishSetup()` เท่านั้น (3-step flow: register ก่อน, เลือก role ทีหลัง)
 - ❌ ห้ามเรียก `updateRole()` ใน `PinSetupScreen` หรือ `GuardRegistrationScreen` — ต้องเรียกใน `RoleSelectionScreen._onRoleTap()` เท่านั้น
 - ❌ ห้าม `update_user_role()` SET role ใน DB ทั้ง guard และ customer path — ต้องแค่ SELECT verify + issue profile_token เท่านั้น → role จะถูก set ใน `submit_guard_profile()` / `submit_customer_profile()` หลัง save สำเร็จ (atomic, no partial state)
-- ❌ ห้าม `update_user_role()` ออก profile_token โดยไม่มี **proof of identity** — ต้องเป็นหนึ่งในสองทาง: (1) `authenticated_user_id == user_id` จาก lookup (Bearer access token, post-login flow), หรือ (2) `phone_verified_token` ที่ decode + verify phone match + GETDEL jti สำเร็จ (OTP registration flow). ถ้าไม่มีทั้งสอง → reject (security-reviewer MEDIUM); ป้องกัน profile hijacking
+- ❌ ห้าม `update_user_role()` ออก profile_token โดยไม่มี **proof of identity** — ต้องเป็นหนึ่งในสองทาง: (1) Bearer access_token ที่ `sub == user_id` (authenticated path), หรือ (2) `phone_verified_token` ที่ decode + verify phone match + Redis `GET` ยังเป็น `"valid"` (OTP path — **GET ไม่ GETDEL** เพื่อให้ re-select role ได้ภายใน TTL 24h)
+- ❌ ห้ามใช้ **pending user status** เป็น proof-of-identity ใน `update_user_role()` — REVERTED เพราะ attacker ที่รู้เบอร์เหยื่อสามารถ hijack pending profile (bank account, national ID) ได้โดยไม่มี token
+- ❌ ห้ามใช้ **PIN hash** เป็น auth ใน `update_user_role()` — REVERTED เพราะ: (1) 6-digit PIN brute-forceable ภายใน ~34 นาทีจาก 50 distributed IPs, (2) SHA-256 ของ 6 หลัก = rainbow table target 32MB/<1 วินาที, (3) PIN path ไม่ได้ restrict เฉพาะ pending users → approved user ถูก overwrite ได้
+- ❌ ห้าม `update_user_role()` ใช้ `GETDEL` สำหรับ phone_verify_jti — ต้องใช้ `GET` เพื่อให้ user re-select role (guard ↔ customer) ได้ภายใน TTL เดียวกัน; token consumed จริงที่ `submit_*_profile` (profile_token GETDEL)
+- ❌ ห้าม mobile `updateRole()` clear `phone_verified_token` หลังสำเร็จ — token ต้อง keep ไว้สำหรับ re-select role; clear เฉพาะเมื่อ backend reject 400/401 หรือ network drop
+- ❌ ห้าม `guard_registration_screen.dart` เรียก `clearPhoneVerifiedData()` หลัง submit guard profile — user อาจต้องการ submit customer profile ด้วย (dual role); token cleanup ทำโดย Redis TTL expiry
+- ❌ ห้ามปุ่ม "ขอรหัส OTP" ส่ง request ซ้ำ (double-tap) — ต้องมี synchronous `_otpInFlight` flag ก่อน `setState` เพราะ `setState` เป็น async (schedule rebuild ใน next frame)
+- ❌ ห้าม `CustomerRegistrationScreen` skip `savePendingProfile` สำหรับ authenticated user — ต้อง save ทุกกรณี เพื่อให้ `RegistrationPendingScreen` แสดงข้อมูล customer ที่ถูกต้อง (ไม่ fallback ไป guard data)
 - ❌ ห้าม `update_user_role()` accept `authenticated_user_id` ที่ != lookup user — ต้อง `Forbidden` (ป้องกัน A พยายาม set role ของ B ผ่าน B's phone + A's access token)
 - ❌ ห้าม `register_with_otp()` return response โดยไม่มี `phone_verified_token` ใหม่ — ต้อง re-issue token (single-use, ~10 min TTL) และ store jti ใน Redis เสมอ เพื่อให้ `/profile/role` (OTP path) ตรวจสอบได้
 - ❌ ห้าม mobile `updateRole()` ส่ง `phone_verified_token` ใน body เมื่อ `_status == authenticated` — Bearer token ทำหน้าที่นี้แทน; ส่งทั้งคู่ไม่ใช่ปัญหาเชิง security แต่ก็ไม่ควรเก็บ token ที่ไม่จำเป็นอยู่ใน storage
