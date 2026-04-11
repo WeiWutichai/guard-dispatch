@@ -1368,9 +1368,6 @@ pub async fn update_user_role(
     role: UserRole,
     phone_verified_token: Option<&str>,
     authenticated_user_id: Option<Uuid>,
-    // PIN hash (SHA-256 of 6-digit PIN) for persistent identity proof.
-    // Verified against auth.users.password_hash (Argon2). Never expires.
-    pin_hash: Option<&str>,
 ) -> Result<(Uuid, Option<String>), AppError> {
     use shared::models::UserRole;
 
@@ -1383,32 +1380,32 @@ pub async fn update_user_role(
         ));
     }
 
-    // Look up user by phone + password_hash — needed by all auth paths.
-    let user: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, password_hash FROM auth.users WHERE phone = $1",
+    // Look up user by phone — needed by both auth paths.
+    let user: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM auth.users WHERE phone = $1",
     )
     .bind(&phone_clean)
     .fetch_optional(db)
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, stored_password_hash) = user.ok_or_else(|| {
+    let (user_id,) = user.ok_or_else(|| {
         AppError::BadRequest("Unable to process request".to_string())
     })?;
 
-    // === Three authentication paths ===
+    // === Two authentication paths ===
     //
     // (a) Authenticated path: caller has a valid Bearer access_token whose
     //     `sub` matches the user. Handles approved guards adding customer profile.
     //
-    // (b) PIN-hash path: caller provides the PIN hash (SHA-256 of their 6-digit
-    //     PIN). Backend verifies it against the Argon2 password_hash stored at
-    //     registration. This is the persistent proof-of-identity — never expires,
-    //     works forever after OTP + PIN setup. Attacker who only knows the phone
-    //     can't pass this gate because they don't have the PIN.
-    //
-    // (c) OTP token path: single-use phone_verified_token from a recent OTP
-    //     verify. Used during the initial registration flow (steps 4-5).
+    // (b) OTP token path: phone_verified_token from a recent /otp/verify or
+    //     /register/otp (re-issued). Validated via JWT decode + phone match.
+    //     Uses GET (not GETDEL) so the token remains valid for the full TTL
+    //     (PHONE_VERIFY_TTL_MINUTES, recommend 1440 = 24h). This lets the
+    //     user select guard → back → select customer without re-OTP.
+    //     The token is only truly consumed when submit_guard_profile or
+    //     submit_customer_profile completes (those use their own single-use
+    //     profile_token via GETDEL).
     if let Some(caller_id) = authenticated_user_id {
         // Path (a): Authenticated (Bearer token)
         if caller_id != user_id {
@@ -1416,17 +1413,8 @@ pub async fn update_user_role(
                 "You can only set the role for your own account".to_string(),
             ));
         }
-    } else if let Some(pin) = pin_hash {
-        // Path (b): PIN-hash verification (persistent identity proof)
-        // Runs Argon2 verify in spawn_blocking to avoid blocking the async runtime.
-        let valid = verify_password(pin, &stored_password_hash).await?;
-        if !valid {
-            return Err(AppError::Unauthorized(
-                "Invalid credentials".to_string(),
-            ));
-        }
     } else if let Some(token) = phone_verified_token {
-        // Path (c): OTP token verification (single-use, for initial registration)
+        // Path (b): OTP token verification
         let (verified_phone, jti) = shared::auth::decode_phone_verify_token(
             token,
             &jwt_config.decoding_key,
@@ -1436,19 +1424,26 @@ pub async fn update_user_role(
                 "Phone number does not match verified token".to_string(),
             ));
         }
-        let consumed: Option<String> = redis::cmd("GETDEL")
+        // GET (not GETDEL) — token stays valid until its TTL expires.
+        // This allows role re-selection (guard ↔ customer) within the
+        // same OTP session. Security is maintained because:
+        //   - Token has a bounded TTL (configurable, recommend 24h)
+        //   - Token is cryptographically signed (JWT HS256)
+        //   - profile_token (issued here) is still single-use GETDEL
+        //   - The token proves phone ownership via OTP verification
+        let status: Option<String> = redis::cmd("GET")
             .arg(format!("phone_verify_jti:{jti}"))
             .query_async(&mut redis.clone())
             .await
             .map_err(AppError::Redis)?;
-        if consumed.as_deref() != Some("valid") {
+        if status.as_deref() != Some("valid") {
             return Err(AppError::BadRequest(
                 "Verification token expired or already used".to_string(),
             ));
         }
     } else {
         return Err(AppError::BadRequest(
-            "Missing authentication (Bearer token, PIN hash, or phone_verified_token)".to_string(),
+            "Missing authentication (Bearer token or phone_verified_token)".to_string(),
         ));
     }
 

@@ -463,39 +463,18 @@ class AuthProvider extends ChangeNotifier {
     }
 
     if (_status != AuthStatus.authenticated) {
-      // Unauthenticated path — try PIN hash first (persistent, never expires),
-      // then fall back to phone_verified_token (single-use, from recent OTP).
-      //
-      // PIN hash is the SHA-256 of the user's 6-digit PIN, stored in
-      // FlutterSecureStorage after PIN setup. Backend Argon2-verifies it
-      // against auth.users.password_hash. This means a user who completed
-      // OTP + PIN can come back days/months later and select any role
-      // without re-doing OTP — the PIN proves they are the device owner.
-      const secureStorage = FlutterSecureStorage(
-        aOptions: AndroidOptions(encryptedSharedPreferences: true),
-        iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
-      );
-      final pinHash = await secureStorage.read(key: 'pin_hash');
-
-      if (pinHash != null && pinHash.isNotEmpty) {
-        // Path (b): PIN-hash — persistent, never expires
-        data['pin_hash'] = pinHash;
-        if (kDebugMode) {
-          debugPrint('[updateRole] using PIN hash (persistent auth)');
-        }
-      } else {
-        // Path (c): OTP token — single-use, from recent registration
-        final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
-        if (kDebugMode) {
-          debugPrint('[updateRole] tokenPresent=${phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty}');
-        }
-        if (phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty) {
-          data['phone_verified_token'] = phoneVerifiedToken;
-        } else {
-          // No PIN hash, no OTP token — need to re-verify
-          throw Exception('กรุณายืนยันเบอร์โทรศัพท์อีกครั้ง');
-        }
+      // Unauthenticated path — send phone_verified_token from storage.
+      // Backend uses GET (not GETDEL) so the token stays valid for role
+      // re-selection (guard ↔ customer) within the same OTP session.
+      // TTL is configurable via PHONE_VERIFY_TTL_MINUTES (recommend 1440 = 24h).
+      final (_, phoneVerifiedToken) = await AuthService.getPhoneVerifiedData();
+      if (kDebugMode) {
+        debugPrint('[updateRole] tokenPresent=${phoneVerifiedToken != null && phoneVerifiedToken.isNotEmpty}');
       }
+      if (phoneVerifiedToken == null || phoneVerifiedToken.isEmpty) {
+        throw Exception('กรุณายืนยันเบอร์โทรศัพท์อีกครั้ง');
+      }
+      data['phone_verified_token'] = phoneVerifiedToken;
     }
     // Authenticated path — Dio interceptor attaches Bearer header automatically.
 
@@ -510,15 +489,12 @@ class AuthProvider extends ChangeNotifier {
       _role = role;
       notifyListeners();
 
-      // phone_verified_token is single-use — backend GETDEL'd the jti.
-      // Clear it from local storage so a retry doesn't re-send a stale
-      // token. The caller now holds a profile_token (returned below)
-      // which is what the next step (POST /profile/guard or /customer)
-      // actually needs. If the user backs out and wants a different role,
-      // they must re-verify OTP — this is the correct security gate.
-      await AuthService.clearPhoneVerifiedData();
+      // Keep phone_verified_token in storage — backend uses GET (not GETDEL)
+      // so the token remains valid for role re-selection. User can tap
+      // guard → back → customer without re-OTP. Token expires at its own
+      // TTL (PHONE_VERIFY_TTL_MINUTES on the server, recommend 1440 = 24h).
       if (kDebugMode) {
-        debugPrint('[updateRole] OK — cleared consumed phone_verified_token');
+        debugPrint('[updateRole] OK — token kept for role re-selection');
       }
 
       // Return profile_token

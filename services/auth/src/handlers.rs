@@ -817,7 +817,6 @@ pub async fn update_role(
         req.role,
         req.phone_verified_token.as_deref(),
         authenticated_user_id,
-        req.pin_hash.as_deref(),
     )
     .await?;
 

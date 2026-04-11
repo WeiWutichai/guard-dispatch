@@ -316,28 +316,21 @@ pub struct ReissueProfileTokenResponse {
 /// Request to set the role of a pending user OR to add a profile to an
 /// already-authenticated user.
 ///
-/// **Three auth paths:**
+/// **Two auth paths:**
 /// 1. **Bearer token** (approved user adding a new role): `Authorization`
 ///    header with a valid access_token.
-/// 2. **PIN hash** (returning user, persistent proof): `pin_hash` field
-///    contains the SHA-256 of the user's 6-digit PIN. Backend verifies it
-///    against the stored Argon2 password_hash. Never expires — works forever
-///    after OTP + PIN setup.
-/// 3. **OTP token** (initial registration flow): `phone_verified_token`
-///    field, single-use, GETDEL'd from Redis.
+/// 2. **OTP token** (registration flow): `phone_verified_token` from
+///    `/otp/verify` or re-issued by `/register/otp`. Validated via JWT
+///    decode + phone match + Redis GET (not GETDEL — reusable until TTL
+///    expiry so user can re-select roles within the same OTP session).
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateRoleRequest {
     pub phone: String,
     pub role: UserRole,
-    /// Re-issued single-use phone-verified token from `POST /register/otp`.
-    /// Used during the initial OTP registration flow.
+    /// Phone-verified token from OTP verification.
+    /// Reusable within its TTL (recommend PHONE_VERIFY_TTL_MINUTES=1440).
     #[serde(default)]
     pub phone_verified_token: Option<String>,
-    /// SHA-256 hash of the user's 6-digit PIN. Persistent proof-of-identity
-    /// that never expires — backend Argon2-verifies it against password_hash.
-    /// Preferred for returning users who completed OTP + PIN setup earlier.
-    #[serde(default)]
-    pub pin_hash: Option<String>,
 }
 
 /// Response after successfully setting a user's role.
