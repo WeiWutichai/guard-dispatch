@@ -26,6 +26,10 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
   final _focusNode = FocusNode();
   bool _isValid = false;
   bool _isLoading = false;
+  // Synchronous guard against double-tap. setState is async (schedules
+  // rebuild on next frame), so two taps within the same frame both see
+  // _isLoading=false. This flag flips synchronously before any await.
+  bool _otpInFlight = false;
   String? _errorMessage;
 
   @override
@@ -56,7 +60,8 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
   Color get _roleColor => AppColors.primary;
 
   Future<void> _onNext() async {
-    if (!_isValid || _isLoading) return;
+    if (!_isValid || _isLoading || _otpInFlight) return;
+    _otpInFlight = true;
 
     // Pending users should see their status screen, not go through OTP again.
     final auth = context.read<AuthProvider>();
@@ -104,6 +109,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
       if (!mounted) return;
       setState(() => _errorMessage = e.toString());
     } finally {
+      _otpInFlight = false;
       if (mounted) setState(() => _isLoading = false);
     }
   }
