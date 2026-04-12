@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../services/auth_service.dart';
 import '../services/api_client.dart';
+import '../services/notification_service.dart';
 
 /// Authentication states for the app.
 enum AuthStatus {
@@ -132,6 +133,7 @@ class AuthProvider extends ChangeNotifier {
       }
       _status = AuthStatus.authenticated;
       notifyListeners();
+      _registerFcmToken(); // Register FCM token on auto-login too
       return;
     }
 
@@ -638,7 +640,25 @@ class AuthProvider extends ChangeNotifier {
     await fetchProfile(); // Load profile BEFORE notifying UI
     _status = AuthStatus.authenticated;
     notifyListeners();
+
+    // Register FCM token for push notifications (fire-and-forget)
+    _registerFcmToken();
+
     return true;
+  }
+
+  /// Register FCM device token with the backend (fire-and-forget).
+  /// Called after login so push notifications can be delivered.
+  void _registerFcmToken() {
+    // Delayed to avoid blocking the login flow
+    Future.delayed(const Duration(seconds: 2), () async {
+      try {
+        final notificationService = NotificationService(_apiClient);
+        await notificationService.registerFcmToken();
+      } catch (e) {
+        if (kDebugMode) debugPrint('[AuthProvider] FCM registration failed: $e');
+      }
+    });
   }
 
   /// Logout — clear tokens, pending state, and reset auth status.
