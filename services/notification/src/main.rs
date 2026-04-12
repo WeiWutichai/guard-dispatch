@@ -120,6 +120,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/notifications/read-all", put(handlers::mark_all_as_read))
         .route("/notifications/{id}/read", put(handlers::mark_as_read))
         .route("/notifications/send", post(handlers::send_notification))
+        // Internal endpoint for service-to-service push (no JWT required).
+        // Only accessible from Docker internal network (not exposed via nginx).
+        // Called by booking-service's spawn_notification() to trigger FCM push
+        // after inserting a notification log.
+        .route("/internal/push", post(handlers::internal_push))
         ;
     let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
         let swagger =

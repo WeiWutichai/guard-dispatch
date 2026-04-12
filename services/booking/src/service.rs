@@ -81,6 +81,15 @@ async fn reverse_geocode(http: &reqwest::Client, lat: f64, lng: f64) -> Option<S
 /// Insert a notification log entry (fire-and-forget via tokio::spawn).
 /// Since booking and notification share the same PostgreSQL instance,
 /// we INSERT directly — no HTTP overhead, no FCM push (future enhancement).
+/// Fire-and-forget notification creation + FCM push delivery.
+///
+/// 1. INSERT into notification.notification_logs (shared PostgreSQL)
+/// 2. POST to notification-service internal API to trigger FCM push
+///
+/// Step 2 calls `POST http://rust-notification:3004/notifications/send`
+/// which is the admin send_notification endpoint — but using an internal
+/// service-to-service call (no JWT needed since it's on the Docker
+/// internal network). The notification-service handles FCM OAuth + push.
 pub fn spawn_notification(
     db: PgPool,
     user_id: Uuid,
@@ -90,6 +99,7 @@ pub fn spawn_notification(
     payload: Option<serde_json::Value>,
 ) {
     tokio::spawn(async move {
+        // 1. Insert notification log (always — even if push fails)
         let result = sqlx::query(
             r#"
             INSERT INTO notification.notification_logs (user_id, title, body, notification_type, payload)
@@ -106,6 +116,38 @@ pub fn spawn_notification(
 
         if let Err(e) = result {
             tracing::warn!("Failed to insert notification: {e}");
+        }
+
+        // 2. Trigger FCM push via notification-service internal API.
+        // The send_notification handler looks up FCM tokens + sends push.
+        // Fire-and-forget: if notification-service is down, the DB log
+        // persists and the user sees it on next app open via the REST API.
+        let push_body = serde_json::json!({
+            "user_id": user_id.to_string(),
+            "title": title,
+            "body": body,
+            "notification_type": notification_type,
+            "payload": payload,
+        });
+
+        let client = reqwest::Client::new();
+        match client
+            .post("http://rust-notification:3004/internal/push")
+            .header("X-Internal-Service", "booking-service")
+            .json(&push_body)
+            .send()
+            .await
+        {
+            Ok(resp) if !resp.status().is_success() => {
+                tracing::warn!(
+                    "notification-service push returned status={}",
+                    resp.status()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to call notification-service for push: {e}");
+            }
+            _ => {}
         }
     });
 }

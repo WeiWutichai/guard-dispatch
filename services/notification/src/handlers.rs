@@ -12,6 +12,26 @@ use crate::models::{
 };
 use crate::state::AppState;
 
+// =============================================================================
+// Internal Push (service-to-service, no JWT)
+// =============================================================================
+
+/// Internal endpoint for other services (booking, chat) to trigger FCM push.
+/// No JWT required — accessible only from Docker internal network.
+/// Nginx does NOT proxy this path (no /notification/internal/ location).
+///
+/// The calling service has already INSERT'd the notification_logs row;
+/// this endpoint only handles FCM push delivery.
+pub async fn internal_push(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SendNotificationRequest>,
+) -> Result<Json<ApiResponse<NotificationLogResponse>>, AppError> {
+    let notification =
+        crate::service::send_notification(&state.db, &state.http_client, &state.fcm_auth, req)
+            .await?;
+    Ok(Json(ApiResponse::success(notification)))
+}
+
 #[utoipa::path(
     post,
     path = "/tokens",
