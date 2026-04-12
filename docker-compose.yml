@@ -153,10 +153,11 @@ services:
       - REDIS_CACHE_URL=${REDIS_CACHE_URL}
       - REDIS_PUBSUB_URL=${REDIS_PUBSUB_URL}
       - JWT_SECRET=${JWT_SECRET}
-      - FCM_SERVER_KEY=${FCM_SERVER_KEY}
-      - FCM_PROJECT_ID=${FCM_PROJECT_ID}
+      - FCM_SERVICE_ACCOUNT_PATH=/app/secrets/firebase-service-account.json
       - SWAGGER_PATH_PREFIX=/notification
       - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - ./services/notification/secrets/firebase-service-account.json:/app/secrets/firebase-service-account.json:ro
 
   # ---------------------------------------------------------------------------
   # MediaSoup Server (Node.js — Video/Audio Call)

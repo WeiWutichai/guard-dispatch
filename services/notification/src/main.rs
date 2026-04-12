@@ -1,3 +1,4 @@
+mod fcm;
 mod handlers;
 mod models;
 mod service;
@@ -18,7 +19,8 @@ use shared::db::create_pool;
 use shared::openapi::{SecurityAddon, ServerPrefixAddon};
 use shared::redis_client::create_redis_client;
 
-use crate::state::{AppState, FcmConfig};
+use crate::fcm::{FcmAuth, ServiceAccount};
+use crate::state::AppState;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -63,7 +65,19 @@ async fn main() -> anyhow::Result<()> {
     let db_config = DatabaseConfig::from_env()?;
     let redis_config = RedisConfig::from_env()?;
     let jwt_config = JwtConfig::from_env()?;
-    let fcm_config = FcmConfig::from_env()?;
+    // Load Firebase service account for FCM OAuth 2.0 authentication.
+    // The JSON file path is set via FCM_SERVICE_ACCOUNT_PATH env var.
+    // This replaces the old FCM_SERVER_KEY approach which used a static
+    // legacy key — Google deprecated that in 2024.
+    let sa_path = std::env::var("FCM_SERVICE_ACCOUNT_PATH").unwrap_or_else(|_| {
+        "/app/secrets/firebase-service-account.json".to_string()
+    });
+    let service_account = ServiceAccount::from_file(&sa_path)?;
+    tracing::info!(
+        "FCM service account loaded: project={}, email={}",
+        service_account.project_id,
+        service_account.client_email
+    );
 
     let db = create_pool(&db_config).await?;
     let redis_cache = create_redis_client(&redis_config.cache_url)?;
@@ -77,7 +91,13 @@ async fn main() -> anyhow::Result<()> {
             .as_deref()
             .unwrap_or(&redis_config.cache_url),
     )?;
-    let http_client = reqwest::Client::new();
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .expect("Failed to build HTTP client");
+
+    let fcm_auth = FcmAuth::new(service_account, http_client.clone());
 
     let state = Arc::new(AppState {
         db,
@@ -85,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         redis_cache_conn,
         redis_pubsub,
         jwt_config,
-        fcm_config,
+        fcm_auth,
         http_client,
     });
 

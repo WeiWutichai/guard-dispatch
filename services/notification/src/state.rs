@@ -3,30 +3,7 @@ use shared::auth::HasJwtSecret;
 use shared::config::JwtConfig;
 use sqlx::PgPool;
 
-#[derive(Debug, Clone)]
-pub struct FcmConfig {
-    pub server_key: String,
-    pub project_id: String,
-}
-
-impl FcmConfig {
-    pub fn from_env() -> Result<Self, shared::error::AppError> {
-        let server_key = std::env::var("FCM_SERVER_KEY").map_err(|_| {
-            shared::error::AppError::Internal(
-                "FCM_SERVER_KEY env var is required but not set".to_string(),
-            )
-        })?;
-        let project_id = std::env::var("FCM_PROJECT_ID").map_err(|_| {
-            shared::error::AppError::Internal(
-                "FCM_PROJECT_ID env var is required but not set".to_string(),
-            )
-        })?;
-        Ok(Self {
-            server_key,
-            project_id,
-        })
-    }
-}
+use crate::fcm::FcmAuth;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -38,7 +15,8 @@ pub struct AppState {
     #[allow(dead_code)]
     pub redis_pubsub: redis::Client,
     pub jwt_config: JwtConfig,
-    pub fcm_config: FcmConfig,
+    /// FCM OAuth 2.0 auth — manages access token lifecycle automatically.
+    pub fcm_auth: FcmAuth,
     pub http_client: reqwest::Client,
 }
 

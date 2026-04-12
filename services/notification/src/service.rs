@@ -7,7 +7,7 @@ use crate::models::{
     FcmTokenRow, ListNotificationsQuery, NotificationLogResponse, NotificationLogRow,
     SendNotificationRequest,
 };
-use crate::state::FcmConfig;
+use crate::fcm::FcmAuth;
 
 // =============================================================================
 // Register FCM Token
@@ -172,7 +172,7 @@ pub async fn mark_all_as_read(
 pub async fn send_notification(
     db: &PgPool,
     http_client: &reqwest::Client,
-    fcm_config: &FcmConfig,
+    fcm_auth: &FcmAuth,
     req: SendNotificationRequest,
 ) -> Result<NotificationLogResponse, AppError> {
     let ntype_str = serde_json::to_value(&req.notification_type)
@@ -213,7 +213,7 @@ pub async fn send_notification(
     for token_row in &tokens {
         if let Err(e) = send_fcm_push(
             http_client,
-            fcm_config,
+            fcm_auth,
             &token_row.token,
             &req.title,
             &req.body,
@@ -232,20 +232,23 @@ pub async fn send_notification(
 }
 
 // =============================================================================
-// FCM HTTP v1 API
+// FCM HTTP v1 API — OAuth 2.0 authenticated
 // =============================================================================
 
 async fn send_fcm_push(
     http_client: &reqwest::Client,
-    fcm_config: &FcmConfig,
+    fcm_auth: &FcmAuth,
     device_token: &str,
     title: &str,
     body: &str,
     data: &Option<serde_json::Value>,
 ) -> Result<(), AppError> {
+    // Get a valid OAuth 2.0 access token (cached, auto-refreshes ~55 min)
+    let access_token = fcm_auth.get_access_token().await?;
+
     let url = format!(
         "https://fcm.googleapis.com/v1/projects/{}/messages:send",
-        fcm_config.project_id
+        fcm_auth.project_id()
     );
 
     let mut message = serde_json::json!({
@@ -264,7 +267,7 @@ async fn send_fcm_push(
 
     let response = http_client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", fcm_config.server_key))
+        .header("Authorization", format!("Bearer {access_token}"))
         .json(&message)
         .send()
         .await

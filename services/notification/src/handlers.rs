@@ -164,7 +164,7 @@ pub async fn send_notification(
         ));
     }
     let notification =
-        crate::service::send_notification(&state.db, &state.http_client, &state.fcm_config, req)
+        crate::service::send_notification(&state.db, &state.http_client, &state.fcm_auth, req)
             .await?;
     Ok(Json(ApiResponse::success(notification)))
 }

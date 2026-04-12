@@ -131,6 +131,11 @@ $RECYCLE.BIN/
 frontend/mobile/ios/Runner/GoogleService-Info.plist
 frontend/mobile/android/app/google-services.json
 
+# Firebase Service Account private key (used by notification-service for FCM OAuth)
+# NEVER commit this — contains RSA private key for server-to-server auth.
+services/notification/secrets/
+**/firebase-service-account.json
+
 # -----------------------------------------------------------------------------
 # Office lock files + build caches
 # -----------------------------------------------------------------------------
