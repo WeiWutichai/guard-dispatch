@@ -1572,11 +1572,15 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
                     size: 11,
                     color: AppColors.textSecondary.withValues(alpha: 0.7)),
                 const SizedBox(width: 4),
-                Text(
-                  coords,
-                  style: GoogleFonts.inter(
-                    fontSize: 10,
-                    color: AppColors.textSecondary.withValues(alpha: 0.7),
+                Expanded(
+                  child: Text(
+                    coords,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      color: AppColors.textSecondary.withValues(alpha: 0.7),
+                    ),
                   ),
                 ),
               ],
@@ -1592,26 +1596,30 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       children: [
         Icon(icon, size: 18, color: AppColors.primary),
         const SizedBox(width: 10),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: GoogleFonts.inter(
-                fontSize: 11,
-                color: AppColors.textSecondary,
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              value,
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
+              const SizedBox(height: 2),
+              Text(
+                value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ],
     );

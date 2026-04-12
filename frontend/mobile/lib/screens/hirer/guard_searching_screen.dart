@@ -604,12 +604,19 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                _buildSkillChip(isThai ? 'รักษาความปลอดภัย' : 'Security',
-                    Icons.security_rounded),
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      _buildSkillChip(isThai ? 'รักษาความปลอดภัย' : 'Security',
+                          Icons.security_rounded),
+                      _buildSkillChip(
+                          isThai ? 'ลาดตระเวน' : 'Patrol', Icons.directions_walk_rounded),
+                    ],
+                  ),
+                ),
                 const SizedBox(width: 8),
-                _buildSkillChip(
-                    isThai ? 'ลาดตระเวน' : 'Patrol', Icons.directions_walk_rounded),
-                const Spacer(),
                 // Online indicator
                 Container(
                   padding:

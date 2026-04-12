@@ -327,6 +327,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                   const SizedBox(height: 14),
                   // Info text
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(
                         Icons.info_outline_rounded,
@@ -334,11 +335,13 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                         color: AppColors.textSecondary.withValues(alpha: 0.5),
                       ),
                       const SizedBox(width: 6),
-                      Text(
-                        strings.otpInfo,
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: AppColors.textSecondary.withValues(alpha: 0.6),
+                      Expanded(
+                        child: Text(
+                          strings.otpInfo,
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: AppColors.textSecondary.withValues(alpha: 0.6),
+                          ),
                         ),
                       ),
                     ],

@@ -180,7 +180,10 @@ class _GuardDetailScreenState extends State<GuardDetailScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 8),
-                                  Row(
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
                                     children: [
                                       // Badge
                                       Container(
@@ -206,30 +209,34 @@ class _GuardDetailScreenState extends State<GuardDetailScreen> {
                                           ],
                                         ),
                                       ),
-                                      const SizedBox(width: 8),
                                       // Online status
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          color: isOnlineNow
-                                              ? AppColors.primary
-                                              : AppColors.disabled,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        isOnlineNow
-                                            ? (isThai ? 'ออนไลน์' : 'Online')
-                                            : '${minutesAgo}m',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w500,
-                                          color: isOnlineNow
-                                              ? AppColors.primary
-                                              : AppColors.disabled,
-                                        ),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(
+                                            width: 8,
+                                            height: 8,
+                                            decoration: BoxDecoration(
+                                              color: isOnlineNow
+                                                  ? AppColors.primary
+                                                  : AppColors.disabled,
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            isOnlineNow
+                                                ? (isThai ? 'ออนไลน์' : 'Online')
+                                                : '${minutesAgo}m',
+                                            style: GoogleFonts.inter(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w500,
+                                              color: isOnlineNow
+                                                  ? AppColors.primary
+                                                  : AppColors.disabled,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
