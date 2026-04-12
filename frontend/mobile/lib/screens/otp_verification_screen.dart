@@ -176,6 +176,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
             // Account approved → auto-login with stored PIN hash
             try {
               await authProvider.loginWithPhone(widget.phone, storedHash);
+              await AuthService.storePhone(widget.phone);
               if (!mounted) return;
               Navigator.pushAndRemoveUntil(
                 context,
@@ -186,6 +187,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               );
             } catch (_) {
               // Stored PIN doesn't match backend → manual PIN entry
+              await AuthService.storePhone(widget.phone);
               if (!mounted) return;
               Navigator.pushAndRemoveUntil(
                 context,

@@ -123,6 +123,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             await context
                 .read<AuthProvider>()
                 .loginWithPhone(widget.phone!, pinHash);
+            await AuthService.storePhone(widget.phone!);
             if (!mounted) return;
             // Auto-login succeeded → dashboard via RoleSelection
             Navigator.pushAndRemoveUntil(
@@ -135,6 +136,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             return;
           } catch (_) {
             // PIN doesn't match backend → let user enter original PIN
+            await AuthService.storePhone(widget.phone!);
             if (!mounted) return;
             Navigator.pushAndRemoveUntil(
               context,

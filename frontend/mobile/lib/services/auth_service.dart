@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -97,15 +98,20 @@ class AuthService {
   /// location for a single migration cycle so users upgrading don't lose it.
   static Future<String?> getStoredPhone() async {
     final secure = await _secureStorage.read(key: _keyPhone);
-    if (secure != null) return secure;
+    if (secure != null) {
+      if (kDebugMode) debugPrint('[AuthService] getStoredPhone: found in SecureStorage');
+      return secure;
+    }
     // Legacy fallback — migrate on read.
     final prefs = await SharedPreferences.getInstance();
     final legacy = prefs.getString(_keyPhone);
     if (legacy != null) {
+      if (kDebugMode) debugPrint('[AuthService] getStoredPhone: migrating from SharedPreferences');
       await _secureStorage.write(key: _keyPhone, value: legacy);
       await prefs.remove(_keyPhone);
       return legacy;
     }
+    if (kDebugMode) debugPrint('[AuthService] getStoredPhone: NOT FOUND');
     return null;
   }
 
