@@ -367,7 +367,7 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
                   const Spacer(),
                   // Submit button
                   GestureDetector(
-                    onTap: (_isValid && !_isLoading) ? _onNext : null,
+                    onTap: (_isValid && !_isLoading && !_otpInFlight) ? _onNext : null,
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       width: double.infinity,
