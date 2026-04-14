@@ -75,7 +75,7 @@ class _BookingScreenState extends State<BookingScreen> {
     super.initState();
     final rate = widget.serviceRate;
     _serviceName = rate['name'] as String? ?? '';
-    _minHours = rate['min_hours'] as int? ?? 4;
+    _minHours = rate['min_hours'] as int? ?? 6;
     _baseFee = (rate['base_fee'] as num?)?.toDouble() ?? 0;
 
     _selectedHours = _minHours;
@@ -123,7 +123,7 @@ class _BookingScreenState extends State<BookingScreen> {
     return (t != null && t > 0) ? t : 0;
   }
 
-  double get _total => _subtotal + _baseFee + _tip;
+  double get _total => _subtotal + _tip;
 
   static final Dio _nominatimDio = Dio(BaseOptions(
     baseUrl: 'https://nominatim.openstreetmap.org',
@@ -1173,11 +1173,6 @@ class _BookingScreenState extends State<BookingScreen> {
                 ? '$_selectedHours ชม. × $_guardCount คน'
                 : '$_selectedHours hrs × $_guardCount guard${_guardCount > 1 ? 's' : ''}',
             '฿${_subtotal.toStringAsFixed(0)}',
-          ),
-          const SizedBox(height: 8),
-          _buildPriceRow(
-            isThai ? 'ค่าพื้นฐาน' : 'Base Fee',
-            '฿${_baseFee.toStringAsFixed(0)}',
           ),
           const SizedBox(height: 8),
 

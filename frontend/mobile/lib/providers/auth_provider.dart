@@ -677,7 +677,7 @@ class AuthProvider extends ChangeNotifier {
             sendTimeout: const Duration(seconds: 5),
             receiveTimeout: const Duration(seconds: 5),
           ),
-        ).timeout(const Duration(seconds: 5));
+        );
       }
     } catch (_) {
       // Backend call failed (network error, etc.) — proceed with local cleanup
@@ -705,6 +705,7 @@ class AuthProvider extends ChangeNotifier {
     _yearsOfExperience = null;
     _previousWorkplace = null;
     _guardDocUrls = {};
+    _guardDocExpiry = {};
     _docsLoaded = false;
     _customerFullName = null;
     _customerAddress = null;
