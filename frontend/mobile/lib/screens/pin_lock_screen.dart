@@ -136,7 +136,8 @@ class _PinLockScreenState extends State<PinLockScreen> {
 
     // For authenticated users: await fetchProfile so customerApprovalStatus
     // is available before RoleSelectionScreen checks it.
-    if (auth.status == AuthStatus.authenticated && auth.fullName == null) {
+    // Always verify session is still valid on server before navigating
+    if (auth.status == AuthStatus.authenticated) {
       await auth.fetchProfile().timeout(
         const Duration(seconds: 5),
         onTimeout: () => false,

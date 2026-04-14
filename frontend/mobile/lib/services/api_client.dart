@@ -43,7 +43,8 @@ class ApiClient {
 /// 3. On 401 response, attempts to refresh the token and retry (fallback).
 class _AuthInterceptor extends Interceptor {
   final Dio _dio;
-  bool _isRefreshing = false;
+  bool _isProactiveRefreshing = false;
+  bool _isReactiveRefreshing = false;
 
   /// Buffer time before expiry to trigger proactive refresh (2 minutes).
   static const _refreshBuffer = Duration(minutes: 2);
@@ -76,8 +77,8 @@ class _AuthInterceptor extends Interceptor {
 
   /// Proactively refresh the access token. Returns the new token or null.
   Future<String?> _proactiveRefresh() async {
-    if (_isRefreshing) return null;
-    _isRefreshing = true;
+    if (_isProactiveRefreshing) return null;
+    _isProactiveRefreshing = true;
     try {
       final refreshToken = await AuthService.getRefreshToken();
       if (refreshToken == null) return null;
@@ -103,7 +104,7 @@ class _AuthInterceptor extends Interceptor {
       // Proactive refresh failed — don't clear tokens, the 401 fallback
       // will handle it if the token is truly expired.
     } finally {
-      _isRefreshing = false;
+      _isProactiveRefreshing = false;
     }
     return null;
   }
@@ -156,13 +157,12 @@ class _AuthInterceptor extends Interceptor {
   ) async {
     // Fallback: if the request still got 401 (proactive refresh missed or
     // failed), attempt one more refresh + retry.
-    if (err.response?.statusCode == 401 && !_isRefreshing) {
-      _isRefreshing = true;
+    if (err.response?.statusCode == 401 && !_isReactiveRefreshing) {
+      _isReactiveRefreshing = true;
 
       try {
         final refreshToken = await AuthService.getRefreshToken();
         if (refreshToken == null) {
-          _isRefreshing = false;
           return handler.next(err);
         }
 
@@ -185,22 +185,18 @@ class _AuthInterceptor extends Interceptor {
           // Retry original request with new token
           err.requestOptions.headers['Authorization'] = 'Bearer $newAccessToken';
           final retryResponse = await _dio.fetch(err.requestOptions);
-          _isRefreshing = false;
           return handler.resolve(retryResponse);
         }
       } on DioException catch (refreshErr) {
-        // Only clear tokens if server explicitly rejected the refresh token
-        // (401/403 = token invalid). Network errors should NOT clear tokens
-        // — the user can retry when connectivity returns.
         final statusCode = refreshErr.response?.statusCode;
         if (statusCode == 401 || statusCode == 403) {
           await AuthService.clearTokens();
         }
       } catch (_) {
         // Non-Dio error (parsing, etc.) — don't clear tokens
+      } finally {
+        _isReactiveRefreshing = false;
       }
-
-      _isRefreshing = false;
     }
 
     handler.next(err);

@@ -24,6 +24,10 @@ class PinStorageService {
     final service = PinStorageService(secureStorage, prefs);
     // Load cached hash for synchronous access
     service._cachedPinHash = await secureStorage.read(key: _keyPinHash);
+    // Reset stale biometric flag if PIN was cleared (e.g. after backup restore)
+    if (service._cachedPinHash == null && service.isBiometricEnabled) {
+      await prefs.setBool(_keyBiometric, false);
+    }
     return service;
   }
 

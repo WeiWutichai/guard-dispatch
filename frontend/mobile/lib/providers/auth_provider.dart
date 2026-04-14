@@ -662,8 +662,28 @@ class AuthProvider extends ChangeNotifier {
     });
   }
 
-  /// Logout — clear tokens, pending state, and reset auth status.
+  /// Logout — revoke session on backend, then clear local tokens.
   Future<void> logout() async {
+    // Call backend to revoke access token (Redis blocklist) + delete session
+    try {
+      final accessToken = await AuthService.getAccessToken();
+      final refreshToken = await AuthService.getRefreshToken();
+      if (accessToken != null) {
+        await _apiClient.dio.post(
+          '/auth/logout',
+          data: refreshToken != null ? {'refresh_token': refreshToken} : null,
+          options: Options(
+            headers: {'Authorization': 'Bearer $accessToken'},
+            sendTimeout: const Duration(seconds: 5),
+            receiveTimeout: const Duration(seconds: 5),
+          ),
+        ).timeout(const Duration(seconds: 5));
+      }
+    } catch (_) {
+      // Backend call failed (network error, etc.) — proceed with local cleanup
+    }
+
+    // Always clear local state regardless of backend result
     await Future.wait([
       AuthService.clearTokens(),
       AuthService.clearPendingApproval(),
