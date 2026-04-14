@@ -1431,11 +1431,15 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
                     size: 11,
                     color: AppColors.textSecondary.withValues(alpha: 0.7)),
                 const SizedBox(width: 4),
-                Text(
-                  coords,
-                  style: GoogleFonts.inter(
-                    fontSize: 10,
-                    color: AppColors.textSecondary.withValues(alpha: 0.7),
+                Expanded(
+                  child: Text(
+                    coords,
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      color: AppColors.textSecondary.withValues(alpha: 0.7),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 ),
               ],

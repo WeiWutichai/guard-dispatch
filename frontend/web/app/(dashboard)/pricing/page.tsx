@@ -29,8 +29,6 @@ interface ServiceRate {
   id: string;
   name: string;
   description: string | null;
-  minPrice: number;
-  maxPrice: number;
   baseFee: number;
   minHours: number;
   notes: string;
@@ -67,8 +65,6 @@ function toServiceRate(r: ServiceRateResponse): ServiceRate {
     id: r.id,
     name: r.name,
     description: r.description,
-    minPrice: r.min_price,
-    maxPrice: r.max_price,
     baseFee: r.base_fee,
     minHours: r.min_hours,
     notes: r.notes ?? "",
@@ -140,8 +136,6 @@ export default function PricingPage() {
   // New service form
   const [newService, setNewService] = useState<Partial<ServiceRate>>({
     name: "",
-    minPrice: 0,
-    maxPrice: 0,
     baseFee: 0,
     minHours: 4,
     notes: "",
@@ -166,17 +160,15 @@ export default function PricingPage() {
   ];
 
   const handleAddService = async () => {
-    if (newService.name && newService.minPrice && newService.maxPrice) {
+    if (newService.name && newService.baseFee) {
       try {
         await pricingApi.createServiceRate({
           name: newService.name,
-          min_price: newService.minPrice || 0,
-          max_price: newService.maxPrice || 0,
           base_fee: newService.baseFee || 0,
           min_hours: newService.minHours || 4,
           notes: newService.notes || undefined,
         });
-        setNewService({ name: "", minPrice: 0, maxPrice: 0, baseFee: 0, minHours: 4, notes: "" });
+        setNewService({ name: "", baseFee: 0, minHours: 4, notes: "" });
         setAddServiceModalOpen(false);
         loadServiceRates();
       } catch {
@@ -204,8 +196,6 @@ export default function PricingPage() {
     try {
       await pricingApi.updateServiceRate(editingService.id, {
         name: editingService.name,
-        min_price: editingService.minPrice,
-        max_price: editingService.maxPrice,
         base_fee: editingService.baseFee,
         min_hours: editingService.minHours,
         notes: editingService.notes || undefined,
@@ -312,7 +302,7 @@ export default function PricingPage() {
                   </h2>
                   <p className="text-sm text-slate-500 mt-1">
                     {locale === "th"
-                      ? "กำหนดราคาขั้นต่ำ ราคาสูงสุด และค่าธรรมเนียมพื้นฐานสำหรับแต่ละประเภทบริการ"
+                      ? "กำหนดค่าบริการพื้นฐานและชั่วโมงขั้นต่ำสำหรับแต่ละประเภทบริการ"
                       : "Set minimum price, maximum price, and base fee for each service type"}
                   </p>
                 </div>
@@ -335,9 +325,7 @@ export default function PricingPage() {
                   <thead>
                     <tr className="border-b border-slate-200">
                       <th className="text-left py-3 px-4 text-xs font-bold text-slate-500 uppercase">{locale === "th" ? "ประเภทบริการ" : "Service Type"}</th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">{locale === "th" ? "ราคาขั้นต่ำ" : "Min Price"}</th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">{locale === "th" ? "ราคาสูงสุด" : "Max Price"}</th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">{locale === "th" ? "ค่าพื้นฐาน" : "Base Fee"}</th>
+                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">{locale === "th" ? "ค่าบริการพื้นฐาน" : "Base Fee"}</th>
                       <th className="text-center py-3 px-4 text-xs font-bold text-slate-500 uppercase">{locale === "th" ? "ชม.ขั้นต่ำ" : "Min Hrs"}</th>
                       <th className="text-left py-3 px-4 text-xs font-bold text-slate-500 uppercase">{locale === "th" ? "หมายเหตุ" : "Notes"}</th>
                       <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase"></th>
@@ -347,9 +335,7 @@ export default function PricingPage() {
                     {serviceRates.map((service) => (
                       <tr key={service.id} className="hover:bg-slate-50">
                         <td className="py-3 px-4 font-medium text-slate-900">{service.name}</td>
-                        <td className="py-3 px-4 text-right text-sm font-bold text-emerald-600">฿{service.minPrice}</td>
-                        <td className="py-3 px-4 text-right text-sm font-bold text-emerald-600">฿{service.maxPrice}</td>
-                        <td className="py-3 px-4 text-right text-sm text-slate-600">฿{service.baseFee}</td>
+                        <td className="py-3 px-4 text-right text-sm font-bold text-emerald-600">฿{service.baseFee}</td>
                         <td className="py-3 px-4 text-center">
                           <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 rounded text-xs font-medium text-slate-600">
                             <Clock className="h-3 w-3" />
@@ -737,30 +723,6 @@ export default function PricingPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium text-slate-700 mb-2 block">
-                    {locale === "th" ? "ราคาขั้นต่ำ (฿)" : "Min Price (฿)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={newService.minPrice}
-                    onChange={(e) => setNewService({ ...newService, minPrice: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-slate-700 mb-2 block">
-                    {locale === "th" ? "ราคาสูงสุด (฿)" : "Max Price (฿)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={newService.maxPrice}
-                    onChange={(e) => setNewService({ ...newService, maxPrice: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm font-medium text-slate-700 mb-2 block">
                     {locale === "th" ? "ค่าบริการพื้นฐาน (฿)" : "Base Fee (฿)"}
                   </label>
                   <input
@@ -838,30 +800,6 @@ export default function PricingPage() {
                   onChange={(e) => setEditingService({ ...editingService, name: e.target.value })}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
                 />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm font-medium text-slate-700 mb-2 block">
-                    {locale === "th" ? "ราคาขั้นต่ำ (฿)" : "Min Price (฿)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={editingService.minPrice}
-                    onChange={(e) => setEditingService({ ...editingService, minPrice: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-slate-700 mb-2 block">
-                    {locale === "th" ? "ราคาสูงสุด (฿)" : "Max Price (฿)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={editingService.maxPrice}
-                    onChange={(e) => setEditingService({ ...editingService, maxPrice: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
-                  />
-                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

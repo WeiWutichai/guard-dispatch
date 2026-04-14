@@ -44,6 +44,8 @@ class PinLockStrings {
   final String enterPinSubtitle;
   final String pinIncorrect;
   final String biometricSuccess;
+  final String biometricNotAvailable;
+  final String biometricReason;
 
   PinLockStrings({required bool isThai})
     : enterPin = isThai ? 'กรอกรหัส PIN' : 'Enter PIN',
@@ -55,7 +57,13 @@ class PinLockStrings {
           : 'Incorrect PIN. Try again',
       biometricSuccess = isThai
           ? 'ยืนยันลายนิ้วมือสำเร็จ'
-          : 'Fingerprint verified';
+          : 'Fingerprint verified',
+      biometricNotAvailable = isThai
+          ? 'อุปกรณ์ไม่รองรับการสแกนลายนิ้วมือ'
+          : 'Biometric authentication not available',
+      biometricReason = isThai
+          ? 'ยืนยันตัวตนเพื่อเข้าใช้งาน'
+          : 'Authenticate to unlock the app';
 }
 
 // ──────────────────────────────────────────────

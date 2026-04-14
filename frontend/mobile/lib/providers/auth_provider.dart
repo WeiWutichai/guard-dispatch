@@ -118,23 +118,24 @@ class AuthProvider extends ChangeNotifier {
       // Re-check tokens — interceptor may have cleared them on 401 + refresh failure
       final stillHasToken = await AuthService.getAccessToken();
       if (stillHasToken == null) {
-        // Tokens were cleared by interceptor (401 + refresh failure) — truly unauthenticated
+        // Tokens were cleared by interceptor (401 + refresh failure).
+        // Don't return — fall through to check-status + loginWithPhone path
+        // so the user can auto-login with stored phone + PIN hash.
         if (kDebugMode) {
-          debugPrint('[AuthProvider] tokens cleared after fetchProfile, falling back to unauthenticated');
+          debugPrint('[AuthProvider] tokens cleared after fetchProfile, falling through to check-status path');
         }
-        _status = AuthStatus.unauthenticated;
+        // Fall through to phone + PIN path below (don't set unauthenticated yet)
+      } else {
+        // Tokens still valid — user is authenticated even if profile fetch failed
+        // (e.g. network timeout, backend down). Profile data will load on next app open.
+        if (!profileOk && kDebugMode) {
+          debugPrint('[AuthProvider] fetchProfile failed but tokens still valid, treating as authenticated');
+        }
+        _status = AuthStatus.authenticated;
         notifyListeners();
+        _registerFcmToken(); // Register FCM token on auto-login too
         return;
       }
-      // Tokens still valid — user is authenticated even if profile fetch failed
-      // (e.g. network timeout, backend down). Profile data will load on next app open.
-      if (!profileOk && kDebugMode) {
-        debugPrint('[AuthProvider] fetchProfile failed but tokens still valid, treating as authenticated');
-      }
-      _status = AuthStatus.authenticated;
-      notifyListeners();
-      _registerFcmToken(); // Register FCM token on auto-login too
-      return;
     }
 
     // No token — check if user has pending registration via backend API.

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../providers/auth_provider.dart';
@@ -24,6 +25,20 @@ class PinLockScreen extends StatefulWidget {
 class _PinLockScreenState extends State<PinLockScreen> {
   String _enteredPin = '';
   bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-trigger biometric if previously enabled — prompt immediately
+    if (widget.pinService.isBiometricEnabled) {
+      final isThai = WidgetsBinding.instance.platformDispatcher.locale.languageCode == 'th';
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _onBiometricTap(PinLockStrings(isThai: isThai));
+        }
+      });
+    }
+  }
 
   void _onDigit(String digit) {
     if (_enteredPin.length >= 6) return;
@@ -60,33 +75,58 @@ class _PinLockScreenState extends State<PinLockScreen> {
     }
   }
 
-  void _onBiometricTap(PinLockStrings strings) {
-    // Simulated biometric success for prototype
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(
-              Icons.check_circle_rounded,
-              color: Colors.white,
-              size: 20,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              strings.biometricSuccess,
-              style: GoogleFonts.inter(fontWeight: FontWeight.w500),
-            ),
-          ],
+  Future<void> _onBiometricTap(PinLockStrings strings) async {
+    final localAuth = LocalAuthentication();
+
+    // Check if biometrics are available on this device
+    final canCheck = await localAuth.canCheckBiometrics;
+    final isSupported = await localAuth.isDeviceSupported();
+    if (!canCheck || !isSupported) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(strings.biometricNotAvailable),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
-        backgroundColor: AppColors.primary,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        duration: const Duration(milliseconds: 800),
-      ),
-    );
-    Future.delayed(const Duration(milliseconds: 900), () {
-      if (mounted) _navigateToApp();
-    });
+      );
+      return;
+    }
+
+    try {
+      final authenticated = await localAuth.authenticate(
+        localizedReason: strings.biometricReason,
+        options: const AuthenticationOptions(
+          stickyAuth: true,
+          biometricOnly: true,
+        ),
+      );
+
+      if (!mounted) return;
+      if (authenticated) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Text(strings.biometricSuccess, style: GoogleFonts.inter(fontWeight: FontWeight.w500)),
+              ],
+            ),
+            backgroundColor: AppColors.primary,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(milliseconds: 800),
+          ),
+        );
+        Future.delayed(const Duration(milliseconds: 900), () {
+          if (mounted) _navigateToApp();
+        });
+      }
+    } catch (_) {
+      // Biometric auth failed or was cancelled — user can still use PIN
+    }
   }
 
   Future<void> _navigateToApp() async {

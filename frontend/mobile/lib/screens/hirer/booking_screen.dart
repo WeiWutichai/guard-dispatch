@@ -68,8 +68,6 @@ class _BookingScreenState extends State<BookingScreen> {
   // Parsed from service rate
   late String _serviceName;
   late int _minHours;
-  late double _minPrice;
-  late double _maxPrice;
   late double _baseFee;
 
   @override
@@ -78,8 +76,6 @@ class _BookingScreenState extends State<BookingScreen> {
     final rate = widget.serviceRate;
     _serviceName = rate['name'] as String? ?? '';
     _minHours = rate['min_hours'] as int? ?? 4;
-    _minPrice = (rate['min_price'] as num?)?.toDouble() ?? 0;
-    _maxPrice = (rate['max_price'] as num?)?.toDouble() ?? 0;
     _baseFee = (rate['base_fee'] as num?)?.toDouble() ?? 0;
 
     _selectedHours = _minHours;
@@ -121,8 +117,7 @@ class _BookingScreenState extends State<BookingScreen> {
     return start.add(Duration(hours: _selectedHours));
   }
 
-  double get _hourlyRate => (_minPrice + _maxPrice) / 2;
-  double get _subtotal => _hourlyRate * _selectedHours * _guardCount;
+  double get _subtotal => _baseFee * _selectedHours * _guardCount;
   double get _tip {
     final t = double.tryParse(_tipController.text.trim());
     return (t != null && t > 0) ? t : 0;
@@ -412,6 +407,29 @@ class _BookingScreenState extends State<BookingScreen> {
           ),
         ),
       );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      if (e.response?.statusCode == 401) {
+        // Token expired and refresh failed — redirect to login
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isThai
+                ? 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่'
+                : 'Session expired. Please log in again.'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.red,
+          ),
+        );
+      } else {
+        final message = e.response?.data?['error']?['message'] as String?;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message ?? (isThai ? 'เกิดข้อผิดพลาด' : 'An error occurred')),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -510,7 +528,7 @@ class _BookingScreenState extends State<BookingScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '฿${_minPrice.toInt()}-${_maxPrice.toInt()}/${isThai ? 'ชม.' : 'hr'}',
+                      '฿${_baseFee.toInt()}/${isThai ? 'ชม.' : 'hr'}',
                       style: GoogleFonts.inter(
                         fontSize: 13,
                         color: Colors.white.withValues(alpha: 0.9),
@@ -1147,7 +1165,7 @@ class _BookingScreenState extends State<BookingScreen> {
           // Breakdown
           _buildPriceRow(
             isThai ? 'ค่าบริการรายชั่วโมง' : 'Hourly Rate',
-            '฿${_hourlyRate.toStringAsFixed(0)}/${isThai ? 'ชม.' : 'hr'}',
+            '฿${_baseFee.toInt()}/${isThai ? 'ชม.' : 'hr'}',
           ),
           const SizedBox(height: 8),
           _buildPriceRow(

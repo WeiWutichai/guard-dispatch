@@ -283,8 +283,6 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
   }) {
     final name = rate['name'] as String? ?? '';
     final description = rate['description'] as String? ?? '';
-    final minPrice = (rate['min_price'] as num?)?.toInt() ?? 0;
-    final maxPrice = (rate['max_price'] as num?)?.toInt() ?? 0;
     final baseFee = (rate['base_fee'] as num?)?.toInt() ?? 0;
     final minHours = rate['min_hours'] as int? ?? 4;
     final notes = rate['notes'] as String? ?? '';
@@ -426,7 +424,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen>
                 text: TextSpan(
                   children: [
                     TextSpan(
-                      text: '฿$minPrice-$maxPrice',
+                      text: '฿$baseFee',
                       style: GoogleFonts.inter(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,

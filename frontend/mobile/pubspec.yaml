@@ -57,6 +57,9 @@ dependencies:
   # Image picker (for document/photo uploads)
   image_picker: ^1.1.2
 
+  # Biometric authentication
+  local_auth: ^2.3.0
+
   # Map & Location
   flutter_map: ^8.2.2
   latlong2: ^0.9.1

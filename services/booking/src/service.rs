@@ -1577,7 +1577,7 @@ pub async fn set_review_visibility(
 pub async fn list_service_rates(db: &PgPool) -> Result<Vec<ServiceRate>, AppError> {
     let rows = sqlx::query_as::<_, ServiceRate>(
         r#"
-        SELECT id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        SELECT id, name, description, base_fee, min_hours, notes, is_active, created_at, updated_at
         FROM booking.service_rates
         WHERE is_active = true
         ORDER BY created_at ASC
@@ -1593,7 +1593,7 @@ pub async fn list_service_rates(db: &PgPool) -> Result<Vec<ServiceRate>, AppErro
 pub async fn get_service_rate(db: &PgPool, id: Uuid) -> Result<ServiceRate, AppError> {
     let row = sqlx::query_as::<_, ServiceRate>(
         r#"
-        SELECT id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        SELECT id, name, description, base_fee, min_hours, notes, is_active, created_at, updated_at
         FROM booking.service_rates
         WHERE id = $1 AND is_active = true
         "#,
@@ -1607,28 +1607,11 @@ pub async fn get_service_rate(db: &PgPool, id: Uuid) -> Result<ServiceRate, AppE
 }
 
 fn validate_prices(
-    min_price: rust_decimal::Decimal,
-    max_price: rust_decimal::Decimal,
     base_fee: rust_decimal::Decimal,
 ) -> Result<(), AppError> {
-    if min_price < rust_decimal::Decimal::ZERO {
-        return Err(AppError::BadRequest(
-            "Min price cannot be negative".to_string(),
-        ));
-    }
-    if max_price < rust_decimal::Decimal::ZERO {
-        return Err(AppError::BadRequest(
-            "Max price cannot be negative".to_string(),
-        ));
-    }
     if base_fee < rust_decimal::Decimal::ZERO {
         return Err(AppError::BadRequest(
             "Base fee cannot be negative".to_string(),
-        ));
-    }
-    if min_price > max_price {
-        return Err(AppError::BadRequest(
-            "Min price cannot exceed max price".to_string(),
         ));
     }
     Ok(())
@@ -1647,21 +1630,19 @@ pub async fn create_service_rate(
             "Service name too long (max 200 chars)".to_string(),
         ));
     }
-    validate_prices(dto.min_price, dto.max_price, dto.base_fee)?;
+    validate_prices(dto.base_fee)?;
 
     let min_hours = dto.min_hours.unwrap_or(6);
 
     let row = sqlx::query_as::<_, ServiceRate>(
         r#"
-        INSERT INTO booking.service_rates (name, description, min_price, max_price, base_fee, min_hours, notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        INSERT INTO booking.service_rates (name, description, base_fee, min_hours, notes)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, name, description, base_fee, min_hours, notes, is_active, created_at, updated_at
         "#,
     )
     .bind(&name)
     .bind(&dto.description)
-    .bind(dto.min_price)
-    .bind(dto.max_price)
     .bind(dto.base_fee)
     .bind(min_hours)
     .bind(&dto.notes)
@@ -1692,7 +1673,7 @@ pub async fn update_service_rate(
     // Fetch existing to validate merged price values
     let existing = sqlx::query_as::<_, ServiceRate>(
         r#"
-        SELECT id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        SELECT id, name, description, base_fee, min_hours, notes, is_active, created_at, updated_at
         FROM booking.service_rates
         WHERE id = $1 AND is_active = true
         "#,
@@ -1702,32 +1683,26 @@ pub async fn update_service_rate(
     .await?
     .ok_or_else(|| AppError::NotFound("Service rate not found".to_string()))?;
 
-    let final_min = dto.min_price.unwrap_or(existing.min_price);
-    let final_max = dto.max_price.unwrap_or(existing.max_price);
     let final_base = dto.base_fee.unwrap_or(existing.base_fee);
-    validate_prices(final_min, final_max, final_base)?;
+    validate_prices(final_base)?;
 
     let row = sqlx::query_as::<_, ServiceRate>(
         r#"
         UPDATE booking.service_rates
         SET name        = COALESCE($2, name),
             description = COALESCE($3, description),
-            min_price   = COALESCE($4, min_price),
-            max_price   = COALESCE($5, max_price),
-            base_fee    = COALESCE($6, base_fee),
-            min_hours   = COALESCE($7, min_hours),
-            notes       = COALESCE($8, notes),
-            is_active   = COALESCE($9, is_active),
+            base_fee    = COALESCE($4, base_fee),
+            min_hours   = COALESCE($5, min_hours),
+            notes       = COALESCE($6, notes),
+            is_active   = COALESCE($7, is_active),
             updated_at  = NOW()
         WHERE id = $1
-        RETURNING id, name, description, min_price, max_price, base_fee, min_hours, notes, is_active, created_at, updated_at
+        RETURNING id, name, description, base_fee, min_hours, notes, is_active, created_at, updated_at
         "#,
     )
     .bind(id)
     .bind(dto.name.as_deref().map(str::trim))
     .bind(&dto.description)
-    .bind(dto.min_price)
-    .bind(dto.max_price)
     .bind(dto.base_fee)
     .bind(dto.min_hours)
     .bind(&dto.notes)

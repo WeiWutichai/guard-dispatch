@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../providers/auth_provider.dart';
@@ -89,6 +90,41 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
   }
 
   Future<void> _finishSetup({required bool enableBiometric}) async {
+    // If user wants biometric, verify it actually works before enabling
+    if (enableBiometric) {
+      final localAuth = LocalAuthentication();
+      final canCheck = await localAuth.canCheckBiometrics;
+      final isSupported = await localAuth.isDeviceSupported();
+      if (!canCheck || !isSupported) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('อุปกรณ์ไม่รองรับการสแกนลายนิ้วมือ / Biometric not available'),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        enableBiometric = false;
+      } else {
+        try {
+          final authenticated = await localAuth.authenticate(
+            localizedReason: 'ยืนยันตัวตนด้วยลายนิ้วมือ',
+            options: const AuthenticationOptions(
+              stickyAuth: true,
+              biometricOnly: true,
+            ),
+          );
+          if (!authenticated) {
+            // User cancelled or failed — don't enable biometric, but continue setup
+            enableBiometric = false;
+          }
+        } catch (_) {
+          enableBiometric = false;
+        }
+      }
+      if (!mounted) return;
+    }
+
     await widget.pinService.savePin(_firstPin);
     await widget.pinService.setBiometricEnabled(enableBiometric);
     if (!mounted) return;

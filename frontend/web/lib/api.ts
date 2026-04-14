@@ -111,8 +111,6 @@ export interface ServiceRateResponse {
   id: string;
   name: string;
   description: string | null;
-  min_price: number;
-  max_price: number;
   base_fee: number;
   min_hours: number;
   notes: string | null;
@@ -520,8 +518,6 @@ export const pricingApi = {
   createServiceRate: (data: {
     name: string;
     description?: string;
-    min_price: number;
-    max_price: number;
     base_fee: number;
     min_hours?: number;
     notes?: string;
@@ -536,8 +532,6 @@ export const pricingApi = {
     data: {
       name?: string;
       description?: string;
-      min_price?: number;
-      max_price?: number;
       base_fee?: number;
       min_hours?: number;
       notes?: string;

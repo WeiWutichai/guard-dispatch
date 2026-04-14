@@ -526,30 +526,33 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
                   ),
                 ),
                 // Distance pill
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF0FDF4),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.near_me_rounded,
-                          size: 13, color: AppColors.primary),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${distanceKm.toStringAsFixed(1)} ${isThai ? "กม." : "km"}',
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.primary,
+                Flexible(
+                  flex: 0,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0FDF4),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: AppColors.primary.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.near_me_rounded,
+                            size: 13, color: AppColors.primary),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${distanceKm.toStringAsFixed(1)} ${isThai ? "กม." : "km"}',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.primary,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ],
@@ -567,31 +570,37 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildStat(
-                  Icons.star_rounded,
-                  const Color(0xFFF59E0B),
-                  rating.toStringAsFixed(1),
-                  '$reviewCount ${isThai ? "รีวิว" : "reviews"}',
+                Flexible(
+                  child: _buildStat(
+                    Icons.star_rounded,
+                    const Color(0xFFF59E0B),
+                    rating.toStringAsFixed(1),
+                    '$reviewCount ${isThai ? "รีวิว" : "reviews"}',
+                  ),
                 ),
                 Container(
                     width: 1,
                     height: 28,
                     color: AppColors.border),
-                _buildStat(
-                  Icons.check_circle_rounded,
-                  AppColors.primary,
-                  '$completedJobs',
-                  isThai ? 'งานสำเร็จ' : 'completed',
+                Flexible(
+                  child: _buildStat(
+                    Icons.check_circle_rounded,
+                    AppColors.primary,
+                    '$completedJobs',
+                    isThai ? 'งานสำเร็จ' : 'completed',
+                  ),
                 ),
                 Container(
                     width: 1,
                     height: 28,
                     color: AppColors.border),
-                _buildStat(
-                  Icons.work_history_rounded,
-                  const Color(0xFF6366F1),
-                  '$experienceYears ${isThai ? "ปี" : "yr"}',
-                  isThai ? 'ประสบการณ์' : 'experience',
+                Flexible(
+                  child: _buildStat(
+                    Icons.work_history_rounded,
+                    const Color(0xFF6366F1),
+                    '$experienceYears ${isThai ? "ปี" : "yr"}',
+                    isThai ? 'ประสบการณ์' : 'experience',
+                  ),
                 ),
               ],
             ),
@@ -602,21 +611,16 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
           // Skills + online status
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              alignment: WrapAlignment.start,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      _buildSkillChip(isThai ? 'รักษาความปลอดภัย' : 'Security',
-                          Icons.security_rounded),
-                      _buildSkillChip(
-                          isThai ? 'ลาดตระเวน' : 'Patrol', Icons.directions_walk_rounded),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
+                _buildSkillChip(isThai ? 'รักษาความปลอดภัย' : 'Security',
+                    Icons.security_rounded),
+                _buildSkillChip(
+                    isThai ? 'ลาดตระเวน' : 'Patrol', Icons.directions_walk_rounded),
                 // Online indicator
                 Container(
                   padding:
@@ -660,9 +664,9 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
             ),
           ),
 
-              ],
-            ),
-          ), // end GestureDetector
+            ],
+          ),
+        ), // end GestureDetector
 
           const SizedBox(height: 14),
 
@@ -694,15 +698,19 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
                             borderRadius: BorderRadius.circular(12)),
                       ),
                       child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           const Icon(Icons.rate_review_outlined, size: 16),
                           const SizedBox(width: 6),
-                          Text(
-                            isThai ? 'ดูรีวิว' : 'Reviews',
-                            style: GoogleFonts.inter(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                          Flexible(
+                            child: Text(
+                              isThai ? 'ดูรีวิว' : 'Reviews',
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
@@ -736,15 +744,19 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
                                   color: Colors.white, strokeWidth: 2),
                             )
                           : Row(
+                              mainAxisSize: MainAxisSize.min,
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 const Icon(Icons.shield_rounded, size: 18),
                                 const SizedBox(width: 8),
-                                Text(
-                                  isThai ? 'ยืนยันการจอง' : 'Confirm Booking',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
+                                Flexible(
+                                  child: Text(
+                                    isThai ? 'ยืนยันการจอง' : 'Confirm Booking',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                               ],
@@ -768,12 +780,15 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
           children: [
             Icon(icon, size: 14, color: iconColor),
             const SizedBox(width: 4),
-            Text(
-              value,
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary,
+            Flexible(
+              child: Text(
+                value,
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -785,6 +800,7 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
             fontSize: 10,
             color: AppColors.disabled,
           ),
+          overflow: TextOverflow.ellipsis,
         ),
       ],
     );
