@@ -27,6 +27,7 @@
   - **HTTP Client:** Dio (with JWT interceptor via `ApiClient`)
   - **Secure Storage:** FlutterSecureStorage (Keychain on iOS, EncryptedSharedPreferences on Android)
   - **Auth Provider:** `AuthProvider` (centralized auth state via Provider)
+  - **Biometric Auth:** `local_auth` package — fingerprint (Android) + Face ID (iOS)
   - **Map:** flutter_map + latlong2 + geolocator
 
 ### Backend (Rust ทั้งหมด)
@@ -204,8 +205,6 @@ CREATE TABLE booking.service_rates (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name        TEXT NOT NULL,
   description TEXT,
-  min_price   DECIMAL(10,2) NOT NULL,
-  max_price   DECIMAL(10,2) NOT NULL,
   base_fee    DECIMAL(10,2) NOT NULL,
   min_hours   INTEGER NOT NULL DEFAULT 6,
   notes       TEXT,
@@ -215,8 +214,9 @@ CREATE TABLE booking.service_rates (
 );
 CREATE INDEX idx_service_rates_active ON booking.service_rates(is_active);
 ```
+> **Simplified pricing (migration 037+038):** เดิมมี `min_price`/`max_price`/`price_per_hour` → ลดเหลือ `base_fee` เดียว สูตร: `total = base_fee × hours × guards + tip`
 > **Soft delete:** `is_active = false` instead of actual deletion. All public queries filter `WHERE is_active = true`.
-> **Price validation:** `min_price <= max_price`, all prices >= 0, name <= 200 chars — enforced in Rust service layer.
+> **Price validation:** `base_fee >= 0`, name <= 200 chars — enforced in Rust service layer.
 > **Decimal type:** Uses `rust_decimal::Decimal` in Rust — utoipa requires `#[schema(value_type = f64)]` annotation.
 
 ### Reviews Table
@@ -449,9 +449,18 @@ CREATE TABLE notification.fcm_tokens (
 - **Secure Storage:** ข้อมูล sensitive (JWT tokens, PIN hash) ต้องเก็บใน `FlutterSecureStorage` เท่านั้น — ห้ามใช้ `SharedPreferences` สำหรับ tokens
   - `SharedPreferences` ใช้ได้เฉพาะ non-sensitive data (language pref, registration flags)
 - **PIN Security:** Hash PIN ด้วย SHA-256 ก่อนเก็บ — ห้ามเก็บ plaintext PIN
+- **Biometric Auth (local_auth):**
+  - Android: `USE_BIOMETRIC` permission ใน `AndroidManifest.xml`, `FlutterFragmentActivity` (ไม่ใช่ `FlutterActivity`)
+  - iOS: `NSFaceIDUsageDescription` ใน `Info.plist` (จำเป็น — ไม่มีจะ crash บน Face ID devices)
+  - `PinSetupScreen`: กด "เปิดใช้งาน" → สแกนลายนิ้วมือ/Face ID จริงก่อน enable
+  - `PinLockScreen`: ถ้าเคยเปิด biometric → auto-trigger สแกนทันที (500ms delay) → สำเร็จ → `_navigateToApp()` พร้อม `fetchProfile()` ยืนยัน session
+  - `PinStorageService.init()`: reset stale `biometric_enabled` flag ถ้า PIN hash หายไป (backup restore)
 - **API Client:** ใช้ `ApiClient` (Dio-based) ที่มี JWT interceptor อัตโนมัติ — ห้ามเรียก API ตรงโดยไม่ผ่าน interceptor
   - Interceptor ใส่ Bearer token จาก `FlutterSecureStorage` อัตโนมัติ
-  - 401 response → auto-refresh token แล้ว retry — **refresh response ต้อง parse `response.data['data']`** (ApiResponse wrapper) ไม่ใช่ `response.data` ตรง
+  - **Proactive refresh:** ก่อนส่ง request ตรวจ JWT `exp` — ถ้าเหลือ < 2 นาที → refresh ล่วงหน้าใน `onRequest` ไม่ต้องรอ 401
+  - **Reactive refresh (fallback):** 401 response → auto-refresh token แล้ว retry — **refresh response ต้อง parse `response.data['data']`** (ApiResponse wrapper) ไม่ใช่ `response.data` ตรง
+  - **Dual refresh flags:** `_isProactiveRefreshing` + `_isReactiveRefreshing` แยกกัน — ป้องกัน 401 ถูก drop ระหว่าง proactive refresh
+  - **Token clearing:** clear เฉพาะเมื่อ server ตอบ 401/403 — network error ไม่ clear (user retry ได้เมื่อ connectivity กลับมา)
   - Skip auth สำหรับ public endpoints (`/auth/login`, `/auth/register`, etc.)
 - **State Management:** ใช้ Provider pattern (`ChangeNotifierProvider`) — `AuthProvider` เป็น centralized auth state
   - `main.dart` wrap app ด้วย `MultiProvider`
@@ -620,11 +629,12 @@ guard-dispatch/                 ← Monorepo (1 Repo)
 ### Pricing Page (/pricing)
 - **Data Source:** `pricingApi.listServiceRates()` → `GET /booking/pricing/services` (public, no JWT)
 - **API Object:** `pricingApi` in `lib/api.ts` — `listServiceRates()`, `createServiceRate()`, `updateServiceRate()`, `deleteServiceRate()`
-- **Type:** `ServiceRateResponse` in `lib/api.ts` — maps to `booking.service_rates` table fields (snake_case)
+- **Type:** `ServiceRateResponse` in `lib/api.ts` — fields: `base_fee`, `min_hours`, `notes` (no min/max price)
 - **Local Type:** `ServiceRate` (camelCase) in page — mapped via `toServiceRate()` helper
 - **Tabs:** 2 tabs — "บริการ" (Services) manages service rates CRUD; "กฎราคา" (Price Rules) placeholder
 - **CRUD:** Admin can add/edit/delete service rates — delete calls `pricingApi.deleteServiceRate()` then reloads list (not optimistic)
 - **Loading:** Shows `Loader2` spinner in services tab while loading
+- **Pricing formula:** `total = base_fee × hours × guards + tip` — ไม่มี min_price/max_price/price_per_hour แล้ว
 
 ### Map Page Architecture (/map)
 - **Auth Gate:** `useAuth()` — admin + customer only (guards see unauthorized screen)
@@ -820,10 +830,11 @@ RegistrationPendingScreen({role})
 **Booking Service — Pricing Endpoints (main.rs):**
 - `GET /pricing/services` → `handlers::list_service_rates` (public, no JWT) — returns active rates, `LIMIT 100`
 - `GET /pricing/services/{id}` → `handlers::get_service_rate` (public, no JWT) — returns single active rate (filters `is_active = true`)
-- `POST /pricing/services` → `handlers::create_service_rate` (admin JWT) — validates: name not empty, name ≤ 200 chars, prices ≥ 0, min_price ≤ max_price
-- `PUT /pricing/services/{id}` → `handlers::update_service_rate` (admin JWT) — partial update via COALESCE; merges with existing values before validating prices
+- `POST /pricing/services` → `handlers::create_service_rate` (admin JWT) — validates: name not empty, name ≤ 200 chars, base_fee ≥ 0
+- `PUT /pricing/services/{id}` → `handlers::update_service_rate` (admin JWT) — partial update via COALESCE; merges with existing values before validating
 - `DELETE /pricing/services/{id}` → `handlers::delete_service_rate` (admin JWT) — soft delete (`is_active = false`), returns 204
-- **Validation:** `validate_prices()` helper checks all 3 price fields ≥ 0 and min_price ≤ max_price; applied on both create and update (with merged values)
+- **Validation:** `validate_prices()` checks `base_fee >= 0`; applied on both create and update (with merged values)
+- **Pricing formula:** `total = base_fee × hours × guards + tip` — ไม่มี min_price/max_price/price_per_hour แล้ว (migration 037+038)
 - **Decimal:** Uses `rust_decimal::Decimal` — utoipa annotation `#[schema(value_type = f64)]` required for OpenAPI compatibility
 
 **Booking Service — Request & Assignment Endpoints (main.rs):**
@@ -912,13 +923,14 @@ RegistrationPendingScreen({role})
   - `loginWithPhone(phone, pinHash)` calls **`POST /auth/login/mobile`** (mobile-only endpoint, returns tokens in body) → stores tokens + role, clears pending state → `authenticated`. Called from `RegistrationPendingScreen._checkApprovalStatus()` after admin approval. ห้ามเรียก `/auth/login/phone` (web endpoint, no body tokens)
   - `fetchProfile()` calls `GET /auth/me` → populates `_fullName`, `_phone`, `_email`, `_approvalStatus`, `_createdAt`, `_avatarUrl`, `_gender`, `_dateOfBirth`, `_yearsOfExperience`, `_previousWorkplace`, `_customerApprovalStatus`, `_customerFullName`. Called in `loginWithPhone()` and `checkAuthStatus()` (when authenticated). Silently fails — dashboard shows fallback values.
   - `fetchGuardDocs()` calls `GET /auth/guards/{userId}/profile` → populates `_guardDocUrls` map (id_card, security_license, training_cert, criminal_check, driver_license). Called from `ProfileSettingsScreen.initState()`.
-  - `checkAuthStatus()`: checks stored access token **first** → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout ≠ invalid tokens) → else no token: calls `POST /auth/check-status` (DB source of truth) with stored phone + PIN hash → if approved: `loginWithPhone()` → authenticated → if pending: syncs local pending state from DB (`setPendingApproval` per profile) → `pendingApproval` → if network error: fallback to local SharedPreferences → else unauthenticated. Has `_isCheckingAuth` guard against concurrent calls.
+  - `checkAuthStatus()`: checks stored access token **first** → clears any stale `pendingApproval` flag → `fetchProfile()` → **if fetchProfile fails but tokens still valid**: treats as authenticated (network timeout ≠ invalid tokens) → **if tokens cleared by interceptor (401 + refresh failure)**: falls through to check-status + loginWithPhone path (ไม่ return unauthenticated ทันที) → else no token: calls `POST /auth/check-status` (DB source of truth) with stored phone + PIN hash → if approved: `loginWithPhone()` → authenticated → if pending: syncs local pending state from DB (`setPendingApproval` per profile) → `pendingApproval` → if network error: fallback to local SharedPreferences → else unauthenticated. Has `_isCheckingAuth` guard against concurrent calls.
   - **check-status API flow:** Single API call on startup → returns `{exists, role, approval_status, has_guard_profile, has_customer_profile, customer_approval_status}`. If approved → login to get tokens. If pending → sync local state from DB truth. Timing-safe: dummy Argon2 verify for non-existent users.
   - **Phone resolution order (RoleSelectionScreen):** `widget.phone` → `auth.phone` → `getStoredPhone()` → `getPhoneVerifiedData()` → if all null → PhoneInputScreen. Resolved **before** any role checks to prevent null crashes.
   - Profile fields: `fullName`, `phone`, `email`, `approvalStatus`, `createdAt`, `avatarUrl`, `gender`, `dateOfBirth`, `yearsOfExperience`, `previousWorkplace`, `guardDocUrls`, `customerApprovalStatus`, `customerFullName` (getters) — used by dashboard/profile screens instead of hardcoded mock data
   - `customerFullName`: `String?` — customer display name from `customer_profiles.full_name` (separate from guard `fullName`). Hirer screens use `customerFullName ?? fullName` for display.
   - `customerApprovalStatus`: `String?` — `'pending'` | `'approved'` | `'rejected'` | `null` (no customer profile). Parsed from `GET /auth/me` response `customer_approval_status` field. Used by `RoleSelectionScreen` and `HirerDashboardScreen` for routing.
   - `profile_token` extraction: safe `raw is String ? raw : null` — never `as String?`
+  - `logout()`: calls `POST /auth/logout` with Bearer token + refresh_token ใน body → server revoke JTI ลง Redis blocklist + delete session → แล้ว clear local tokens. Timeout 5s, fail-safe (proceed with local cleanup on network error)
 - `AuthService`: `storeTokens()`, `storePhone()`, `getStoredPhone()`, `storeRole()`, `getRole()`, `clearRole()`, `markRegistered()`, `setPendingApproval({role})`, `isPendingApproval()`, `getPendingRole()`, `hasSubmittedRole(role)`, `clearPendingApproval()`, `savePendingProfile(data)`, `getPendingProfileForRole(role)`
   - Pending approval state stored in `SharedPreferences` (non-sensitive — no tokens)
   - **Pending role set:** `setPendingApproval(role)` appends role to comma-separated set (e.g. `"guard,customer"`) — supports dual registration. `hasSubmittedRole(role)` checks specific role. `getPendingRole()` returns first role.
@@ -939,7 +951,7 @@ RegistrationPendingScreen({role})
   - `GuardProfileTab`: real name, formatted phone as ID (`086-320-8235`), avatar from URL or person icon fallback, "ยืนยันแล้ว" badge only (no "ยังไม่ได้ลงทะเบียน")
   - `ProfileSettingsScreen`: fetches all guard data from `AuthProvider` — photo section shows name + approval status badge (ใช้งาน/รอการอนุมัติ/ถูกปฏิเสธ) + registration date. Personal info: name, phone (read-only), email, address. Guard info (read-only): gender (translated), DOB (formatted), experience, workplace. Documents section: fetches 5 doc URLs via `fetchGuardDocs()` — บัตรประชาชน, ใบอนุญาตรักษาความปลอดภัย, ใบรับรองการฝึกอบรม, ใบผ่านการตรวจสอบประวัติอาชญากรรม, ใบขับขี่ — tap "ดูเอกสาร" opens image preview dialog.
   - `HirerProfileScreen`: uses `auth.customerFullName ?? auth.fullName` for customer display name, formatted phone as ID, avatar icon fallback
-  - `ServiceSelectionScreen`: loads service rates from API via `BookingProvider.fetchServiceRates()` → dynamic cards with icon selection based on service name keywords. Back button uses `pushAndRemoveUntil` → `RoleSelectionScreen(phone)` (ไม่ใช่ `Navigator.pop()` ซึ่งจะทำให้จอดำ)
+  - `ServiceSelectionScreen`: loads service rates from API via `BookingProvider.fetchServiceRates()` → dynamic cards showing `฿{base_fee}` per service. Icon selection based on service name keywords. Back button uses `pushAndRemoveUntil` → `RoleSelectionScreen(phone)` (ไม่ใช่ `Navigator.pop()` ซึ่งจะทำให้จอดำ)
   - `BookingScreen`: customer fills booking form → `createRequest()` → extracts `requestId` from response → `Navigator.pushReplacement` to `GuardSearchingScreen(requestId, lat, lng)`
     - **Job type selection:** 4 options — งานหมู่บ้าน (village), คอนโด (condo), โรงงาน (factory), อื่นๆ (other). "อื่นๆ" shows TextField for custom input. Selected type included in booking description as `ประเภทงาน: xxx`.
     - **Location selection:** `_getCurrentLocation()` (GPS) or `_openMapPicker()` (map picker sheet) — both store `_lat`/`_lng` separately and display place name in `_addressController.text`
@@ -1302,8 +1314,9 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม reuse profile_token — ต้อง enforce single-use ด้วย `jti` + Redis `GETDEL` เหมือน phone_verified_token
 - ❌ ห้ามออก access_token/refresh_token หรือ INSERT session ใน `register_with_otp()` — endpoint ต้อง return HTTP 202 พร้อม `RegisterWithOtpResponse` เท่านั้น (ไม่มี token)
 - ❌ ห้ามใช้ plain `INSERT INTO auth.users` ใน `register_with_otp()` — **ต้องใช้ UPSERT** `ON CONFLICT (phone) DO UPDATE SET password_hash=EXCLUDED.password_hash, full_name=EXCLUDED.full_name, approval_status='pending', updated_at=NOW() WHERE auth.users.approval_status='pending'` + `fetch_optional` → None = phone registered with non-pending status → `AppError::Conflict("Please log in instead")`
-- ❌ ห้าม accept ราคาติดลบใน service rates — `validate_prices()` ต้องตรวจ `min_price >= 0`, `max_price >= 0`, `base_fee >= 0`
-- ❌ ห้าม accept `min_price > max_price` — ต้อง validate ทั้ง create และ update (update ต้อง merge กับค่าเดิมก่อน validate)
+- ❌ ห้าม accept ราคาติดลบใน service rates — `validate_prices()` ต้องตรวจ `base_fee >= 0`
+- ❌ ห้ามใช้ `min_price`/`max_price`/`price_per_hour` — ลบออกแล้ว (migration 037+038) ใช้ `base_fee` เดียว สูตร: `total = base_fee × hours × guards + tip`
+- ❌ ห้ามบวก `base_fee` ซ้ำใน `_total` — `_subtotal = base_fee × hours × guards` แล้ว `_total = _subtotal + _tip` (ไม่ใช่ `_subtotal + _baseFee + _tip`)
 - ❌ ห้าม return inactive service rates จาก public GET endpoints — ต้อง filter `WHERE is_active = true` เสมอ
 - ❌ ห้าม query `available-guards` โดยไม่ filter `gl.is_online = true AND recorded_at > NOW() - INTERVAL '5 minutes'` — guards ที่ปิดให้บริการ (WebSocket disconnected → `is_online=false`) หรือไม่มี GPS update ภายใน 5 นาทีต้องไม่แสดง — ตรงกับ threshold สีเทาของ admin map และ mobile
 - ❌ ห้าม GPS WebSocket disconnect โดยไม่เรียก `set_offline()` — ต้อง UPDATE `tracking.guard_locations SET is_online = false` ทุกครั้งที่ guard disconnect เพื่อให้ `available-guards` query exclude ทันที
@@ -1386,6 +1399,14 @@ DAILY_OTP_LIMIT=10
 ### Flutter Mobile
 - ❌ ห้ามเก็บ JWT tokens หรือ PIN ใน `SharedPreferences` — ใช้ `FlutterSecureStorage` เท่านั้น
 - ❌ ห้ามเก็บ plaintext PIN — ต้อง hash ด้วย SHA-256 ก่อน store
+- ❌ ห้ามใช้ simulated biometric — ต้องใช้ `local_auth` package กับ `LocalAuthentication.authenticate()` จริงเท่านั้น
+- ❌ ห้ามใช้ `FlutterActivity` สำหรับ Android — ต้องใช้ `FlutterFragmentActivity` (required by `local_auth`)
+- ❌ ห้าม deploy iOS โดยไม่มี `NSFaceIDUsageDescription` ใน Info.plist — จะ crash บน Face ID devices
+- ❌ ห้าม biometric skip `fetchProfile()` — หลังสแกนสำเร็จต้อง `fetchProfile()` ทุกครั้งเพื่อยืนยัน session ยัง valid บน server
+- ❌ ห้าม mobile `logout()` ไม่เรียก backend — ต้อง `POST /auth/logout` ก่อน clear local tokens (fail-safe: proceed on network error)
+- ❌ ห้ามใช้ `_isRefreshing` flag เดียวสำหรับทั้ง proactive + reactive refresh — ต้องแยก `_isProactiveRefreshing` + `_isReactiveRefreshing`
+- ❌ ห้าม clear tokens เมื่อ refresh ล้มเหลวจาก network error — clear เฉพาะเมื่อ server ตอบ 401/403 (token invalid จริง)
+- ❌ ห้าม `checkAuthStatus()` return `unauthenticated` ทันทีเมื่อ tokens ถูกลบ — ต้อง fall through ไป check-status + loginWithPhone ก่อน
 - ❌ ห้าม hardcode OTP ในโค้ด — ต้องส่งผ่าน API (`AuthService.verifyOtp()`)
 - ❌ ห้ามเรียก API ตรงโดยไม่ผ่าน `ApiClient` — ต้องใช้ Dio interceptor ที่ attach Bearer token อัตโนมัติ
 - ❌ ห้าม parse token refresh response ด้วย `response.data['access_token']` ตรง — backend ใช้ ApiResponse wrapper ต้อง parse `response.data['data']['access_token']` เสมอ
