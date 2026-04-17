@@ -449,6 +449,18 @@ CREATE TABLE notification.fcm_tokens (
 - **Secure Storage:** ข้อมูล sensitive (JWT tokens, PIN hash) ต้องเก็บใน `FlutterSecureStorage` เท่านั้น — ห้ามใช้ `SharedPreferences` สำหรับ tokens
   - `SharedPreferences` ใช้ได้เฉพาะ non-sensitive data (language pref, registration flags)
 - **PIN Security:** Hash PIN ด้วย SHA-256 ก่อนเก็บ — ห้ามเก็บ plaintext PIN
+- **PIN Rate Limiting (commits a1a70ef + 98f4ed3 + 333a70f):**
+  - `PinStorageService.validatePin(pin)` returns `Future<PinResult>` (sealed class) — ห้ามใช้ synchronous `bool` interface เดิม
+  - `PinResult` variants: `PinValid` | `PinInvalid({remainingBeforeWipe})` | `PinLockedOut({remaining, totalAttempts})` | `PinWiped`
+  - **Lockout schedule (Option B):** ใส่ผิด 5 ครั้ง → lockout 60 วินาที. ใส่ผิดครั้งที่ 6, 7, 8, 9 → lockout 60 วินาทีทุกครั้ง. ครั้งที่ 10 → wipe pin_hash + biometric_enabled + counters → ต้อง re-OTP
+  - **Counter persistence:** `pin_failed_attempts` + `pin_lock_until_ms` เก็บใน `FlutterSecureStorage` — ค้างข้าม app restart, kill process, background. Reset เฉพาะตอน `validatePin` สำเร็จ หรือ `savePin()` (PIN ใหม่ = สิทธิ์ใหม่) หรือ wipe
+  - **`getCurrentLockoutState()`:** อ่าน lockout state โดยไม่ consume attempt — ใช้ใน `PinLockScreen.initState` เพื่อ resume countdown หลัง app restart ระหว่าง lockout window
+  - **`PinStorageService.wipeThreshold`:** public static const (= 10) — UI ใช้ compute "เหลือ N ครั้งก่อนล้างข้อมูล" ใน lockout banner เมื่อ `totalAttempts >= 7`
+  - **Wipe flow:** Service ลบ `pin_hash`, `biometric_enabled`, counters เท่านั้น — phone number **คงไว้** (UX: ไม่ต้องพิมพ์ใหม่). UI handler รับผิดชอบ `auth.logout()` (revoke server session + clear tokens) → navigate `PhoneInputScreen` (clear stack)
+  - **Concurrency:** `validatePin` serialize ด้วย `_validateInFlight` Future lock — concurrent calls ไม่ double-increment counter
+  - **Injectable clock:** `PinStorageService(secureStorage, prefs, now: DateTime Function())` สำหรับ test deterministic — production default = `DateTime.now`
+  - **Biometric x lockout:** `PinLockScreen` skip biometric auto-trigger ใน `initState` ถ้า lockout active. `_onBiometricTap` มี early-return guard. `PinKeypad.enabled` = false ระหว่าง lockout — entire keypad + biometric icon ถูก disable (IgnorePointer + opacity 0.4)
+  - **i18n:** `PinLockStrings.lockedOutTitle`, `lockedOutSubtitle(time)`, `attemptsRemaining(count)`, `wipedDialogTitle`, `wipedDialogBody`, `wipedDialogConfirm` — TH/EN ครบ
 - **Biometric Auth (local_auth):**
   - Android: `USE_BIOMETRIC` permission ใน `AndroidManifest.xml`, `FlutterFragmentActivity` (ไม่ใช่ `FlutterActivity`)
   - iOS: `NSFaceIDUsageDescription` ใน `Info.plist` (จำเป็น — ไม่มีจะ crash บน Face ID devices)
@@ -467,6 +479,13 @@ CREATE TABLE notification.fcm_tokens (
   - ห้ามเช็ค auth state แยกในแต่ละ screen — ใช้ `context.read<AuthProvider>()` / `context.watch<AuthProvider>()`
 - **OTP:** ห้าม hardcode OTP ในโค้ด — ต้องส่งผ่าน API (`AuthService.verifyOtp()`)
 - **Bank Account Input:** ใช้ `FilteringTextInputFormatter.digitsOnly`, `maxLength: 15`, ปิด `autocorrect` + `enableSuggestions`
+
+### Known Security Tradeoffs (Flutter Mobile)
+
+- **PIN lockout uses wall-clock time** (`DateTime.now()`) — attacker with physical access can rewind device clock to skip the 60-second lockout window. **Wipe at attempt 10 is still effective** because the counter itself is monotonic (incremented atomically per attempt, persisted in FlutterSecureStorage). For higher security (target: enterprise/government use), swap `PinStorageService._now` for a monotonic clock exposed through a platform channel (Android `SystemClock.elapsedRealtime()`, iOS `mach_absolute_time()`)
+- **Counter rollback via backup restore** — restoring a backup with stale `pin_failed_attempts: 0` resets the counter. Mitigated by `PinStorageService.init()` defense: if `pin_hash` is missing but counter survives (asymmetric restore), the counter is cleared. Same protection runs the other direction (counter restored without hash).
+- **PinLoginScreen has NO local rate limiting** — that screen calls `loginWithPhone(phone, hashPin(pin))` directly to backend `/auth/login/mobile`. Only Nginx `auth_limit` (5 req/s) protects this path. Effective brute force = ~55 hours for full 6-digit PIN space. **Tracked as separate issue** — see `docs/issues/pin-login-rate-limit.md`
+- **PIN stored as raw SHA-256 (no salt, no slow KDF)** — if attacker grabs `pin_hash` from FlutterSecureStorage (rooted/jailbroken device, or asymmetric backup restore), 6-digit PIN is rainbow-table crackable in <1 second. Defense-in-depth: backend uses Argon2 separately for the same value used as login password. **Future hardening:** PBKDF2/Argon2 with per-device salt for local hash (50-200ms validate latency tradeoff)
 
 ### Performance Target
 - Push notification: **< 1 วินาที**
@@ -1399,6 +1418,17 @@ DAILY_OTP_LIMIT=10
 ### Flutter Mobile
 - ❌ ห้ามเก็บ JWT tokens หรือ PIN ใน `SharedPreferences` — ใช้ `FlutterSecureStorage` เท่านั้น
 - ❌ ห้ามเก็บ plaintext PIN — ต้อง hash ด้วย SHA-256 ก่อน store
+- ❌ ห้ามใช้ `validatePin` แบบ synchronous `bool` interface — ลบไปแล้วใน Phase 2. ต้องใช้ `await pinService.validatePin(pin)` แล้ว `switch` บน `PinResult` (sealed class) ครอบทุก case (`PinValid`, `PinInvalid`, `PinLockedOut`, `PinWiped`)
+- ❌ ห้าม `PinLockScreen._validatePin` ส่ง user ไป dashboard ทันทีหลัง PIN ถูก โดยไม่ check `_lockoutState` — ต้อง guard ด้วย `_lockoutState != null || _isValidating` ใน `_onDigit`/`_onBackspace` เพื่อกัน input ระหว่าง countdown
+- ❌ ห้าม `_buildLockoutBanner` ไม่แสดง wipe warning เมื่อ `totalAttempts >= 7` — user ที่กำลังจะถูก wipe ต้องได้รับ warning ล่วงหน้า 3 รอบ (commit 333a70f)
+- ❌ ห้าม `_handleWipe` skip `auth.logout()` — service wipe เฉพาะ pin_hash + biometric, ไม่ touch tokens/auth state. UI handler ต้องเรียก `auth.logout()` (server revoke + clear tokens + clear pending) ก่อน navigate `PhoneInputScreen` (pushAndRemoveUntil clear stack)
+- ❌ ห้าม `_handleWipe` navigate ไป `RoleSelectionScreen` หรือ `PinSetupScreen` — ต้อง `PhoneInputScreen` เท่านั้น เพราะ pin_hash ถูกลบแล้ว user ต้อง re-OTP
+- ❌ ห้าม `PinLockScreen.initState` trigger biometric auto-prompt ถ้า lockout active — ต้อง `await getCurrentLockoutState()` ก่อนตัดสินใจ
+- ❌ ห้าม `PinKeypad` ไม่มี `enabled` param — ต้องรองรับ `enabled: false` (IgnorePointer + opacity 0.4) เพื่อ disable ระหว่าง lockout
+- ❌ ห้าม `PinStorageService.savePin` ไม่ reset `pin_failed_attempts` + `pin_lock_until_ms` — PIN ใหม่ต้องได้สิทธิ์ใหม่ (สำคัญสำหรับ wipe → re-OTP → setup PIN flow)
+- ❌ ห้าม `PinStorageService.init` ไม่ defense ต่อ backup restore — ถ้า `pin_hash` หาย ต้อง clear `pin_failed_attempts` + `pin_lock_until_ms` + `biometric_enabled` ด้วย (asymmetric backup restore protection)
+- ❌ ห้าม assume `_remainingLockout` countdown UI ตรงกับ storage `lock_until` ทุก ms — Timer.periodic อาจ drift. Service เป็น source-of-truth: `validatePin` re-check `getCurrentLockoutState` ทุกครั้ง
+- ❌ ห้าม `validatePin` ไม่ serialize concurrent calls — ต้องใช้ `_validateInFlight` Future lock เพื่อกัน double-increment counter (test #12)
 - ❌ ห้ามใช้ simulated biometric — ต้องใช้ `local_auth` package กับ `LocalAuthentication.authenticate()` จริงเท่านั้น
 - ❌ ห้ามใช้ `FlutterActivity` สำหรับ Android — ต้องใช้ `FlutterFragmentActivity` (required by `local_auth`)
 - ❌ ห้าม deploy iOS โดยไม่มี `NSFaceIDUsageDescription` ใน Info.plist — จะ crash บน Face ID devices
