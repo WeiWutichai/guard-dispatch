@@ -142,9 +142,7 @@ impl FcmAuth {
         // Sign with RS256 using the service account's private key
         let encoding_key =
             jsonwebtoken::EncodingKey::from_rsa_pem(self.service_account.private_key.as_bytes())
-                .map_err(|e| {
-                    AppError::Internal(format!("Failed to parse RSA private key: {e}"))
-                })?;
+                .map_err(|e| AppError::Internal(format!("Failed to parse RSA private key: {e}")))?;
 
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
         let jwt = jsonwebtoken::encode(&header, &claims, &encoding_key)

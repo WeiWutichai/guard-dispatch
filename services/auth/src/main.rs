@@ -263,8 +263,7 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/admin/customer-profile/{user_id}/approval",
             patch(handlers::update_customer_approval),
-        )
-        ;
+        );
     // Only mount Swagger UI when ENABLE_SWAGGER is set (disabled in production)
     let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
         let swagger =
@@ -279,13 +278,13 @@ async fn main() -> anyhow::Result<()> {
     } else {
         app
     }
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            shared::audit::audit_middleware::<Arc<AppState>>,
-        ))
-        .layer(shared::config::build_cors_layer())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    .layer(middleware::from_fn_with_state(
+        state.clone(),
+        shared::audit::audit_middleware::<Arc<AppState>>,
+    ))
+    .layer(shared::config::build_cors_layer())
+    .layer(TraceLayer::new_for_http())
+    .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await?;
     tracing::info!("auth-service listening on {}", listener.local_addr()?);

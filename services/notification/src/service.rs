@@ -3,11 +3,11 @@ use uuid::Uuid;
 
 use shared::error::AppError;
 
+use crate::fcm::FcmAuth;
 use crate::models::{
     FcmTokenRow, ListNotificationsQuery, NotificationLogResponse, NotificationLogRow,
     SendNotificationRequest,
 };
-use crate::fcm::FcmAuth;
 
 // =============================================================================
 // Register FCM Token

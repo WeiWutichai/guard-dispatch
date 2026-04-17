@@ -113,8 +113,7 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/locations/{guard_id}/history",
             get(handlers::get_location_history),
-        )
-        ;
+        );
     // Only mount Swagger UI when ENABLE_SWAGGER is set (disabled in production)
     let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
         let swagger =
@@ -129,13 +128,13 @@ async fn main() -> anyhow::Result<()> {
     } else {
         app
     }
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            shared::audit::audit_middleware::<Arc<AppState>>,
-        ))
-        .layer(shared::config::build_cors_layer())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    .layer(middleware::from_fn_with_state(
+        state.clone(),
+        shared::audit::audit_middleware::<Arc<AppState>>,
+    ))
+    .layer(shared::config::build_cors_layer())
+    .layer(TraceLayer::new_for_http())
+    .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3003").await?;
     tracing::info!("tracking-service listening on {}", listener.local_addr()?);

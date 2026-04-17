@@ -244,8 +244,7 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_service_rate)
                 .put(handlers::update_service_rate)
                 .delete(handlers::delete_service_rate),
-        )
-        ;
+        );
     let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
         let swagger =
             SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
@@ -259,13 +258,13 @@ async fn main() -> anyhow::Result<()> {
     } else {
         app
     }
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            shared::audit::audit_middleware::<Arc<AppState>>,
-        ))
-        .layer(shared::config::build_cors_layer())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    .layer(middleware::from_fn_with_state(
+        state.clone(),
+        shared::audit::audit_middleware::<Arc<AppState>>,
+    ))
+    .layer(shared::config::build_cors_layer())
+    .layer(TraceLayer::new_for_http())
+    .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3002").await?;
     tracing::info!("booking-service listening on {}", listener.local_addr()?);

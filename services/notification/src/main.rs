@@ -69,9 +69,8 @@ async fn main() -> anyhow::Result<()> {
     // The JSON file path is set via FCM_SERVICE_ACCOUNT_PATH env var.
     // This replaces the old FCM_SERVER_KEY approach which used a static
     // legacy key — Google deprecated that in 2024.
-    let sa_path = std::env::var("FCM_SERVICE_ACCOUNT_PATH").unwrap_or_else(|_| {
-        "/app/secrets/firebase-service-account.json".to_string()
-    });
+    let sa_path = std::env::var("FCM_SERVICE_ACCOUNT_PATH")
+        .unwrap_or_else(|_| "/app/secrets/firebase-service-account.json".to_string());
     let service_account = ServiceAccount::from_file(&sa_path)?;
     tracing::info!(
         "FCM service account loaded: project={}, email={}",
@@ -124,8 +123,7 @@ async fn main() -> anyhow::Result<()> {
         // Only accessible from Docker internal network (not exposed via nginx).
         // Called by booking-service's spawn_notification() to trigger FCM push
         // after inserting a notification log.
-        .route("/internal/push", post(handlers::internal_push))
-        ;
+        .route("/internal/push", post(handlers::internal_push));
     let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
         let swagger =
             SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
@@ -139,13 +137,13 @@ async fn main() -> anyhow::Result<()> {
     } else {
         app
     }
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            shared::audit::audit_middleware::<Arc<AppState>>,
-        ))
-        .layer(shared::config::build_cors_layer())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    .layer(middleware::from_fn_with_state(
+        state.clone(),
+        shared::audit::audit_middleware::<Arc<AppState>>,
+    ))
+    .layer(shared::config::build_cors_layer())
+    .layer(TraceLayer::new_for_http())
+    .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3004").await?;
     tracing::info!(

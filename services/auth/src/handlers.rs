@@ -376,8 +376,7 @@ pub async fn logout(
         .get("Cookie")
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
-            shared::auth::extract_cookie_value(cookies, REFRESH_TOKEN_COOKIE)
-                .map(|t| t.to_string())
+            shared::auth::extract_cookie_value(cookies, REFRESH_TOKEN_COOKIE).map(|t| t.to_string())
         });
 
     // Extract access token jti + exp for revocation blocklist
@@ -389,7 +388,9 @@ pub async fn logout(
             headers
                 .get("Cookie")
                 .and_then(|v| v.to_str().ok())
-                .and_then(|cookies| shared::auth::extract_cookie_value(cookies, ACCESS_TOKEN_COOKIE))
+                .and_then(|cookies| {
+                    shared::auth::extract_cookie_value(cookies, ACCESS_TOKEN_COOKIE)
+                })
         });
     let (jti, exp) = access_token
         .and_then(|t| shared::auth::decode_jwt_with_key(t, &state.jwt_config.decoding_key).ok())
@@ -771,8 +772,7 @@ async fn try_extract_user_id_from_bearer(
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))?;
-    let claims =
-        shared::auth::decode_jwt_with_key(token, &state.jwt_config.decoding_key).ok()?;
+    let claims = shared::auth::decode_jwt_with_key(token, &state.jwt_config.decoding_key).ok()?;
 
     let mut redis = state.redis.clone();
     let revoked_key = format!("revoked_jti:{}", claims.jti);
@@ -806,8 +806,7 @@ pub async fn update_role(
     // profile). Decode + check revocation; if any step fails, fall through
     // to the OTP-based flow which requires a phone_verified_token.
     // (security-reviewer HIGH regression fix)
-    let authenticated_user_id =
-        try_extract_user_id_from_bearer(&headers, &state).await;
+    let authenticated_user_id = try_extract_user_id_from_bearer(&headers, &state).await;
 
     let (user_id, profile_token) = crate::service::update_user_role(
         &state.db,
@@ -933,9 +932,7 @@ pub async fn update_own_expiry(
     // which violates least-privilege. If guard_profiles ever gains rows via
     // another path, this would become a direct IDOR. (security-reviewer MEDIUM)
     if user.role != "guard" {
-        return Err(AppError::Forbidden(
-            "Guard access only".to_string(),
-        ));
+        return Err(AppError::Forbidden("Guard access only".to_string()));
     }
 
     // Only allow expiry fields — strip everything else for safety

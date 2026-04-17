@@ -137,7 +137,13 @@ async fn post_raw(path: &str, body: String) -> reqwest::Response {
 /// POST an empty body to a content-typed JSON endpoint with retry.
 async fn post_empty_json(path: &str) -> reqwest::Response {
     let url = format!("{}{}", base_url(), path);
-    send_retrying(|| client().post(&url).header("content-type", "application/json").body("")).await
+    send_retrying(|| {
+        client()
+            .post(&url)
+            .header("content-type", "application/json")
+            .body("")
+    })
+    .await
 }
 
 async fn get(path: &str) -> reqwest::Response {
@@ -248,8 +254,14 @@ async fn login_with_registered_but_unapproved_account_returns_same_401() {
     let res = post_json("/login", json!({"email": email, "password": password})).await;
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     let body: Value = res.json().await.expect("json");
-    let msg = body["error"]["message"].as_str().unwrap_or("").to_lowercase();
-    assert!(msg.contains("invalid"), "expected generic error, got: {msg}");
+    let msg = body["error"]["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_lowercase();
+    assert!(
+        msg.contains("invalid"),
+        "expected generic error, got: {msg}"
+    );
     assert!(
         !msg.contains("pending") && !msg.contains("approval") && !msg.contains("deactivated"),
         "error must not leak account state: {msg}"
@@ -273,7 +285,10 @@ async fn login_with_wrong_password_matches_unknown_email_shape() {
     .await;
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     let body: Value = res.json().await.expect("json");
-    let msg = body["error"]["message"].as_str().unwrap_or("").to_lowercase();
+    let msg = body["error"]["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_lowercase();
     assert!(msg.contains("invalid"));
 }
 
@@ -372,8 +387,7 @@ async fn logout_without_auth_returns_401() {
         return;
     }
     throttle().await;
-    let res =
-        send_retrying(|| fresh_client().post(format!("{}/logout", base_url()))).await;
+    let res = send_retrying(|| fresh_client().post(format!("{}/logout", base_url()))).await;
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
@@ -614,8 +628,9 @@ async fn jwt_with_wrong_audience_is_rejected() {
         "aud": "some-other-audience",
         "jti": Uuid::new_v4().to_string(),
     });
-    let key =
-        EncodingKey::from_secret(b"arbitrary-key-for-test-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    let key = EncodingKey::from_secret(
+        b"arbitrary-key-for-test-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    );
     let token = encode(&Header::default(), &claims, &key).expect("encode");
 
     let res = get_bearer("/me", &token).await;
