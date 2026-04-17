@@ -1308,12 +1308,11 @@ pub async fn reissue_profile_token(
     }
 
     // User must exist and be pending (approved users cannot reissue — must re-verify OTP)
-    let user: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, approval_status::text FROM auth.users WHERE phone = $1",
-    )
-    .bind(&phone_clean)
-    .fetch_optional(db)
-    .await?;
+    let user: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT id, approval_status::text FROM auth.users WHERE phone = $1")
+            .bind(&phone_clean)
+            .fetch_optional(db)
+            .await?;
 
     let (user_id, status) =
         user.ok_or_else(|| AppError::BadRequest("Unable to process request".to_string()))?;
@@ -1381,17 +1380,14 @@ pub async fn update_user_role(
     }
 
     // Look up user by phone — needed by both auth paths.
-    let user: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM auth.users WHERE phone = $1",
-    )
-    .bind(&phone_clean)
-    .fetch_optional(db)
-    .await
-    .map_err(AppError::Database)?;
+    let user: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM auth.users WHERE phone = $1")
+        .bind(&phone_clean)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::Database)?;
 
-    let (user_id,) = user.ok_or_else(|| {
-        AppError::BadRequest("Unable to process request".to_string())
-    })?;
+    let (user_id,) =
+        user.ok_or_else(|| AppError::BadRequest("Unable to process request".to_string()))?;
 
     // === Two authentication paths ===
     //
@@ -1415,10 +1411,8 @@ pub async fn update_user_role(
         }
     } else if let Some(token) = phone_verified_token {
         // Path (b): OTP token verification
-        let (verified_phone, jti) = shared::auth::decode_phone_verify_token(
-            token,
-            &jwt_config.decoding_key,
-        )?;
+        let (verified_phone, jti) =
+            shared::auth::decode_phone_verify_token(token, &jwt_config.decoding_key)?;
         if verified_phone != phone_clean {
             return Err(AppError::BadRequest(
                 "Phone number does not match verified token".to_string(),

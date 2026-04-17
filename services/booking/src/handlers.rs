@@ -606,8 +606,7 @@ pub async fn get_cost_summary(
     user: AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<CostSummaryResponse>>, AppError> {
-    let summary =
-        crate::service::get_cost_summary(&state.db, id, user.user_id, &user.role).await?;
+    let summary = crate::service::get_cost_summary(&state.db, id, user.user_id, &user.role).await?;
     Ok(Json(ApiResponse::success(summary)))
 }
 

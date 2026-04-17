@@ -466,8 +466,8 @@ mod tests {
     impl TestState {
         async fn new(secret: &str) -> Self {
             // Connect to test Redis (or use a dummy connection)
-            let client = redis::Client::open("redis://127.0.0.1:6379")
-                .expect("Redis client for tests");
+            let client =
+                redis::Client::open("redis://127.0.0.1:6379").expect("Redis client for tests");
             let conn = client
                 .get_multiplexed_tokio_connection()
                 .await

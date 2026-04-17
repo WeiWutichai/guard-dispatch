@@ -15,9 +15,8 @@ use crate::models::{
     GuardEarnings, GuardJobResponse, GuardJobRow, GuardRatingsSummary, GuardRequestResponse,
     GuardRequestRow, ListRequestsQuery, PaginatedAdminReviews, PaymentResponse, PaymentRow,
     ProgressReportMediaItem, ProgressReportMediaRow, ProgressReportResponse, ProgressReportRow,
-    RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate,
-    UpdateAssignmentStatusDto, UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse,
-    WorkHistoryRow,
+    RatingSummaryRow, RequestStatus, ReviewItem, ReviewRow, ServiceRate, UpdateAssignmentStatusDto,
+    UpdateServiceRateDto, WorkHistoryItem, WorkHistoryResponse, WorkHistoryRow,
 };
 
 /// Validate and sanitise optional lat/lng. Returns (None, None) if invalid or (0,0).
@@ -1417,7 +1416,11 @@ pub async fn list_admin_reviews(
         bind_idx += 1;
         where_clauses.push(format!("r.is_visible = ${bind_idx}"));
     }
-    if query.search.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+    if query
+        .search
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
         bind_idx += 1;
         where_clauses.push(format!(
             "(COALESCE(cp.full_name, cu.full_name) ILIKE ${bind_idx} \
@@ -1606,9 +1609,7 @@ pub async fn get_service_rate(db: &PgPool, id: Uuid) -> Result<ServiceRate, AppE
     Ok(row)
 }
 
-fn validate_prices(
-    base_fee: rust_decimal::Decimal,
-) -> Result<(), AppError> {
+fn validate_prices(base_fee: rust_decimal::Decimal) -> Result<(), AppError> {
     if base_fee < rust_decimal::Decimal::ZERO {
         return Err(AppError::BadRequest(
             "Base fee cannot be negative".to_string(),
@@ -2542,9 +2543,7 @@ pub async fn get_cost_summary(
     };
 
     // Net is final + tip — only meaningful when proration has run.
-    let net_amount = row
-        .final_amount
-        .map(|fa| (fa + tip_amount).round_dp(2));
+    let net_amount = row.final_amount.map(|fa| (fa + tip_amount).round_dp(2));
 
     Ok(CostSummaryResponse {
         assignment_id,
@@ -2634,9 +2633,9 @@ pub async fn add_tip(
         ));
     }
 
-    let payment_id = row.payment_id.ok_or_else(|| {
-        AppError::NotFound("No payment recorded for this assignment".to_string())
-    })?;
+    let payment_id = row
+        .payment_id
+        .ok_or_else(|| AppError::NotFound("No payment recorded for this assignment".to_string()))?;
 
     sqlx::query(
         r#"
@@ -2756,8 +2755,13 @@ pub async fn review_completion(
         // We do this inside the same transaction so that "completed" and the
         // billing snapshot are committed atomically — if the proration update
         // fails, the completion approval rolls back and the customer can retry.
-        prorate_payment_in_tx(&mut tx, existing.request_id, row.started_at, row.completed_at)
-            .await?;
+        prorate_payment_in_tx(
+            &mut tx,
+            existing.request_id,
+            row.started_at,
+            row.completed_at,
+        )
+        .await?;
 
         tx.commit().await?;
         publish_assignment_event(redis_conn, existing.request_id, assignment_id, "completed");

@@ -80,12 +80,11 @@ pub async fn upsert_location(
 /// recorded_at is only refreshed by real GPS data via upsert_location(),
 /// so admin map and mobile stay in sync (both gray until real GPS arrives).
 pub async fn set_online(db: &PgPool, guard_id: Uuid) -> Result<(), AppError> {
-    let result = sqlx::query(
-        "UPDATE tracking.guard_locations SET is_online = true WHERE guard_id = $1",
-    )
-    .bind(guard_id)
-    .execute(db)
-    .await?;
+    let result =
+        sqlx::query("UPDATE tracking.guard_locations SET is_online = true WHERE guard_id = $1")
+            .bind(guard_id)
+            .execute(db)
+            .await?;
 
     if result.rows_affected() == 0 {
         tracing::debug!(
