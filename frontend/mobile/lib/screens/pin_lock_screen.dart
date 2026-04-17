@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:local_auth/local_auth.dart';
@@ -8,6 +10,7 @@ import '../services/auth_service.dart';
 import '../services/pin_storage_service.dart';
 import '../widgets/pin_dots_indicator.dart';
 import '../widgets/pin_keypad.dart';
+import 'phone_input_screen.dart';
 import 'role_selection_screen.dart';
 
 import '../services/language_service.dart';
@@ -26,32 +29,91 @@ class _PinLockScreenState extends State<PinLockScreen> {
   String _enteredPin = '';
   bool _hasError = false;
 
+  // Phase 3: rate-limiting / lockout state.
+  PinLockedOut? _lockoutState;
+  Timer? _countdownTimer;
+  Duration _remainingLockout = Duration.zero;
+  bool _isValidating = false;
+
+  /// When >0, show "$count attempts left before wipe" hint under the dots.
+  /// Set after a [PinInvalid] result whose remainingBeforeWipe is low.
+  int? _attemptsRemainingHint;
+
   @override
   void initState() {
     super.initState();
-    // Auto-trigger biometric if previously enabled — prompt immediately
+    _initializeAsync();
+  }
+
+  Future<void> _initializeAsync() async {
+    final lock = await widget.pinService.getCurrentLockoutState();
+    if (!mounted) return;
+    if (lock != null) {
+      setState(() => _lockoutState = lock);
+      _startCountdown(lock.remaining);
+      // Skip biometric auto-trigger — UI is locked.
+      return;
+    }
+    // Existing biometric auto-trigger logic. context is not safe in initState
+    // path, so derive language from platformDispatcher (matches prior behavior).
     if (widget.pinService.isBiometricEnabled) {
-      final isThai = WidgetsBinding.instance.platformDispatcher.locale.languageCode == 'th';
+      final isThai =
+          WidgetsBinding.instance.platformDispatcher.locale.languageCode == 'th';
       Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) {
+        if (mounted && _lockoutState == null) {
           _onBiometricTap(PinLockStrings(isThai: isThai));
         }
       });
     }
   }
 
+  void _startCountdown(Duration initial) {
+    _countdownTimer?.cancel();
+    _remainingLockout = initial;
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _remainingLockout -= const Duration(seconds: 1);
+        if (_remainingLockout <= Duration.zero) {
+          timer.cancel();
+          _lockoutState = null;
+          _remainingLockout = Duration.zero;
+        }
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  String _formatRemaining(Duration d) {
+    final mins = d.inMinutes;
+    final secs = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$mins:$secs';
+  }
+
   void _onDigit(String digit) {
+    if (_lockoutState != null || _isValidating) return;
     if (_enteredPin.length >= 6) return;
     setState(() {
       _enteredPin += digit;
       _hasError = false;
     });
     if (_enteredPin.length == 6) {
-      Future.delayed(const Duration(milliseconds: 200), _validatePin);
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) _validatePin();
+      });
     }
   }
 
   void _onBackspace() {
+    if (_lockoutState != null || _isValidating) return;
     if (_enteredPin.isEmpty) return;
     setState(() {
       _enteredPin = _enteredPin.substring(0, _enteredPin.length - 1);
@@ -59,23 +121,90 @@ class _PinLockScreenState extends State<PinLockScreen> {
     });
   }
 
-  void _validatePin() {
-    if (widget.pinService.validatePin(_enteredPin)) {
-      _navigateToApp();
-    } else {
-      setState(() => _hasError = true);
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted) {
-          setState(() {
-            _enteredPin = '';
-            _hasError = false;
-          });
-        }
-      });
+  Future<void> _validatePin() async {
+    if (_isValidating) return;
+    setState(() => _isValidating = true);
+
+    final result = await widget.pinService.validatePin(_enteredPin);
+    if (!mounted) return;
+
+    // Reset entered PIN regardless of outcome.
+    setState(() {
+      _enteredPin = '';
+      _isValidating = false;
+    });
+
+    switch (result) {
+      case PinValid():
+        _navigateToApp();
+      case PinInvalid(:final remainingBeforeWipe):
+        setState(() {
+          _hasError = true;
+          // Surface the warning only when wipe is imminent (≤3 attempts left).
+          _attemptsRemainingHint =
+              remainingBeforeWipe <= 3 ? remainingBeforeWipe : null;
+        });
+        Future.delayed(const Duration(milliseconds: 600), () {
+          if (mounted) setState(() => _hasError = false);
+        });
+      case PinLockedOut():
+        setState(() {
+          _lockoutState = result;
+          _hasError = false;
+          _attemptsRemainingHint = null;
+        });
+        _startCountdown(result.remaining);
+      case PinWiped():
+        await _handleWipe();
     }
   }
 
+  Future<void> _handleWipe() async {
+    final isThai = LanguageProvider.of(context).isThai;
+    final strings = PinLockStrings(isThai: isThai);
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          strings.wipedDialogTitle,
+          style: GoogleFonts.inter(fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          strings.wipedDialogBody,
+          style: GoogleFonts.inter(fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(
+              strings.wipedDialogConfirm,
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: AppColors.primary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+
+    // Tear down auth state (server-side revoke + clear tokens + clear pending).
+    final auth = context.read<AuthProvider>();
+    await auth.logout();
+    if (!mounted) return;
+
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const PhoneInputScreen()),
+      (route) => false,
+    );
+  }
+
   Future<void> _onBiometricTap(PinLockStrings strings) async {
+    if (_lockoutState != null) return;
     final localAuth = LocalAuthentication();
 
     // Check if biometrics are available on this device
@@ -218,18 +347,26 @@ class _PinLockScreenState extends State<PinLockScreen> {
                     ),
                   ),
                   const SizedBox(height: 28),
-                  // Title
+                  // Title — swap to lockout title while locked.
                   Text(
-                    strings.enterPin,
+                    _lockoutState != null
+                        ? strings.lockedOutTitle
+                        : strings.enterPin,
                     style: GoogleFonts.inter(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                      color: _lockoutState != null
+                          ? AppColors.warning
+                          : AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    strings.enterPinSubtitle,
+                    _lockoutState != null
+                        ? strings.lockedOutSubtitle(
+                            _formatRemaining(_remainingLockout),
+                          )
+                        : strings.enterPinSubtitle,
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       color: AppColors.textSecondary,
@@ -242,26 +379,53 @@ class _PinLockScreenState extends State<PinLockScreen> {
                     hasError: _hasError,
                   ),
                   const SizedBox(height: 12),
-                  // Error text
-                  AnimatedOpacity(
-                    opacity: _hasError ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: Text(
-                      strings.pinIncorrect,
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.danger,
+                  // Lockout banner OR error/warning text
+                  if (_lockoutState != null)
+                    _buildLockoutBanner(strings)
+                  else
+                    AnimatedOpacity(
+                      opacity:
+                          (_hasError || _attemptsRemainingHint != null)
+                              ? 1.0
+                              : 0.0,
+                      duration: const Duration(milliseconds: 200),
+                      child: Column(
+                        children: [
+                          if (_hasError)
+                            Text(
+                              strings.pinIncorrect,
+                              style: GoogleFonts.inter(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.danger,
+                              ),
+                            ),
+                          if (_attemptsRemainingHint != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              strings.attemptsRemaining(
+                                _attemptsRemainingHint!,
+                              ),
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.warning,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                  ),
                   const Spacer(),
                   // Keypad
                   PinKeypad(
                     onDigitPressed: _onDigit,
                     onBackspace: _onBackspace,
-                    biometricEnabled: widget.pinService.isBiometricEnabled,
+                    biometricEnabled:
+                        widget.pinService.isBiometricEnabled &&
+                        _lockoutState == null,
                     onBiometricPressed: () => _onBiometricTap(strings),
+                    enabled: _lockoutState == null && !_isValidating,
                   ),
                   const SizedBox(height: 20),
                   // Footer
@@ -277,6 +441,32 @@ class _PinLockScreenState extends State<PinLockScreen> {
                   const SizedBox(height: 16),
                 ],
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLockoutBanner(PinLockStrings strings) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.12),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.lock_clock_rounded, size: 18, color: AppColors.warning),
+          const SizedBox(width: 8),
+          Text(
+            strings.lockedOutSubtitle(_formatRemaining(_remainingLockout)),
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.warning,
             ),
           ),
         ],

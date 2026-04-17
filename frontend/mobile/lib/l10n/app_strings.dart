@@ -47,8 +47,16 @@ class PinLockStrings {
   final String biometricNotAvailable;
   final String biometricReason;
 
+  // Rate limiting / lockout (Phase 3)
+  final String lockedOutTitle;
+  final String wipedDialogTitle;
+  final String wipedDialogBody;
+  final String wipedDialogConfirm;
+  final bool _isThai;
+
   PinLockStrings({required bool isThai})
-    : enterPin = isThai ? 'กรอกรหัส PIN' : 'Enter PIN',
+    : _isThai = isThai,
+      enterPin = isThai ? 'กรอกรหัส PIN' : 'Enter PIN',
       enterPinSubtitle = isThai
           ? 'กรอกรหัส PIN 6 หลักเพื่อเข้าใช้งาน'
           : 'Enter 6-digit PIN to unlock',
@@ -63,7 +71,24 @@ class PinLockStrings {
           : 'Biometric authentication not available',
       biometricReason = isThai
           ? 'ยืนยันตัวตนเพื่อเข้าใช้งาน'
-          : 'Authenticate to unlock the app';
+          : 'Authenticate to unlock the app',
+      lockedOutTitle = isThai ? 'ถูกล็อกชั่วคราว' : 'Temporarily locked',
+      wipedDialogTitle = isThai ? 'ข้อมูลถูกล้าง' : 'Data cleared',
+      wipedDialogBody = isThai
+          ? 'คุณใส่ PIN ผิดเกินกำหนด ระบบล้างข้อมูลความปลอดภัยแล้ว '
+                'กรุณายืนยันเบอร์โทรศัพท์อีกครั้งเพื่อใช้งานต่อ'
+          : 'Too many failed PIN attempts. Security data has been cleared. '
+                'Please verify your phone number again to continue.',
+      wipedDialogConfirm = isThai ? 'ตกลง' : 'OK';
+
+  /// "$count attempts remaining before data wipe" (or TH equivalent).
+  String attemptsRemaining(int count) => _isThai
+      ? 'เหลือ $count ครั้งก่อนล้างข้อมูล'
+      : '$count attempts remaining before data wipe';
+
+  /// "Try again in 0:45" (or TH equivalent). [time] is pre-formatted m:ss.
+  String lockedOutSubtitle(String time) =>
+      _isThai ? 'ลองอีกครั้งใน $time' : 'Try again in $time';
 }
 
 // ──────────────────────────────────────────────
