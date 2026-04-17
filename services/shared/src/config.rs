@@ -247,7 +247,7 @@ mod tests {
                     cfg.secret,
                     "super-secret-key-that-is-at-least-64-characters-long-for-hs256-security!"
                 );
-                assert_eq!(cfg.expiry_hours, 24); // default
+                assert_eq!(cfg.expiry_minutes, 15); // default (15 min OWASP, per CLAUDE.md)
             },
         );
     }
@@ -260,11 +260,11 @@ mod tests {
                     "JWT_SECRET",
                     "a]strong-secret-that-is-at-least-64-characters-long-for-jwt-hs256-security!!",
                 ),
-                ("JWT_EXPIRY_HOURS", "48"),
+                ("JWT_EXPIRY_MINUTES", "30"),
             ],
             || {
                 let cfg = JwtConfig::from_env().unwrap();
-                assert_eq!(cfg.expiry_hours, 48);
+                assert_eq!(cfg.expiry_minutes, 30);
             },
         );
     }
