@@ -35,10 +35,6 @@ class _PinLockScreenState extends State<PinLockScreen> {
   Duration _remainingLockout = Duration.zero;
   bool _isValidating = false;
 
-  /// When >0, show "$count attempts left before wipe" hint under the dots.
-  /// Set after a [PinInvalid] result whose remainingBeforeWipe is low.
-  int? _attemptsRemainingHint;
-
   @override
   void initState() {
     super.initState();
@@ -137,13 +133,8 @@ class _PinLockScreenState extends State<PinLockScreen> {
     switch (result) {
       case PinValid():
         _navigateToApp();
-      case PinInvalid(:final remainingBeforeWipe):
-        setState(() {
-          _hasError = true;
-          // Surface the warning only when wipe is imminent (≤3 attempts left).
-          _attemptsRemainingHint =
-              remainingBeforeWipe <= 3 ? remainingBeforeWipe : null;
-        });
+      case PinInvalid():
+        setState(() => _hasError = true);
         Future.delayed(const Duration(milliseconds: 600), () {
           if (mounted) setState(() => _hasError = false);
         });
@@ -151,7 +142,6 @@ class _PinLockScreenState extends State<PinLockScreen> {
         setState(() {
           _lockoutState = result;
           _hasError = false;
-          _attemptsRemainingHint = null;
         });
         _startCountdown(result.remaining);
       case PinWiped():
@@ -379,41 +369,20 @@ class _PinLockScreenState extends State<PinLockScreen> {
                     hasError: _hasError,
                   ),
                   const SizedBox(height: 12),
-                  // Lockout banner OR error/warning text
+                  // Lockout banner OR error text
                   if (_lockoutState != null)
                     _buildLockoutBanner(strings)
                   else
                     AnimatedOpacity(
-                      opacity:
-                          (_hasError || _attemptsRemainingHint != null)
-                              ? 1.0
-                              : 0.0,
+                      opacity: _hasError ? 1.0 : 0.0,
                       duration: const Duration(milliseconds: 200),
-                      child: Column(
-                        children: [
-                          if (_hasError)
-                            Text(
-                              strings.pinIncorrect,
-                              style: GoogleFonts.inter(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.danger,
-                              ),
-                            ),
-                          if (_attemptsRemainingHint != null) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              strings.attemptsRemaining(
-                                _attemptsRemainingHint!,
-                              ),
-                              style: GoogleFonts.inter(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.warning,
-                              ),
-                            ),
-                          ],
-                        ],
+                      child: Text(
+                        strings.pinIncorrect,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.danger,
+                        ),
                       ),
                     ),
                   const Spacer(),
@@ -449,6 +418,9 @@ class _PinLockScreenState extends State<PinLockScreen> {
   }
 
   Widget _buildLockoutBanner(PinLockStrings strings) {
+    final remaining =
+        PinStorageService.wipeThreshold - _lockoutState!.totalAttempts;
+    final showWarning = _lockoutState!.totalAttempts >= 7;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
@@ -456,19 +428,35 @@ class _PinLockScreenState extends State<PinLockScreen> {
         border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.lock_clock_rounded, size: 18, color: AppColors.warning),
-          const SizedBox(width: 8),
-          Text(
-            strings.lockedOutSubtitle(_formatRemaining(_remainingLockout)),
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.warning,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.lock_clock_rounded, size: 18, color: AppColors.warning),
+              const SizedBox(width: 8),
+              Text(
+                strings.lockedOutSubtitle(_formatRemaining(_remainingLockout)),
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.warning,
+                ),
+              ),
+            ],
           ),
+          if (showWarning) ...[
+            const SizedBox(height: 6),
+            Text(
+              strings.attemptsRemaining(remaining),
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: AppColors.warning,
+              ),
+            ),
+          ],
         ],
       ),
     );

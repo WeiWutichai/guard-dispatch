@@ -74,7 +74,11 @@ class PinStorageService {
   static const _keyLockUntil = 'pin_lock_until_ms';
 
   static const _lockoutThreshold = 5;
-  static const _wipeThreshold = 10;
+
+  /// Cumulative failed-attempt threshold at which PIN/biometric data is wiped.
+  /// Public so the lock screen UI can compute "N attempts before wipe" without
+  /// hardcoding the number.
+  static const wipeThreshold = 10;
   static const _lockoutDuration = Duration(seconds: 60);
 
   final FlutterSecureStorage _secureStorage;
@@ -189,7 +193,7 @@ class PinStorageService {
     // 2. No PIN to compare against (post-wipe). Report a "fresh" invalid
     //    result without incrementing — there is nothing to brute-force.
     if (_cachedPinHash == null) {
-      return const PinInvalid(remainingBeforeWipe: _wipeThreshold);
+      return const PinInvalid(remainingBeforeWipe: wipeThreshold);
     }
 
     // 3. Match path — clear counters and return success.
@@ -207,7 +211,7 @@ class PinStorageService {
       value: newCount.toString(),
     );
 
-    if (newCount >= _wipeThreshold) {
+    if (newCount >= wipeThreshold) {
       await _secureStorage.delete(key: _keyPinHash);
       await _secureStorage.delete(key: _keyFailedAttempts);
       await _secureStorage.delete(key: _keyLockUntil);
@@ -228,7 +232,7 @@ class PinStorageService {
       );
     }
 
-    return PinInvalid(remainingBeforeWipe: _wipeThreshold - newCount);
+    return PinInvalid(remainingBeforeWipe: wipeThreshold - newCount);
   }
 
   /// Inspect the current lockout state without consuming an attempt.
