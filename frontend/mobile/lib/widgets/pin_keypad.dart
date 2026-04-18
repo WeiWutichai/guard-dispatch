@@ -8,17 +8,22 @@ class PinKeypad extends StatelessWidget {
   final VoidCallback? onBiometricPressed;
   final bool biometricEnabled;
 
+  /// When false, all keys (digits, backspace, biometric) are non-interactive
+  /// and dimmed to communicate a disabled state (e.g. PIN lockout window).
+  final bool enabled;
+
   const PinKeypad({
     super.key,
     required this.onDigitPressed,
     required this.onBackspace,
     this.onBiometricPressed,
     this.biometricEnabled = false,
+    this.enabled = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final keypad = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         _buildRow(['1', '2', '3']),
@@ -29,6 +34,12 @@ class PinKeypad extends StatelessWidget {
         const SizedBox(height: 12),
         _buildBottomRow(),
       ],
+    );
+    if (enabled) return keypad;
+    // Disabled: block input + dim visually.
+    return IgnorePointer(
+      ignoring: true,
+      child: Opacity(opacity: 0.4, child: keypad),
     );
   }
 
@@ -51,7 +62,7 @@ class PinKeypad extends StatelessWidget {
               size: 28,
               color: AppColors.primary,
             ),
-            onTap: onBiometricPressed,
+            onTap: enabled ? onBiometricPressed : null,
           )
         else
           const SizedBox(width: 72, height: 72),
@@ -64,7 +75,7 @@ class PinKeypad extends StatelessWidget {
             size: 24,
             color: AppColors.textSecondary,
           ),
-          onTap: onBackspace,
+          onTap: enabled ? onBackspace : null,
         ),
       ],
     );
@@ -74,7 +85,7 @@ class PinKeypad extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () => onDigitPressed(digit),
+        onTap: enabled ? () => onDigitPressed(digit) : null,
         borderRadius: BorderRadius.circular(36),
         splashColor: AppColors.primary.withValues(alpha: 0.08),
         highlightColor: AppColors.primary.withValues(alpha: 0.04),

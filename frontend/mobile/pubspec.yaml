@@ -77,6 +77,10 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Used by test/services/pin_storage_service_test.dart to install
+  # TestFlutterSecureStoragePlatform.
+  flutter_secure_storage_platform_interface: ^1.1.2
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
