@@ -2401,11 +2401,23 @@ async fn prorate_payment_in_tx(
     .await?;
 
     let Some((booked_hours, payment_id, original_amount)) = row else {
+        tracing::warn!(
+            request_id = %request_id,
+            "prorate_payment_in_tx: guard_request not found, skipping proration"
+        );
         return Ok(());
     };
     let (Some(payment_id), Some(original_amount), Some(booked_hours)) =
         (payment_id, original_amount, booked_hours)
     else {
+        // Missing payment row (customer never paid) or missing booked_hours
+        // (legacy data). Not an error — just means there's nothing to prorate.
+        tracing::warn!(
+            request_id = %request_id,
+            has_booked_hours = booked_hours.is_some(),
+            has_payment = payment_id.is_some(),
+            "prorate_payment_in_tx: missing data, skipping proration"
+        );
         return Ok(());
     };
 
@@ -2417,6 +2429,12 @@ async fn prorate_payment_in_tx(
     // here would be a billing data corruption (customer billed 0 for work
     // that did happen). (code-reviewer MEDIUM fix)
     let (Some(start), Some(end)) = (started_at, completed_at) else {
+        tracing::warn!(
+            request_id = %request_id,
+            has_started_at = started_at.is_some(),
+            has_completed_at = completed_at.is_some(),
+            "prorate_payment_in_tx: missing timestamps, skipping proration"
+        );
         return Ok(());
     };
     let actual_seconds = (end - start).num_seconds();
