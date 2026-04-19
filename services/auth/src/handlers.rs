@@ -370,14 +370,30 @@ pub async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     user: AuthUser,
+    body: String,
 ) -> Result<(HeaderMap, Json<ApiResponse<()>>), AppError> {
-    // Extract refresh token from cookie for single-session logout
-    let refresh_tok = headers
-        .get("Cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            shared::auth::extract_cookie_value(cookies, REFRESH_TOKEN_COOKIE).map(|t| t.to_string())
-        });
+    // Extract refresh token — mobile sends it in the JSON body, web sends it
+    // via the refresh_token cookie. Without this, mobile logout falls through
+    // to the all-sessions fallback in service::logout, violating the
+    // single-session contract. Raw String body (matching /refresh handlers)
+    // tolerates empty body + Content-Type quirks across HTTP clients.
+    let body_token = if body.trim().is_empty() {
+        None
+    } else {
+        serde_json::from_str::<RefreshRequest>(&body)
+            .ok()
+            .map(|r| r.refresh_token)
+            .filter(|t| !t.is_empty())
+    };
+    let refresh_tok = body_token.or_else(|| {
+        headers
+            .get("Cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|cookies| {
+                shared::auth::extract_cookie_value(cookies, REFRESH_TOKEN_COOKIE)
+                    .map(|t| t.to_string())
+            })
+    });
 
     // Extract access token jti + exp for revocation blocklist
     let access_token = headers
