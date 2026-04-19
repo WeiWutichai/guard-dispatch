@@ -395,6 +395,18 @@ pub async fn logout(
             })
     });
 
+    // Detect whether the caller used cookies at all — mobile sends only
+    // Authorization: Bearer and doesn't parse Set-Cookie, so emitting
+    // clear-cookie headers to it is ~300 bytes of wire bloat per logout.
+    let has_auth_cookie = headers
+        .get("Cookie")
+        .and_then(|v| v.to_str().ok())
+        .map(|cookies| {
+            shared::auth::extract_cookie_value(cookies, ACCESS_TOKEN_COOKIE).is_some()
+                || shared::auth::extract_cookie_value(cookies, REFRESH_TOKEN_COOKIE).is_some()
+        })
+        .unwrap_or(false);
+
     // Extract access token jti + exp for revocation blocklist
     let access_token = headers
         .get("Authorization")
@@ -423,15 +435,19 @@ pub async fn logout(
     )
     .await?;
 
-    // Clear auth cookies
     let mut headers = HeaderMap::new();
-    let clear_access = build_clear_cookie(ACCESS_TOKEN_COOKIE, "/");
-    headers.append(SET_COOKIE, clear_access.parse().expect("valid cookie"));
-    let clear_refresh = build_clear_cookie(REFRESH_TOKEN_COOKIE, "/auth");
-    headers.append(SET_COOKIE, clear_refresh.parse().expect("valid cookie"));
-    // Clear the logged_in marker cookie (must include Secure to match the set cookie)
-    let clear_marker = "logged_in=; Secure; SameSite=Lax; Path=/; Max-Age=0".to_string();
-    headers.append(SET_COOKIE, clear_marker.parse().expect("valid cookie"));
+    if has_auth_cookie {
+        // Web client — clear all three cookies we issued at login.
+        let clear_access = build_clear_cookie(ACCESS_TOKEN_COOKIE, "/");
+        headers.append(SET_COOKIE, clear_access.parse().expect("valid cookie"));
+        let clear_refresh = build_clear_cookie(REFRESH_TOKEN_COOKIE, "/auth");
+        headers.append(SET_COOKIE, clear_refresh.parse().expect("valid cookie"));
+        // Clear the logged_in marker cookie (must include Secure to match the set cookie)
+        let clear_marker = "logged_in=; Secure; SameSite=Lax; Path=/; Max-Age=0".to_string();
+        headers.append(SET_COOKIE, clear_marker.parse().expect("valid cookie"));
+    }
+    // Mobile / no-cookie callers: skip Set-Cookie headers (tokens aren't
+    // in cookies in the first place; mobile doesn't parse them either).
 
     Ok((headers, Json(ApiResponse::success(()))))
 }
