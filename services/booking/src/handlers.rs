@@ -17,10 +17,10 @@ use crate::models::{
     AssignmentResponse, AvailableGuardResponse, AvailableGuardsQuery, CostSummaryResponse,
     CreatePaymentDto, CreateRequestDto, CreateReviewDto, CreateServiceRateDto,
     GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary,
-    GuardRequestResponse, ListRequestsQuery, PaginatedAdminReviews, PaymentResponse,
-    ProgressReportResponse, ReviewCompletionDto, ServiceRate, StartJobDto, SubmitReviewResponse,
-    ToggleReviewVisibilityDto, UpdateAssignmentStatusDto, UpdateServiceRateDto,
-    WorkHistoryResponse,
+    GuardRequestResponse, ListReceiptsQuery, ListRequestsQuery, PaginatedAdminReviews,
+    PaymentResponse, ProgressReportResponse, ReceiptsPage, ReviewCompletionDto, ServiceRate,
+    StartJobDto, SubmitReviewResponse, ToggleReviewVisibilityDto, UpdateAssignmentStatusDto,
+    UpdateServiceRateDto, WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -608,6 +608,26 @@ pub async fn get_cost_summary(
 ) -> Result<Json<ApiResponse<CostSummaryResponse>>, AppError> {
     let summary = crate::service::get_cost_summary(&state.db, id, user.user_id, &user.role).await?;
     Ok(Json(ApiResponse::success(summary)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/customer/receipts",
+    tag = "Payments",
+    security(("bearer" = [])),
+    params(ListReceiptsQuery),
+    responses(
+        (status = 200, description = "Paginated list of completed-job receipts", body = ReceiptsPage),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn list_customer_receipts(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<ListReceiptsQuery>,
+) -> Result<Json<ApiResponse<ReceiptsPage>>, AppError> {
+    let page = crate::service::list_customer_receipts(&state.db, user.user_id, query).await?;
+    Ok(Json(ApiResponse::success(page)))
 }
 
 #[utoipa::path(

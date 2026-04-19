@@ -45,6 +45,14 @@ class BookingProvider extends ChangeNotifier {
   bool _isLoadingRequests = false;
   bool get isLoadingRequests => _isLoadingRequests;
 
+  // Customer receipts (completed-job invoices)
+  List<Map<String, dynamic>> _receipts = [];
+  List<Map<String, dynamic>> get receipts => _receipts;
+  int _receiptsTotal = 0;
+  int get receiptsTotal => _receiptsTotal;
+  bool _isLoadingReceipts = false;
+  bool get isLoadingReceipts => _isLoadingReceipts;
+
   // Loading & error
   bool _isLoading = false;
   bool get isLoading => _isLoading;
@@ -298,6 +306,24 @@ class BookingProvider extends ChangeNotifier {
       _error = e.toString();
     }
     _isLoadingRequests = false;
+    notifyListeners();
+  }
+
+  /// Fetch completed-job receipts for the current customer.
+  Future<void> fetchReceipts({int limit = 20, int offset = 0}) async {
+    _isLoadingReceipts = true;
+    _error = null;
+    notifyListeners();
+    try {
+      final page = await _service.listCustomerReceipts(limit: limit, offset: offset);
+      final list = page['data'];
+      _receipts = list is List ? list.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
+      final total = page['total'];
+      _receiptsTotal = total is int ? total : (total is num ? total.toInt() : 0);
+    } catch (e) {
+      _error = e.toString();
+    }
+    _isLoadingReceipts = false;
     notifyListeners();
   }
 

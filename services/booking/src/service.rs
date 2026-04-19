@@ -2619,6 +2619,135 @@ pub async fn get_cost_summary(
     })
 }
 
+/// Format the human-friendly receipt number shown on the invoice.
+/// `RCP-{YYYY}-{first 8 hex of payment UUID, uppercase}`.
+/// Year comes from `paid_at` when available, otherwise current UTC year.
+fn format_receipt_no(payment_id: Uuid, paid_at: Option<chrono::DateTime<Utc>>) -> String {
+    use chrono::Datelike;
+    let year = paid_at
+        .map(|d| d.year())
+        .unwrap_or_else(|| Utc::now().year());
+    let short = format!("{:032x}", payment_id.as_u128());
+    let short_upper: String = short.chars().take(8).collect::<String>().to_uppercase();
+    format!("RCP-{year}-{short_upper}")
+}
+
+/// List completed-job receipts for a customer, newest first, paginated.
+/// Scope: `assignments.status = 'completed' AND payments.status = 'completed'`.
+/// In-progress jobs are intentionally excluded — the receipt doc is meant to
+/// show the final prorated breakdown, which only exists after completion.
+pub async fn list_customer_receipts(
+    db: &PgPool,
+    customer_id: Uuid,
+    query: crate::models::ListReceiptsQuery,
+) -> Result<crate::models::ReceiptsPage, AppError> {
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        payment_id: Uuid,
+        request_id: Uuid,
+        assignment_id: Option<Uuid>,
+        original_amount: Decimal,
+        actual_hours_worked: Option<Decimal>,
+        final_amount: Option<Decimal>,
+        refund_amount: Option<Decimal>,
+        tip_amount: Decimal,
+        payment_method: String,
+        paid_at: Option<chrono::DateTime<Utc>>,
+        started_at: Option<chrono::DateTime<Utc>>,
+        completed_at: Option<chrono::DateTime<Utc>>,
+        booked_hours: Option<i32>,
+        service_address: String,
+        guard_name: Option<String>,
+        guard_avatar_url: Option<String>,
+    }
+
+    let rows = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT
+            p.id            AS payment_id,
+            p.request_id,
+            a.id            AS assignment_id,
+            p.amount        AS original_amount,
+            p.actual_hours_worked,
+            p.final_amount,
+            p.refund_amount,
+            p.tip_amount,
+            p.payment_method,
+            p.paid_at,
+            a.started_at,
+            a.completed_at,
+            r.booked_hours,
+            r.address       AS service_address,
+            u.full_name     AS guard_name,
+            u.avatar_url    AS guard_avatar_url
+        FROM booking.payments p
+        JOIN booking.guard_requests r ON r.id = p.request_id
+        JOIN booking.assignments a
+            ON a.request_id = r.id AND a.status = 'completed'::assignment_status
+        LEFT JOIN auth.users u ON u.id = a.guard_id
+        WHERE p.customer_id = $1 AND p.status = 'completed'
+        ORDER BY p.paid_at DESC NULLS LAST, p.created_at DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(customer_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(db)
+    .await?;
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM booking.payments p
+        JOIN booking.guard_requests r ON r.id = p.request_id
+        JOIN booking.assignments a
+            ON a.request_id = r.id AND a.status = 'completed'::assignment_status
+        WHERE p.customer_id = $1 AND p.status = 'completed'
+        "#,
+    )
+    .bind(customer_id)
+    .fetch_one(db)
+    .await?;
+
+    let data = rows
+        .into_iter()
+        .map(|r| {
+            // Net = (final_amount ?? original_amount) + tip. "final_amount"
+            // is always set here because status='completed' implies proration
+            // ran, but fall back defensively.
+            let billed = r.final_amount.unwrap_or(r.original_amount);
+            let net_amount = (billed + r.tip_amount).round_dp(2);
+            let receipt_no = format_receipt_no(r.payment_id, r.paid_at);
+            crate::models::ReceiptItem {
+                payment_id: r.payment_id,
+                request_id: r.request_id,
+                assignment_id: r.assignment_id,
+                receipt_no,
+                service_address: r.service_address,
+                guard_name: r.guard_name,
+                guard_avatar_url: r.guard_avatar_url,
+                booked_hours: r.booked_hours,
+                actual_hours_worked: r.actual_hours_worked,
+                original_amount: r.original_amount,
+                final_amount: r.final_amount,
+                refund_amount: r.refund_amount,
+                tip_amount: r.tip_amount,
+                net_amount,
+                payment_method: r.payment_method,
+                started_at: r.started_at,
+                completed_at: r.completed_at,
+                paid_at: r.paid_at,
+            }
+        })
+        .collect();
+
+    Ok(crate::models::ReceiptsPage { data, total })
+}
+
 /// Customer adds a tip to the guard from the completion-summary screen.
 ///
 /// Rules:
@@ -3787,5 +3916,58 @@ mod tests {
     fn service_rate_accepts_min_hours_boundary() {
         assert!(validate_service_rate(rust_decimal::Decimal::from(100), 1).is_ok());
         assert!(validate_service_rate(rust_decimal::Decimal::from(100), 24).is_ok());
+    }
+
+    // =========================================================================
+    // format_receipt_no — receipt-number generator
+    // =========================================================================
+
+    #[test]
+    fn receipt_no_uses_paid_at_year_and_8_hex() {
+        let id = Uuid::parse_str("a3f21c94-1234-5678-9abc-def012345678").unwrap();
+        let paid = chrono::DateTime::parse_from_rfc3339("2026-03-15T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let no = format_receipt_no(id, Some(paid));
+        assert_eq!(no, "RCP-2026-A3F21C94");
+    }
+
+    #[test]
+    fn receipt_no_is_deterministic_for_same_input() {
+        let id = Uuid::new_v4();
+        let paid = chrono::DateTime::parse_from_rfc3339("2025-12-31T23:59:59Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            format_receipt_no(id, Some(paid)),
+            format_receipt_no(id, Some(paid))
+        );
+    }
+
+    #[test]
+    fn receipt_no_falls_back_to_current_year_when_paid_at_missing() {
+        use chrono::Datelike;
+        let id = Uuid::parse_str("deadbeef-1234-5678-9abc-def012345678").unwrap();
+        let no = format_receipt_no(id, None);
+        let current_year = Utc::now().year();
+        assert!(no.starts_with(&format!("RCP-{current_year}-")));
+        assert!(no.ends_with("DEADBEEF"));
+    }
+
+    #[test]
+    fn receipt_no_uppercases_hex() {
+        let id = Uuid::parse_str("abcdef01-1234-5678-9abc-def012345678").unwrap();
+        let paid = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let no = format_receipt_no(id, Some(paid));
+        assert_eq!(no, "RCP-2026-ABCDEF01");
+    }
+
+    #[test]
+    fn receipt_no_differs_for_different_uuids() {
+        let a = Uuid::parse_str("aaaaaaaa-1111-1111-1111-111111111111").unwrap();
+        let b = Uuid::parse_str("bbbbbbbb-2222-2222-2222-222222222222").unwrap();
+        assert_ne!(format_receipt_no(a, None), format_receipt_no(b, None));
     }
 }

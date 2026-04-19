@@ -7,6 +7,7 @@ import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 
 import 'hirer_profile_settings_screen.dart';
+import 'receipt_list_screen.dart';
 
 class HirerProfileScreen extends StatelessWidget {
   const HirerProfileScreen({super.key});
@@ -81,6 +82,12 @@ class HirerProfileScreen extends StatelessWidget {
                 title: s.editProfile,
                 onTap: () =>
                     _navigateTo(context, const HirerProfileSettingsScreen()),
+              ),
+              _SettingsItem(
+                icon: Icons.receipt_long_rounded,
+                iconBg: const Color(0xFF34C759),
+                title: s.receipts,
+                onTap: () => _navigateTo(context, const ReceiptListScreen()),
               ),
               _SettingsItem(
                 icon: Icons.credit_card_rounded,

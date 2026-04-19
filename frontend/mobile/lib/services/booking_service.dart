@@ -226,6 +226,23 @@ class BookingService {
     return [];
   }
 
+  /// GET /booking/customer/receipts — list past completed-job receipts.
+  /// Returns a page object `{ data: [...], total: int }`.
+  Future<Map<String, dynamic>> listCustomerReceipts({
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final response = await _apiClient.dio.get(
+      '/booking/customer/receipts',
+      queryParameters: {'limit': limit, 'offset': offset},
+    );
+    final data = response.data['data'];
+    if (data is Map<String, dynamic>) {
+      return data;
+    }
+    return <String, dynamic>{'data': <dynamic>[], 'total': 0};
+  }
+
   // =========================================================================
   // Available Guards (customer discovery)
   // =========================================================================

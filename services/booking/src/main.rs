@@ -38,6 +38,7 @@ use crate::state::AppState;
         handlers::available_guards,
         handlers::create_payment,
         handlers::get_cost_summary,
+        handlers::list_customer_receipts,
         handlers::add_tip,
         handlers::start_job,
         handlers::get_active_job,
@@ -72,6 +73,8 @@ use crate::state::AppState;
         models::CreatePaymentDto,
         models::AddTipDto,
         models::CostSummaryResponse,
+        models::ReceiptItem,
+        models::ReceiptsPage,
         models::GuardRequestResponse,
         models::AssignmentResponse,
         models::PaymentResponse,
@@ -215,6 +218,8 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_cost_summary),
         )
         .route("/assignments/{id}/tip", post(handlers::add_tip))
+        // Customer receipts — completed-job invoices + history
+        .route("/customer/receipts", get(handlers::list_customer_receipts))
         // Available guards (customer discovery)
         .route("/available-guards", get(handlers::available_guards))
         .route(
