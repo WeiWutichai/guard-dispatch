@@ -217,7 +217,7 @@ CREATE INDEX idx_service_rates_active ON booking.service_rates(is_active);
 ```
 > **Simplified pricing (migration 037+038):** เดิมมี `min_price`/`max_price`/`price_per_hour` → ลดเหลือ `base_fee` เดียว สูตร: `total = base_fee × hours × guards + tip`
 > **Soft delete:** `is_active = false` instead of actual deletion. All public queries filter `WHERE is_active = true`.
-> **Price validation:** `base_fee >= 0`, name <= 200 chars — enforced in Rust service layer.
+> **Price validation (migration 040):** `validate_service_rate()` enforces `0 <= base_fee <= 1_000_000`, `1 <= min_hours <= 24`, name <= 200 chars. DB CHECK constraints (`service_rates_base_fee_bounds` NOT VALID, `service_rates_min_hours_bounds`) are a defense-in-depth backstop — `validate_service_rate` runs first in Rust. Default `min_hours` is `6` across DB, backend, and web UI.
 > **Decimal type:** Uses `rust_decimal::Decimal` in Rust — utoipa requires `#[schema(value_type = f64)]` annotation.
 
 ### Reviews Table
@@ -853,7 +853,7 @@ RegistrationPendingScreen({role})
 - `POST /pricing/services` → `handlers::create_service_rate` (admin JWT) — validates: name not empty, name ≤ 200 chars, base_fee ≥ 0
 - `PUT /pricing/services/{id}` → `handlers::update_service_rate` (admin JWT) — partial update via COALESCE; merges with existing values before validating
 - `DELETE /pricing/services/{id}` → `handlers::delete_service_rate` (admin JWT) — soft delete (`is_active = false`), returns 204
-- **Validation:** `validate_prices()` checks `base_fee >= 0`; applied on both create and update (with merged values)
+- **Validation:** `validate_service_rate(base_fee, min_hours)` enforces `0 <= base_fee <= 1_000_000` and `1 <= min_hours <= 24`; applied on both create and update (with merged values). DB CHECK constraints in migration 040 back this up.
 - **Pricing formula:** `total = base_fee × hours × guards + tip` — ไม่มี min_price/max_price/price_per_hour แล้ว (migration 037+038)
 - **Decimal:** Uses `rust_decimal::Decimal` — utoipa annotation `#[schema(value_type = f64)]` required for OpenAPI compatibility
 
@@ -1334,9 +1334,11 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้าม reuse profile_token — ต้อง enforce single-use ด้วย `jti` + Redis `GETDEL` เหมือน phone_verified_token
 - ❌ ห้ามออก access_token/refresh_token หรือ INSERT session ใน `register_with_otp()` — endpoint ต้อง return HTTP 202 พร้อม `RegisterWithOtpResponse` เท่านั้น (ไม่มี token)
 - ❌ ห้ามใช้ plain `INSERT INTO auth.users` ใน `register_with_otp()` — **ต้องใช้ UPSERT** `ON CONFLICT (phone) DO UPDATE SET password_hash=EXCLUDED.password_hash, full_name=EXCLUDED.full_name, approval_status='pending', updated_at=NOW() WHERE auth.users.approval_status='pending'` + `fetch_optional` → None = phone registered with non-pending status → `AppError::Conflict("Please log in instead")`
-- ❌ ห้าม accept ราคาติดลบใน service rates — `validate_prices()` ต้องตรวจ `base_fee >= 0`
+- ❌ ห้าม accept ราคาติดลบหรือเกิน ฿1,000,000 ใน service rates — `validate_service_rate()` ต้องตรวจ `0 <= base_fee <= 1_000_000` และ `1 <= min_hours <= 24`. DB CHECK constraints (migration 040) เป็น backstop เท่านั้น — ห้ามพึ่ง DB ให้ validate เองโดยไม่มี service-layer check
 - ❌ ห้ามใช้ `min_price`/`max_price`/`price_per_hour` — ลบออกแล้ว (migration 037+038) ใช้ `base_fee` เดียว สูตร: `total = base_fee × hours × guards + tip`
 - ❌ ห้ามบวก `base_fee` ซ้ำใน `_total` — `_subtotal = base_fee × hours × guards` แล้ว `_total = _subtotal + _tip` (ไม่ใช่ `_subtotal + _baseFee + _tip`)
+- ❌ ห้าม `handleAddService` (web pricing page) ใช้ truthy check `if (newService.name && newService.baseFee)` — `baseFee = 0` เป็น falsy จะทำให้ปุ่ม submit เงียบ (bug M2); ต้องตรวจ `name.trim()` + `baseFee >= 0` แยก และต้องแสดง error banner เมื่อ validation fail (ห้าม `catch {}` เงียบ ๆ)
+- ❌ ห้าม default `min_hours` เป็น `4` ใน web UI — ต้อง `6` ให้ตรงกับ DB + backend (migration 040); mismatch ใน 3 layers ทำให้ service ที่สร้างจาก web ไม่ match กับที่สร้างจาก SQL/backend
 - ❌ ห้าม return inactive service rates จาก public GET endpoints — ต้อง filter `WHERE is_active = true` เสมอ
 - ❌ ห้าม query `available-guards` โดยไม่ filter `gl.is_online = true AND recorded_at > NOW() - INTERVAL '5 minutes'` — guards ที่ปิดให้บริการ (WebSocket disconnected → `is_online=false`) หรือไม่มี GPS update ภายใน 5 นาทีต้องไม่แสดง — ตรงกับ threshold สีเทาของ admin map และ mobile
 - ❌ ห้าม GPS WebSocket disconnect โดยไม่เรียก `set_offline()` — ต้อง UPDATE `tracking.guard_locations SET is_online = false` ทุกครั้งที่ guard disconnect เพื่อให้ `available-guards` query exclude ทันที
