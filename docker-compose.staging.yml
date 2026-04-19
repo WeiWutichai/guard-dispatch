@@ -16,10 +16,11 @@
 #   - MinIO kept enabled (staging still uses local object storage)
 #   - Postgres/Redis/MinIO host ports removed (no public exposure)
 #
-# Required env vars on the VPS (.env):
-#   REGISTRY=ghcr.io
-#   IMAGE_PREFIX=weiwutichai/guard-dispatch
-#   IMAGE_TAG=<git sha>            # set by CI on every deploy
+# Image coords (REGISTRY, IMAGE_PREFIX, IMAGE_TAG) are exported by the
+# .github/workflows/deploy.yml script on every run. The VPS .env does
+# NOT need them — they're CI/CD concerns, not app config. For manual
+# `docker compose up` on the host, export them yourself first or fall
+# back to the base docker-compose.yml (which builds locally).
 #
 # Production will eventually use docker-compose.prod.yml with Cloudflare R2.
 # =============================================================================
