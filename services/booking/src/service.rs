@@ -1872,12 +1872,7 @@ pub async fn accept_or_decline_assignment(
 // Create Payment (simulated — records payment, updates request status)
 // =============================================================================
 
-pub async fn create_payment(
-    db: &PgPool,
-    customer_id: Uuid,
-    req: CreatePaymentDto,
-    redis_conn: &redis::aio::MultiplexedConnection,
-) -> Result<PaymentResponse, AppError> {
+fn validate_payment_request(req: &CreatePaymentDto) -> Result<(), AppError> {
     let valid_methods = ["promptpay", "credit_card", "debit_card", "mobile_banking"];
     if !valid_methods.contains(&req.payment_method.as_str()) {
         return Err(AppError::BadRequest(format!(
@@ -1886,6 +1881,21 @@ pub async fn create_payment(
             valid_methods.join(", ")
         )));
     }
+    if req.amount <= Decimal::ZERO {
+        return Err(AppError::BadRequest(
+            "Payment amount must be positive".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub async fn create_payment(
+    db: &PgPool,
+    customer_id: Uuid,
+    req: CreatePaymentDto,
+    redis_conn: &redis::aio::MultiplexedConnection,
+) -> Result<PaymentResponse, AppError> {
+    validate_payment_request(&req)?;
 
     let mut tx = db.begin().await?;
 
@@ -3576,5 +3586,60 @@ mod tests {
         assert_eq!(sanitize_coords(None, None), (None, None));
         assert_eq!(sanitize_coords(Some(13.0), None), (None, None));
         assert_eq!(sanitize_coords(None, Some(100.0)), (None, None));
+    }
+
+    // =========================================================================
+    // validate_payment_request — security hotfix C1 regression guard
+    // =========================================================================
+
+    use crate::models::CreatePaymentDto;
+
+    fn valid_payment() -> CreatePaymentDto {
+        CreatePaymentDto {
+            request_id: Uuid::new_v4(),
+            amount: Decimal::new(150000, 2), // ฿1500.00
+            payment_method: "promptpay".to_string(),
+        }
+    }
+
+    #[test]
+    fn payment_accepts_valid_amount() {
+        assert!(validate_payment_request(&valid_payment()).is_ok());
+    }
+
+    #[test]
+    fn payment_rejects_zero_amount() {
+        let mut req = valid_payment();
+        req.amount = Decimal::ZERO;
+        let err = validate_payment_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("positive"));
+    }
+
+    #[test]
+    fn payment_rejects_negative_amount() {
+        let mut req = valid_payment();
+        req.amount = Decimal::new(-100, 2); // -฿1.00
+        let err = validate_payment_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("positive"));
+    }
+
+    #[test]
+    fn payment_rejects_invalid_method() {
+        let mut req = valid_payment();
+        req.payment_method = "bitcoin".to_string();
+        let err = validate_payment_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("payment method"));
+    }
+
+    #[test]
+    fn payment_accepts_all_valid_methods() {
+        for method in ["promptpay", "credit_card", "debit_card", "mobile_banking"] {
+            let mut req = valid_payment();
+            req.payment_method = method.to_string();
+            assert!(
+                validate_payment_request(&req).is_ok(),
+                "method {method} should be accepted"
+            );
+        }
     }
 }
