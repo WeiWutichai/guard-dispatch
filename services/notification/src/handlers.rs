@@ -25,11 +25,11 @@ use crate::state::AppState;
 pub async fn internal_push(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SendNotificationRequest>,
-) -> Result<Json<ApiResponse<NotificationLogResponse>>, AppError> {
-    let notification =
-        crate::service::send_notification(&state.db, &state.http_client, &state.fcm_auth, req)
-            .await?;
-    Ok(Json(ApiResponse::success(notification)))
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    // Push-only path — callers INSERT their own log row before POSTing
+    // here, so delegating to `send_notification` would double-log.
+    crate::service::push_only(&state.db, &state.http_client, &state.fcm_auth, req).await?;
+    Ok(Json(ApiResponse::success(())))
 }
 
 #[utoipa::path(

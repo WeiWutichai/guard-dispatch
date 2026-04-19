@@ -169,6 +169,76 @@ pub async fn mark_all_as_read(
 // Send Notification (creates log + sends via FCM)
 // =============================================================================
 
+/// Look up the user's FCM tokens and fire a push to each. Does NOT
+/// write to `notification_logs` — the caller (or a paired `log_notification`
+/// call) is responsible for the DB row.
+///
+/// This split exists because booking/chat/etc. services already INSERT
+/// the log row themselves for durability. Having `send_notification`
+/// (which logs) also run on the `/internal/push` path produced duplicate
+/// rows per event.
+async fn push_fcm_to_user(
+    db: &PgPool,
+    http_client: &reqwest::Client,
+    fcm_auth: &FcmAuth,
+    user_id: Uuid,
+    title: &str,
+    body: &str,
+    payload: &Option<serde_json::Value>,
+) -> Result<(), AppError> {
+    let tokens: Vec<FcmTokenRow> = sqlx::query_as::<_, FcmTokenRow>(
+        r#"
+        SELECT id, user_id, token, device_type, created_at, updated_at
+        FROM notification.fcm_tokens
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+
+    for token_row in &tokens {
+        if let Err(e) = send_fcm_push(
+            http_client,
+            fcm_auth,
+            &token_row.token,
+            title,
+            body,
+            payload,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to send FCM push to token {}: {e}",
+                token_row.token.get(..20).unwrap_or(&token_row.token)
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Push only — assumes the caller already logged to `notification_logs`.
+/// Used by the `/internal/push` endpoint that booking/chat/etc. call
+/// after they've already INSERT'd their own log row.
+pub async fn push_only(
+    db: &PgPool,
+    http_client: &reqwest::Client,
+    fcm_auth: &FcmAuth,
+    req: SendNotificationRequest,
+) -> Result<(), AppError> {
+    push_fcm_to_user(
+        db,
+        http_client,
+        fcm_auth,
+        req.user_id,
+        &req.title,
+        &req.body,
+        &req.payload,
+    )
+    .await
+}
+
 pub async fn send_notification(
     db: &PgPool,
     http_client: &reqwest::Client,
@@ -197,36 +267,17 @@ pub async fn send_notification(
     .fetch_one(db)
     .await?;
 
-    // Get user's FCM tokens
-    let tokens: Vec<FcmTokenRow> = sqlx::query_as::<_, FcmTokenRow>(
-        r#"
-        SELECT id, user_id, token, device_type, created_at, updated_at
-        FROM notification.fcm_tokens
-        WHERE user_id = $1
-        "#,
+    // Push to device tokens (shared with /internal/push path)
+    push_fcm_to_user(
+        db,
+        http_client,
+        fcm_auth,
+        req.user_id,
+        &req.title,
+        &req.body,
+        &req.payload,
     )
-    .bind(req.user_id)
-    .fetch_all(db)
     .await?;
-
-    // Send FCM push to all user devices
-    for token_row in &tokens {
-        if let Err(e) = send_fcm_push(
-            http_client,
-            fcm_auth,
-            &token_row.token,
-            &req.title,
-            &req.body,
-            &req.payload,
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to send FCM push to token {}: {e}",
-                token_row.token.get(..20).unwrap_or(&token_row.token)
-            );
-        }
-    }
 
     Ok(NotificationLogResponse::from(row))
 }
