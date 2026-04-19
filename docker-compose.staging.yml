@@ -1,8 +1,13 @@
 # =============================================================================
 # Security Guard Dispatch System — STAGING Overrides
-# Usage: docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --build
+# Usage: docker compose -f docker-compose.yml -f docker-compose.staging.yml pull
+#        docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
 #
 # Differences from dev (docker-compose.yml):
+#   - All Rust + mediasoup services PULL pre-built images from ghcr.io
+#     (published by .github/workflows/deploy.yml on every push to main).
+#     `build: !reset null` cancels the build stanza inherited from the base
+#     compose so `docker compose up` never rebuilds on the VPS.
 #   - nginx uses nginx.prod.conf (HTTPS + HSTS + server_name bound)
 #   - Let's Encrypt certs mounted read-only at /etc/letsencrypt
 #   - Webroot for cert renewal mounted at /var/www/certbot
@@ -11,8 +16,12 @@
 #   - MinIO kept enabled (staging still uses local object storage)
 #   - Postgres/Redis/MinIO host ports removed (no public exposure)
 #
-# Production will eventually use docker-compose.prod.yml instead with
-# Cloudflare R2 + pre-built images from a registry.
+# Required env vars on the VPS (.env):
+#   REGISTRY=ghcr.io
+#   IMAGE_PREFIX=weiwutichai/guard-dispatch
+#   IMAGE_TAG=<git sha>            # set by CI on every deploy
+#
+# Production will eventually use docker-compose.prod.yml with Cloudflare R2.
 # =============================================================================
 
 services:
@@ -49,21 +58,33 @@ services:
 
   rust-auth:
     restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:?IMAGE_PREFIX required}/auth:${IMAGE_TAG:-latest}
+    build: !reset null
 
   rust-booking:
     restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:?IMAGE_PREFIX required}/booking:${IMAGE_TAG:-latest}
+    build: !reset null
 
   rust-tracking:
     restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:?IMAGE_PREFIX required}/tracking:${IMAGE_TAG:-latest}
+    build: !reset null
 
   rust-notification:
     restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:?IMAGE_PREFIX required}/notification:${IMAGE_TAG:-latest}
+    build: !reset null
 
   rust-chat:
     restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:?IMAGE_PREFIX required}/chat:${IMAGE_TAG:-latest}
+    build: !reset null
 
   mediasoup-server:
     restart: always
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:?IMAGE_PREFIX required}/mediasoup:${IMAGE_TAG:-latest}
+    build: !reset null
     environment:
       # Required for WebRTC ICE to advertise the correct public IP.
       # Without this, mobile clients can't connect to the media server
