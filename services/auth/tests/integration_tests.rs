@@ -1037,6 +1037,62 @@ async fn logout_with_bogus_bearer_returns_401() {
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
+#[tokio::test]
+async fn mobile_logout_with_refresh_token_in_body_is_single_session() {
+    // Regression test for H2: mobile sends refresh_token in JSON body; the
+    // handler must honor it and delete ONLY that session, not all sessions.
+    //
+    // Pre-fix behavior: handler read refresh_token from Cookie only →
+    // mobile's body was ignored → service::logout hit the "no token" branch →
+    // DELETE FROM auth.sessions WHERE user_id = $1 (all devices wiped).
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    // Two independent mobile logins → two sessions for the same user.
+    let (access_a, refresh_a) = mobile_login(&phone, &password).await;
+    throttle().await;
+    let (access_b, _refresh_b) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Logout session A — send its refresh_token in body (mobile pattern).
+    let url = format!("{}/logout", base_url());
+    let res = send_retrying(|| {
+        client()
+            .post(&url)
+            .bearer_auth(&access_a)
+            .json(&json!({ "refresh_token": refresh_a }))
+    })
+    .await;
+    assert_eq!(res.status(), StatusCode::OK, "logout A should succeed");
+    throttle().await;
+
+    // Session A's access token must be revoked.
+    let res = get_bearer("/me", &access_a).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "session A access token must be blocklisted after its logout"
+    );
+    throttle().await;
+
+    // Session B must still be alive — the fix: logging out A does NOT affect B.
+    let res = get_bearer("/me", &access_b).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "session B must survive session A's logout (single-session isolation)"
+    );
+}
+
 // =============================================================================
 // Priority 10 — /me endpoint
 // =============================================================================

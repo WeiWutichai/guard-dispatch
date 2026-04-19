@@ -679,8 +679,11 @@ class AuthProvider extends ChangeNotifier {
           ),
         );
       }
-    } catch (_) {
-      // Backend call failed (network error, etc.) — proceed with local cleanup
+    } catch (e) {
+      // Backend call failed (network error, expired token, etc.) — proceed
+      // with local cleanup regardless so the user can always sign out locally.
+      // Log for dev diagnosis; debugPrint is a no-op in release builds.
+      debugPrint('[AuthProvider.logout] backend call failed: $e');
     }
 
     // Always clear local state regardless of backend result
