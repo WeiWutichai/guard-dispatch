@@ -70,7 +70,7 @@ class ReceiptPdf {
               net: net,
               paymentMethod: paymentMethod,
             ),
-            pw.Spacer(),
+            pw.SizedBox(height: 20),
             _footer(isThai),
           ],
         ),
@@ -275,18 +275,24 @@ class ReceiptPdf {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        pw.Text(refundNote,
-            style: pw.TextStyle(
-                fontSize: 9,
-                fontStyle: pw.FontStyle.italic,
-                color: PdfColors.grey600)),
+        // NotoSansThai doesn't ship an italic variant; specifying
+        // `fontStyle: italic` forces the PDF renderer to synthesize it,
+        // which mangles Thai glyphs into fallback boxes. Use grey +
+        // smaller size instead to still read as a "note".
+        pw.Text(
+          refundNote,
+          style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+        ),
         pw.SizedBox(height: 12),
         pw.Center(
-          child: pw.Text(thanks,
-              style: pw.TextStyle(
-                  fontSize: 10,
-                  color: PdfColors.grey700,
-                  fontWeight: pw.FontWeight.bold)),
+          child: pw.Text(
+            thanks,
+            style: pw.TextStyle(
+              fontSize: 10,
+              color: PdfColors.grey700,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
         ),
       ],
     );
