@@ -101,6 +101,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-push
     environment: staging
+    # Auto-deploy is intentionally disabled while operators run `docker
+    # compose pull && up -d` by hand on the VPS. Flip to `true` (or delete
+    # this line) when either:
+    #   (a) ghcr packages are made public, OR
+    #   (b) the VPS has `docker login ghcr.io` credentials persisted in
+    #       /root/.docker/config.json
+    # Build & Push above keeps running so ghcr.io stays fresh for the
+    # manual-deploy flow.
+    if: false
 
     steps:
       - uses: actions/checkout@v4
