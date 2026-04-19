@@ -310,6 +310,7 @@ class BookingProvider extends ChangeNotifier {
     String? specialInstructions,
     String urgency = 'medium',
     int? bookedHours,
+    int guardCount = 1,
   }) async {
     _error = null;
     try {
@@ -322,6 +323,7 @@ class BookingProvider extends ChangeNotifier {
         specialInstructions: specialInstructions,
         urgency: urgency,
         bookedHours: bookedHours,
+        guardCount: guardCount,
       );
       // Refresh list after creating
       await fetchMyRequests();

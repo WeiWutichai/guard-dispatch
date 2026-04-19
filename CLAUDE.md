@@ -198,6 +198,7 @@ CREATE TABLE booking.payments (
 > **Cost summary on completion (migration 036):** When `review_completion()` approves a job, it prorates `payments.amount` by `actual_hours / booked_hours` and stores `final_amount` + `refund_amount` + `actual_hours_worked` atomically in the same transaction. Overtime is **never** auto-charged (`actual_hours` is clamped to `booked_hours`); customers can optionally tip via `POST /assignments/{id}/tip`. `refund_amount` is **ledger-only** — admin processes the real refund flow later.
 > `booking.assignments` has `started_at TIMESTAMPTZ` for countdown tracking.
 > `booking.guard_requests` has `booked_hours INTEGER` for countdown calculation.
+> **guard_count (migration 041):** `booking.guard_requests.guard_count INTEGER NOT NULL DEFAULT 1 CHECK (1..=20)` stores number of guards hired. Mobile `_guardCount` finally reaches backend; `hirer_history_screen` now shows actual count (previously hardcoded `1`). Service-layer `create_request()` validates `1..=20` before INSERT. Every SELECT from `guard_requests` that decodes into `GuardRequestRow` must include `guard_count` in its column list — missing it = runtime decode failure. Unblocks server-side expected-total computation for future C1 tightening: `expected = service_rate.base_fee × booked_hours × guard_count + tip`.
 > `assignment_status` enum extended: `pending_acceptance` → `accepted` / `declined` (guard acceptance flow).
 
 ### Service Rates Table
@@ -1339,6 +1340,8 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามบวก `base_fee` ซ้ำใน `_total` — `_subtotal = base_fee × hours × guards` แล้ว `_total = _subtotal + _tip` (ไม่ใช่ `_subtotal + _baseFee + _tip`)
 - ❌ ห้าม `handleAddService` (web pricing page) ใช้ truthy check `if (newService.name && newService.baseFee)` — `baseFee = 0` เป็น falsy จะทำให้ปุ่ม submit เงียบ (bug M2); ต้องตรวจ `name.trim()` + `baseFee >= 0` แยก และต้องแสดง error banner เมื่อ validation fail (ห้าม `catch {}` เงียบ ๆ)
 - ❌ ห้าม default `min_hours` เป็น `4` ใน web UI — ต้อง `6` ให้ตรงกับ DB + backend (migration 040); mismatch ใน 3 layers ทำให้ service ที่สร้างจาก web ไม่ match กับที่สร้างจาก SQL/backend
+- ❌ ห้าม SELECT จาก `booking.guard_requests` ที่ decode เป็น `GuardRequestRow` โดยไม่รวม `guard_count` ในคอลัมน์ — runtime decode จะ panic. INSERT/UPDATE RETURNING ก็เช่นกัน (migration 041)
+- ❌ ห้าม mobile `createRequest()` ส่ง body โดยไม่มี `guard_count` — backend มี `#[serde(default = "default_guard_count")]` fallback = 1 แต่ค่า UI จริงจะถูกทิ้ง → history แสดงผิด. ปัจจุบัน `BookingProvider.createRequest({guardCount})` + `BookingService.createRequest({guardCount})` ต้องรับ-ส่งให้ครบ chain
 - ❌ ห้าม return inactive service rates จาก public GET endpoints — ต้อง filter `WHERE is_active = true` เสมอ
 - ❌ ห้าม query `available-guards` โดยไม่ filter `gl.is_online = true AND recorded_at > NOW() - INTERVAL '5 minutes'` — guards ที่ปิดให้บริการ (WebSocket disconnected → `is_online=false`) หรือไม่มี GPS update ภายใน 5 นาทีต้องไม่แสดง — ตรงกับ threshold สีเทาของ admin map และ mobile
 - ❌ ห้าม GPS WebSocket disconnect โดยไม่เรียก `set_offline()` — ต้อง UPDATE `tracking.guard_locations SET is_online = false` ทุกครั้งที่ guard disconnect เพื่อให้ `available-guards` query exclude ทันที

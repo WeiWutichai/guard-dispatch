@@ -216,6 +216,13 @@ pub async fn create_request(
         }
     }
 
+    // Validate guard_count — matches the DB CHECK on booking.guard_requests.
+    if !(1..=20).contains(&req.guard_count) {
+        return Err(AppError::BadRequest(
+            "Guard count must be between 1 and 20".to_string(),
+        ));
+    }
+
     // Validate offered_price
     if let Some(price) = req.offered_price {
         if price < 0.0 {
@@ -241,9 +248,9 @@ pub async fn create_request(
 
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        INSERT INTO booking.guard_requests (customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, urgency, booked_hours)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::urgency_level, $9)
-        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, NULL::assignment_status AS assignment_status, created_at, updated_at
+        INSERT INTO booking.guard_requests (customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, urgency, booked_hours, guard_count)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::urgency_level, $9, $10)
+        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, guard_count, NULL::assignment_status AS assignment_status, created_at, updated_at
         "#,
     )
     .bind(customer_id)
@@ -255,6 +262,7 @@ pub async fn create_request(
     .bind(&req.special_instructions)
     .bind(&urgency_str)
     .bind(req.booked_hours)
+    .bind(req.guard_count)
     .fetch_one(db)
     .await?;
 
@@ -289,7 +297,7 @@ pub async fn list_requests(
                     r#"
                     SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
                            gr.description, gr.offered_price, gr.special_instructions, gr.status,
-                           gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+                           gr.urgency, gr.booked_hours, gr.guard_count, la.assignment_status, gr.created_at, gr.updated_at
                     FROM booking.guard_requests gr
                     LEFT JOIN LATERAL (
                         SELECT a.status AS assignment_status
@@ -313,7 +321,7 @@ pub async fn list_requests(
                     r#"
                     SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
                            gr.description, gr.offered_price, gr.special_instructions, gr.status,
-                           gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+                           gr.urgency, gr.booked_hours, gr.guard_count, la.assignment_status, gr.created_at, gr.updated_at
                     FROM booking.guard_requests gr
                     LEFT JOIN LATERAL (
                         SELECT a.status AS assignment_status
@@ -337,7 +345,7 @@ pub async fn list_requests(
             r#"
             SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
                    gr.description, gr.offered_price, gr.special_instructions, gr.status,
-                   gr.urgency, gr.booked_hours, a.status AS assignment_status,
+                   gr.urgency, gr.booked_hours, gr.guard_count, a.status AS assignment_status,
                    gr.created_at, gr.updated_at
             FROM booking.guard_requests gr
             INNER JOIN booking.assignments a ON a.request_id = gr.id
@@ -357,7 +365,7 @@ pub async fn list_requests(
             r#"
             SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
                    gr.description, gr.offered_price, gr.special_instructions, gr.status,
-                   gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+                   gr.urgency, gr.booked_hours, gr.guard_count, la.assignment_status, gr.created_at, gr.updated_at
             FROM booking.guard_requests gr
             LEFT JOIN LATERAL (
                 SELECT a.status AS assignment_status
@@ -389,7 +397,7 @@ pub async fn get_request(db: &PgPool, request_id: Uuid) -> Result<GuardRequestRe
         r#"
         SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
                gr.description, gr.offered_price, gr.special_instructions, gr.status,
-               gr.urgency, gr.booked_hours, la.assignment_status, gr.created_at, gr.updated_at
+               gr.urgency, gr.booked_hours, gr.guard_count, la.assignment_status, gr.created_at, gr.updated_at
         FROM booking.guard_requests gr
         LEFT JOIN LATERAL (
             SELECT a.status AS assignment_status
@@ -424,7 +432,7 @@ pub async fn cancel_request(
         r#"
         SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
                gr.description, gr.offered_price, gr.special_instructions, gr.status,
-               gr.urgency, gr.booked_hours, NULL::assignment_status AS assignment_status,
+               gr.urgency, gr.booked_hours, gr.guard_count, NULL::assignment_status AS assignment_status,
                gr.created_at, gr.updated_at
         FROM booking.guard_requests gr
         WHERE gr.id = $1
@@ -454,7 +462,7 @@ pub async fn cancel_request(
         UPDATE booking.guard_requests
         SET status = 'cancelled'::request_status, updated_at = NOW()
         WHERE id = $1
-        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, NULL::assignment_status AS assignment_status, created_at, updated_at
+        RETURNING id, customer_id, location_lat, location_lng, address, description, offered_price, special_instructions, status, urgency, booked_hours, guard_count, NULL::assignment_status AS assignment_status, created_at, updated_at
         "#,
     )
     .bind(request_id)
@@ -493,7 +501,7 @@ pub async fn assign_guard(
     let request = sqlx::query_as::<_, GuardRequestRow>(
         r#"
         SELECT id, customer_id, location_lat, location_lng, address, description, offered_price,
-               special_instructions, status, urgency, booked_hours,
+               special_instructions, status, urgency, booked_hours, guard_count,
                NULL::assignment_status AS assignment_status, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
@@ -1923,7 +1931,7 @@ pub async fn create_payment(
     let request = sqlx::query_as::<_, GuardRequestRow>(
         r#"
         SELECT id, customer_id, location_lat, location_lng, address, description, offered_price,
-               special_instructions, status, urgency, booked_hours,
+               special_instructions, status, urgency, booked_hours, guard_count,
                NULL::assignment_status AS assignment_status, created_at, updated_at
         FROM booking.guard_requests
         WHERE id = $1
@@ -3394,6 +3402,13 @@ mod tests {
             }
         }
 
+        // Validate guard_count
+        if !(1..=20).contains(&req.guard_count) {
+            return Err(AppError::BadRequest(
+                "Guard count must be between 1 and 20".to_string(),
+            ));
+        }
+
         // Validate offered_price
         if let Some(price) = req.offered_price {
             if price < 0.0 {
@@ -3422,6 +3437,7 @@ mod tests {
             special_instructions: None,
             urgency: UrgencyLevel::Medium,
             booked_hours: Some(6),
+            guard_count: 1,
         }
     }
 
@@ -3535,6 +3551,41 @@ mod tests {
     fn create_request_accepts_none_booked_hours() {
         let mut req = valid_request();
         req.booked_hours = None;
+        assert!(validate_create_request(&req).is_ok());
+    }
+
+    // --- guard_count validation ---
+
+    #[test]
+    fn create_request_rejects_zero_guard_count() {
+        let mut req = valid_request();
+        req.guard_count = 0;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Guard count"));
+    }
+
+    #[test]
+    fn create_request_rejects_negative_guard_count() {
+        let mut req = valid_request();
+        req.guard_count = -1;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Guard count"));
+    }
+
+    #[test]
+    fn create_request_rejects_21_guard_count() {
+        let mut req = valid_request();
+        req.guard_count = 21;
+        let err = validate_create_request(&req).unwrap_err();
+        assert!(format!("{err:?}").contains("Guard count"));
+    }
+
+    #[test]
+    fn create_request_accepts_boundary_guard_counts() {
+        let mut req = valid_request();
+        req.guard_count = 1;
+        assert!(validate_create_request(&req).is_ok());
+        req.guard_count = 20;
         assert!(validate_create_request(&req).is_ok());
     }
 

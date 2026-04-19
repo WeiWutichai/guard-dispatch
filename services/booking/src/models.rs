@@ -59,10 +59,19 @@ pub struct CreateRequestDto {
     #[serde(default = "default_urgency")]
     pub urgency: UrgencyLevel,
     pub booked_hours: Option<i32>,
+    /// Number of guards to hire for this booking. Defaults to 1 so legacy
+    /// clients that don't send this field keep working. Server validates
+    /// 1..=20; anything outside is rejected with BadRequest.
+    #[serde(default = "default_guard_count")]
+    pub guard_count: i32,
 }
 
 fn default_urgency() -> UrgencyLevel {
     UrgencyLevel::Medium
+}
+
+fn default_guard_count() -> i32 {
+    1
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -154,6 +163,7 @@ pub struct GuardRequestResponse {
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
     pub booked_hours: Option<i32>,
+    pub guard_count: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignment_status: Option<AssignmentStatus>,
     pub created_at: DateTime<Utc>,
@@ -353,6 +363,7 @@ pub struct GuardRequestRow {
     pub status: RequestStatus,
     pub urgency: UrgencyLevel,
     pub booked_hours: Option<i32>,
+    pub guard_count: i32,
     pub assignment_status: Option<AssignmentStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -373,6 +384,7 @@ impl From<GuardRequestRow> for GuardRequestResponse {
             status: row.status,
             urgency: row.urgency,
             booked_hours: row.booked_hours,
+            guard_count: row.guard_count,
             assignment_status: row.assignment_status,
             created_at: row.created_at,
             updated_at: row.updated_at,

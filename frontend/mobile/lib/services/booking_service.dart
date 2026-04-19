@@ -148,6 +148,7 @@ class BookingService {
     String? specialInstructions,
     String urgency = 'medium',
     int? bookedHours,
+    int guardCount = 1,
   }) async {
     final response = await _apiClient.dio.post(
       '/booking/requests',
@@ -162,6 +163,7 @@ class BookingService {
           'special_instructions': specialInstructions,
         'urgency': urgency,
         'booked_hours': ?bookedHours,
+        'guard_count': guardCount,
       },
     );
     return response.data['data'] as Map<String, dynamic>;
