@@ -19,19 +19,32 @@ jobs:
       packages: write
 
     strategy:
+      # Don't let one service's failure cancel the others — surface all real
+      # build errors in a single run instead of chasing them one at a time.
+      fail-fast: false
       matrix:
         include:
+          # Rust services share a workspace root — context must be the repo
+          # root so their Dockerfiles can COPY services/*/Cargo.toml etc.
           - service: auth
+            context: .
             dockerfile: services/auth/Dockerfile
           - service: booking
+            context: .
             dockerfile: services/booking/Dockerfile
           - service: tracking
+            context: .
             dockerfile: services/tracking/Dockerfile
           - service: notification
+            context: .
             dockerfile: services/notification/Dockerfile
           - service: chat
+            context: .
             dockerfile: services/chat/Dockerfile
+          # MediaSoup is a standalone Node app; its Dockerfile uses paths
+          # relative to services/mediasoup/ (matching docker-compose).
           - service: mediasoup
+            context: services/mediasoup
             dockerfile: services/mediasoup/Dockerfile
 
     steps:
@@ -58,7 +71,7 @@ jobs:
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
           tags: |
