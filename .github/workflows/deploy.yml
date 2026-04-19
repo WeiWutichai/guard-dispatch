@@ -91,6 +91,9 @@ jobs:
   #     MEDIASOUP_ANNOUNCED_IP=<public IP>)
   #   - Let's Encrypt cert for the configured domain (nginx.prod.conf)
   #   - Docker + compose plugin + ghcr read access (public pkgs = no login)
+  #   - Tailscale connected (VPS exposes SSH only to the tailnet, not the
+  #     public internet; the runner joins the tailnet below via an
+  #     ephemeral auth key stored in TAILSCALE_AUTHKEY)
   # ---------------------------------------------------------------------------
   deploy:
     name: Deploy to Staging
@@ -100,6 +103,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # The staging VPS has port 22 closed to the public internet and is
+      # only reachable over Tailscale (private 100.x.y.z address). Bring
+      # the runner onto the tailnet as an ephemeral node; it'll drop off
+      # automatically when the job exits.
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          version: latest
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
