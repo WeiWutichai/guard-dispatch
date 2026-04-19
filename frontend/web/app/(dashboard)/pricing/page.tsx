@@ -133,11 +133,13 @@ export default function PricingPage() {
   const [editAreaModalOpen, setEditAreaModalOpen] = useState(false);
   const [selectedArea, setSelectedArea] = useState<AreaRate | null>(null);
 
+  const [addServiceError, setAddServiceError] = useState<string | null>(null);
+
   // New service form
   const [newService, setNewService] = useState<Partial<ServiceRate>>({
     name: "",
     baseFee: 0,
-    minHours: 4,
+    minHours: 6,
     notes: "",
   });
 
@@ -160,20 +162,32 @@ export default function PricingPage() {
   ];
 
   const handleAddService = async () => {
-    if (newService.name && newService.baseFee) {
-      try {
-        await pricingApi.createServiceRate({
-          name: newService.name,
-          base_fee: newService.baseFee || 0,
-          min_hours: newService.minHours || 4,
-          notes: newService.notes || undefined,
-        });
-        setNewService({ name: "", baseFee: 0, minHours: 4, notes: "" });
-        setAddServiceModalOpen(false);
-        loadServiceRates();
-      } catch {
-        // silently fail — could add toast later
-      }
+    const name = (newService.name ?? "").trim();
+    const baseFee = newService.baseFee ?? 0;
+    if (!name) {
+      setAddServiceError(locale === "th" ? "กรุณากรอกชื่อบริการ" : "Service name is required");
+      return;
+    }
+    if (baseFee < 0) {
+      setAddServiceError(
+        locale === "th" ? "ค่าบริการต้องไม่ติดลบ" : "Base fee cannot be negative",
+      );
+      return;
+    }
+    setAddServiceError(null);
+    try {
+      await pricingApi.createServiceRate({
+        name,
+        base_fee: baseFee,
+        min_hours: newService.minHours ?? 6,
+        notes: newService.notes || undefined,
+      });
+      setNewService({ name: "", baseFee: 0, minHours: 6, notes: "" });
+      setAddServiceModalOpen(false);
+      loadServiceRates();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAddServiceError(msg || (locale === "th" ? "บันทึกไม่สำเร็จ" : "Failed to save"));
     }
   };
 
@@ -303,7 +317,7 @@ export default function PricingPage() {
                   <p className="text-sm text-slate-500 mt-1">
                     {locale === "th"
                       ? "กำหนดค่าบริการพื้นฐานและชั่วโมงขั้นต่ำสำหรับแต่ละประเภทบริการ"
-                      : "Set minimum price, maximum price, and base fee for each service type"}
+                      : "Set base fee and minimum hours for each service type"}
                   </p>
                 </div>
                 <button
@@ -739,7 +753,7 @@ export default function PricingPage() {
                   <input
                     type="number"
                     value={newService.minHours}
-                    onChange={(e) => setNewService({ ...newService, minHours: parseInt(e.target.value) || 4 })}
+                    onChange={(e) => setNewService({ ...newService, minHours: parseInt(e.target.value) || 6 })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
                   />
                 </div>
@@ -756,9 +770,19 @@ export default function PricingPage() {
                 />
               </div>
             </div>
+            {addServiceError && (
+              <div className="px-5 pt-2">
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">
+                  {addServiceError}
+                </div>
+              </div>
+            )}
             <div className="flex gap-3 p-5 border-t border-slate-200">
               <button
-                onClick={() => setAddServiceModalOpen(false)}
+                onClick={() => {
+                  setAddServiceError(null);
+                  setAddServiceModalOpen(false);
+                }}
                 className="flex-1 px-4 py-2.5 text-sm font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
               >
                 {locale === "th" ? "ยกเลิก" : "Cancel"}
@@ -820,7 +844,7 @@ export default function PricingPage() {
                   <input
                     type="number"
                     value={editingService.minHours}
-                    onChange={(e) => setEditingService({ ...editingService, minHours: parseInt(e.target.value) || 4 })}
+                    onChange={(e) => setEditingService({ ...editingService, minHours: parseInt(e.target.value) || 6 })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
                   />
                 </div>

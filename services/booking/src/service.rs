@@ -1609,11 +1609,31 @@ pub async fn get_service_rate(db: &PgPool, id: Uuid) -> Result<ServiceRate, AppE
     Ok(row)
 }
 
-fn validate_prices(base_fee: rust_decimal::Decimal) -> Result<(), AppError> {
+/// Upper bound for `base_fee` (฿/hour). Catches operator typos before they
+/// reach the DB (column is `DECIMAL(10,2)` which allows up to 99,999,999.99).
+const MAX_BASE_FEE: i64 = 1_000_000;
+
+/// Accepted range for `min_hours`. Zero or negative values are meaningless
+/// for a booking service, and anything over 24 is almost certainly wrong
+/// (one continuous shift).
+const MIN_ALLOWED_HOURS: i32 = 1;
+const MAX_ALLOWED_HOURS: i32 = 24;
+
+fn validate_service_rate(base_fee: rust_decimal::Decimal, min_hours: i32) -> Result<(), AppError> {
     if base_fee < rust_decimal::Decimal::ZERO {
         return Err(AppError::BadRequest(
             "Base fee cannot be negative".to_string(),
         ));
+    }
+    if base_fee > rust_decimal::Decimal::from(MAX_BASE_FEE) {
+        return Err(AppError::BadRequest(format!(
+            "Base fee cannot exceed ฿{MAX_BASE_FEE}"
+        )));
+    }
+    if !(MIN_ALLOWED_HOURS..=MAX_ALLOWED_HOURS).contains(&min_hours) {
+        return Err(AppError::BadRequest(format!(
+            "Min hours must be between {MIN_ALLOWED_HOURS} and {MAX_ALLOWED_HOURS}"
+        )));
     }
     Ok(())
 }
@@ -1631,9 +1651,8 @@ pub async fn create_service_rate(
             "Service name too long (max 200 chars)".to_string(),
         ));
     }
-    validate_prices(dto.base_fee)?;
-
     let min_hours = dto.min_hours.unwrap_or(6);
+    validate_service_rate(dto.base_fee, min_hours)?;
 
     let row = sqlx::query_as::<_, ServiceRate>(
         r#"
@@ -1685,7 +1704,8 @@ pub async fn update_service_rate(
     .ok_or_else(|| AppError::NotFound("Service rate not found".to_string()))?;
 
     let final_base = dto.base_fee.unwrap_or(existing.base_fee);
-    validate_prices(final_base)?;
+    let final_min_hours = dto.min_hours.unwrap_or(existing.min_hours);
+    validate_service_rate(final_base, final_min_hours)?;
 
     let row = sqlx::query_as::<_, ServiceRate>(
         r#"
@@ -3641,5 +3661,62 @@ mod tests {
                 "method {method} should be accepted"
             );
         }
+    }
+
+    // =========================================================================
+    // validate_service_rate — review findings M3 + L4
+    // =========================================================================
+
+    #[test]
+    fn service_rate_accepts_typical_values() {
+        assert!(validate_service_rate(rust_decimal::Decimal::from(150), 6).is_ok());
+    }
+
+    #[test]
+    fn service_rate_accepts_zero_base_fee() {
+        // Free service (promo/trial) is a legitimate use case.
+        assert!(validate_service_rate(rust_decimal::Decimal::ZERO, 6).is_ok());
+    }
+
+    #[test]
+    fn service_rate_rejects_negative_base_fee() {
+        let err = validate_service_rate(rust_decimal::Decimal::from(-1), 6).unwrap_err();
+        assert!(format!("{err:?}").contains("negative"));
+    }
+
+    #[test]
+    fn service_rate_rejects_base_fee_above_cap() {
+        let err =
+            validate_service_rate(rust_decimal::Decimal::from(MAX_BASE_FEE + 1), 6).unwrap_err();
+        assert!(format!("{err:?}").contains("exceed"));
+    }
+
+    #[test]
+    fn service_rate_accepts_base_fee_at_cap() {
+        assert!(validate_service_rate(rust_decimal::Decimal::from(MAX_BASE_FEE), 6).is_ok());
+    }
+
+    #[test]
+    fn service_rate_rejects_zero_min_hours() {
+        let err = validate_service_rate(rust_decimal::Decimal::from(100), 0).unwrap_err();
+        assert!(format!("{err:?}").contains("Min hours"));
+    }
+
+    #[test]
+    fn service_rate_rejects_negative_min_hours() {
+        let err = validate_service_rate(rust_decimal::Decimal::from(100), -5).unwrap_err();
+        assert!(format!("{err:?}").contains("Min hours"));
+    }
+
+    #[test]
+    fn service_rate_rejects_min_hours_over_24() {
+        let err = validate_service_rate(rust_decimal::Decimal::from(100), 25).unwrap_err();
+        assert!(format!("{err:?}").contains("Min hours"));
+    }
+
+    #[test]
+    fn service_rate_accepts_min_hours_boundary() {
+        assert!(validate_service_rate(rust_decimal::Decimal::from(100), 1).is_ok());
+        assert!(validate_service_rate(rust_decimal::Decimal::from(100), 24).is_ok());
     }
 }
