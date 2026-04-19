@@ -85,7 +85,8 @@ jobs:
   #
   # Pulls the images published above from ghcr.io and swaps them in via
   # docker-compose.staging.yml. Requires on the VPS:
-  #   - /opt/guard-dispatch cloned from main
+  #   - /root/guard-dispatch cloned from main (staging VPS currently SSHs
+  #     as root — move to a dedicated `deploy` user in /opt later)
   #   - .env with all prod-style secrets (JWT, DB, Redis, S3, FCM, SMS, CORS,
   #     REGISTRY=ghcr.io, IMAGE_PREFIX=weiwutichai/guard-dispatch,
   #     MEDIASOUP_ANNOUNCED_IP=<public IP>)
@@ -126,10 +127,10 @@ jobs:
           key: ${{ secrets.STG_SSH_KEY }}
           script: |
             set -euo pipefail
-            cd /opt/guard-dispatch
+            cd /root/guard-dispatch
             git pull origin main
             # IMAGE_TAG must match the tag we pushed in build-and-push above.
-            # IMAGE_PREFIX/REGISTRY come from /opt/guard-dispatch/.env on the VPS.
+            # IMAGE_PREFIX/REGISTRY come from /root/guard-dispatch/.env on the VPS.
             export IMAGE_TAG=${{ github.sha }}
             docker compose -f docker-compose.yml -f docker-compose.staging.yml pull
             docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --remove-orphans
