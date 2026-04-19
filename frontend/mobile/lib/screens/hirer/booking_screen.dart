@@ -388,6 +388,7 @@ class _BookingScreenState extends State<BookingScreen> {
             specialInstructions: notes.isNotEmpty ? notes : null,
             urgency: _deriveUrgency(),
             bookedHours: _selectedHours,
+            guardCount: _guardCount,
           );
       if (!mounted) return;
       final requestId = result['id']?.toString();
