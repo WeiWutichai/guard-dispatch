@@ -1492,6 +1492,7 @@ class HirerProfileStrings {
   final String notifications;
   final String support;
   final String logout;
+  final String receipts;
   // Stats
   final String totalBookings;
   final String activeGuards;
@@ -1520,6 +1521,7 @@ class HirerProfileStrings {
       notifications = isThai ? 'การแจ้งเตือน' : 'Notifications',
       support = isThai ? 'ช่วยเหลือและสนับสนุน' : 'Help & Support',
       logout = isThai ? 'ออกจากระบบ' : 'Logout',
+      receipts = isThai ? 'ใบเสร็จของฉัน' : 'My Receipts',
       totalBookings = isThai ? 'จองทั้งหมด' : 'Bookings',
       activeGuards = isThai ? 'กำลังทำงาน' : 'Active',
       memberSince = isThai ? 'เดือน' : 'Months',
@@ -1871,4 +1873,64 @@ class ProgressReportStrings {
         filesSelected = isThai ? 'ไฟล์ที่เลือก' : 'files selected',
         compressing = isThai ? 'กำลังบีบอัดรูป...' : 'Compressing...',
         removeFile = isThai ? 'ลบไฟล์' : 'Remove file';
+}
+
+// ──────────────────────────────────────────────
+// 32. ReceiptsStrings — receipt_list_screen + receipt_detail_screen
+// ──────────────────────────────────────────────
+class ReceiptsStrings {
+  final String listTitle;
+  final String detailTitle;
+  final String empty;
+  final String emptySubtitle;
+  final String loadError;
+  final String receiptNo;
+  final String issuedOn;
+  final String customer;
+  final String guard;
+  final String service;
+  final String serviceAddress;
+  final String bookedHours;
+  final String actualHours;
+  final String hoursUnit;
+  final String paymentMethod;
+  final String originalAmount;
+  final String finalAmount;
+  final String refundAmount;
+  final String refundNote;
+  final String tipAmount;
+  final String netAmount;
+  final String downloadPdf;
+  final String sharingPdf;
+  final String pdfError;
+
+  ReceiptsStrings({required bool isThai})
+    : listTitle = isThai ? 'ใบเสร็จของฉัน' : 'My Receipts',
+      detailTitle = isThai ? 'ใบเสร็จ' : 'Receipt',
+      empty = isThai ? 'ยังไม่มีใบเสร็จ' : 'No receipts yet',
+      emptySubtitle = isThai
+          ? 'ใบเสร็จจะปรากฏที่นี่หลังจากงานจบแล้ว'
+          : 'Receipts appear here once jobs complete.',
+      loadError = isThai ? 'โหลดใบเสร็จไม่สำเร็จ' : 'Failed to load receipts',
+      receiptNo = isThai ? 'เลขที่ใบเสร็จ' : 'Receipt No.',
+      issuedOn = isThai ? 'ออกให้เมื่อ' : 'Issued on',
+      customer = isThai ? 'ลูกค้า' : 'Customer',
+      guard = isThai ? 'เจ้าหน้าที่' : 'Guard',
+      service = isThai ? 'บริการ' : 'Service',
+      serviceAddress = isThai ? 'สถานที่ปฏิบัติงาน' : 'Service location',
+      bookedHours = isThai ? 'ชั่วโมงที่จอง' : 'Booked hours',
+      actualHours = isThai ? 'ชั่วโมงที่ปฏิบัติจริง' : 'Actual hours',
+      hoursUnit = isThai ? 'ชม.' : 'hrs',
+      paymentMethod = isThai ? 'วิธีการชำระเงิน' : 'Payment method',
+      originalAmount = isThai ? 'ราคาเดิม' : 'Original price',
+      finalAmount = isThai ? 'ราคาสุดท้าย' : 'Final price',
+      refundAmount = isThai ? 'ยอดคืน' : 'Refund',
+      refundNote = isThai
+          ? 'ยอดคืนเงินจะถูกดำเนินการโดยทีมแอดมินภายหลัง'
+          : 'Refund is processed by admin separately.',
+      tipAmount = isThai ? 'ทิป' : 'Tip',
+      netAmount = isThai ? 'รวมสุทธิ' : 'Net total',
+      downloadPdf = isThai ? 'ดาวน์โหลด PDF' : 'Download PDF',
+      sharingPdf = isThai ? 'กำลังเตรียมไฟล์...' : 'Preparing file...',
+      pdfError = isThai ? 'สร้าง PDF ไม่สำเร็จ' : 'Failed to generate PDF';
 }

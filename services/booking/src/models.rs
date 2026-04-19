@@ -302,6 +302,55 @@ pub struct CostSummaryResponse {
     pub payment_id: Uuid,
 }
 
+// =============================================================================
+// Customer receipts — past payments for completed jobs
+// =============================================================================
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ListReceiptsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReceiptItem {
+    pub payment_id: Uuid,
+    pub request_id: Uuid,
+    pub assignment_id: Option<Uuid>,
+    /// Human-friendly receipt number — `RCP-YYYY-XXXXXXXX` where X is
+    /// the first 8 hex chars of the payment UUID (uppercase). Derived,
+    /// not stored, so no migration needed.
+    pub receipt_no: String,
+    pub service_address: String,
+    pub guard_name: Option<String>,
+    pub guard_avatar_url: Option<String>,
+    pub booked_hours: Option<i32>,
+    #[schema(value_type = Option<f64>)]
+    pub actual_hours_worked: Option<rust_decimal::Decimal>,
+    #[schema(value_type = f64)]
+    pub original_amount: rust_decimal::Decimal,
+    #[schema(value_type = Option<f64>)]
+    pub final_amount: Option<rust_decimal::Decimal>,
+    #[schema(value_type = Option<f64>)]
+    pub refund_amount: Option<rust_decimal::Decimal>,
+    #[schema(value_type = f64)]
+    pub tip_amount: rust_decimal::Decimal,
+    /// What the customer actually paid end-to-end =
+    /// `(final_amount ?? original_amount) + tip_amount`.
+    #[schema(value_type = f64)]
+    pub net_amount: rust_decimal::Decimal,
+    pub payment_method: String,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub paid_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReceiptsPage {
+    pub data: Vec<ReceiptItem>,
+    pub total: i64,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ActiveJobResponse {
     pub assignment_id: Uuid,
