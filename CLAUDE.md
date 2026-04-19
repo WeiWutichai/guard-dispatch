@@ -194,6 +194,7 @@ CREATE TABLE booking.payments (
 );
 ```
 > **Simulated payments** — ready for real gateway integration. Status: `pending` → `completed` / `failed`.
+> **Amount validation (migration 039, security hotfix C1):** `create_payment` rejects `amount <= 0` via `validate_payment_request()` helper. DB `CHECK (amount > 0) NOT VALID` on `booking.payments.amount` is a defense-in-depth backstop. `NOT VALID` skips historical rows — admin must clean `amount <= 0` rows manually then `VALIDATE CONSTRAINT` post-cleanup.
 > **Cost summary on completion (migration 036):** When `review_completion()` approves a job, it prorates `payments.amount` by `actual_hours / booked_hours` and stores `final_amount` + `refund_amount` + `actual_hours_worked` atomically in the same transaction. Overtime is **never** auto-charged (`actual_hours` is clamped to `booked_hours`); customers can optionally tip via `POST /assignments/{id}/tip`. `refund_amount` is **ledger-only** — admin processes the real refund flow later.
 > `booking.assignments` has `started_at TIMESTAMPTZ` for countdown tracking.
 > `booking.guard_requests` has `booked_hours INTEGER` for countdown calculation.
@@ -1363,6 +1364,7 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามใส่ `/auth/profile/role` กลับเข้าไปใน `publicPaths` ของ ApiClient — endpoint นี้ทำ optional auth ที่ฝั่ง backend: ต้องให้ Bearer header attach อัตโนมัติ (เมื่อ user authenticated) เพื่อให้ "approved guard adding customer profile" flow ทำงาน
 - ❌ ห้าม mobile `registerWithOtp()` ทิ้ง `response.data['data']['phone_verified_token']` — ต้อง overwrite secure storage เสมอเพื่อให้ `updateRole()` (OTP path) มี token ใช้
 - ❌ ห้าม `prorate_payment_in_tx()` เรียก `compute_proration()` เมื่อ `started_at` หรือ `completed_at` เป็น `None` — ต้อง early return Ok(()) (skip proration) เพื่อรักษา original `payments.amount` ไว้; ถ้าคำนวณ `0 * rate` จะเกิด billing data corruption (customer ถูกคิดเงิน 0 บาทสำหรับงานที่ทำจริง) (code-reviewer MEDIUM fix)
+- ❌ ห้าม `create_payment()` accept `amount <= 0` — ต้อง `validate_payment_request()` reject ก่อน `db.begin()` (security hotfix C1). เดิมไม่มี validation → customer สามารถ POST `amount: 0` แล้วได้งานจริงฟรี. DB `CHECK (amount > 0) NOT VALID` (migration 039) เป็น defense-in-depth backstop
 - ❌ ห้าม `JobCompletionSummaryScreen._submitTip()` เงียบเมื่อ `addTip()` คืน null — ต้อง show error SnackBar เสมอ; ปุ่ม re-enable อย่างเดียวทำให้ user เข้าใจผิดว่าสำเร็จ (code-reviewer MEDIUM fix)
 - ❌ ห้าม `update_own_expiry()` (`PUT /guards/me/expiry`) ไม่ตรวจ `user.role == "guard"` — ต้องเป็นบรรทัดแรกของ handler (security-reviewer MEDIUM); customer/admin/null-role ห้ามเข้าถึง endpoint นี้
 - ❌ ห้าม `submit_guard_profile()` สำเร็จโดยไม่ set role='guard' — ต้อง UPDATE role + `invalidate_user_cache()` หลัง UPSERT profile เสมอ
