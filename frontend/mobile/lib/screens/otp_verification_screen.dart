@@ -430,16 +430,20 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
   }
 
   Widget _buildOtpFields() {
+    // Total width budget on a 360dp screen minus the 24px side padding = 312dp.
+    // 6 boxes at 48dp + previous margin pattern summed to 330dp (18dp over,
+    // matching the "RIGHT OVERFLOWED BY 18 PIXELS" warning). Slimmer boxes +
+    // tighter margins keep the 3+3 visual split and fit comfortably.
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(6, (index) {
         final isFilled = _controllers[index].text.isNotEmpty;
         return Container(
-          width: 48,
+          width: 44,
           height: 56,
           margin: EdgeInsets.only(
-            left: index == 0 ? 0 : (index == 3 ? 12 : 6),
-            right: index == 2 ? 6 : 0,
+            left: index == 0 ? 0 : (index == 3 ? 10 : 5),
+            right: index == 2 ? 5 : 0,
           ),
           child: KeyboardListener(
             focusNode: FocusNode(),
