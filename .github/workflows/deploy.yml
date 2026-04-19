@@ -129,8 +129,11 @@ jobs:
             set -euo pipefail
             cd /root/guard-dispatch
             git pull origin main
-            # IMAGE_TAG must match the tag we pushed in build-and-push above.
-            # IMAGE_PREFIX/REGISTRY come from /root/guard-dispatch/.env on the VPS.
+            # Image coords are CI/CD concerns — export them here so the VPS
+            # .env doesn't have to know about ghcr.io (manual ops on the
+            # host would use local builds, not registry images).
+            export REGISTRY=ghcr.io
+            export IMAGE_PREFIX=weiwutichai/guard-dispatch
             export IMAGE_TAG=${{ github.sha }}
             docker compose -f docker-compose.yml -f docker-compose.staging.yml pull
             docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --remove-orphans
