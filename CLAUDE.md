@@ -1286,6 +1286,64 @@ DAILY_OTP_LIMIT=10
 
 ---
 
+## CI/CD Pipeline (`.github/workflows/`)
+
+### `ci.yml` — on every push + PR
+Runs on every push/PR to `main` or `develop`:
+- **Rust — Build & Lint:** `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo build --workspace`, `cargo test --workspace`
+- **Admin Portal — Build:** Next.js build in `frontend/web/`
+- **MediaSoup — Lint:** `npm ci` in `services/mediasoup/`
+- **Docker Compose — Validate:** `docker compose config` sanity check
+
+### `deploy.yml` — on push to main only
+Two jobs:
+
+1. **Build & Push (matrix, 6 services)** — builds each Dockerfile and pushes to ghcr.io as:
+   - `ghcr.io/weiwutichai/guard-dispatch/<auth|booking|tracking|notification|chat|mediasoup>:latest`
+   - `ghcr.io/weiwutichai/guard-dispatch/<svc>:<git-sha>`
+
+   Per-service `context:` field in the matrix — Rust services use context `.` (repo root, their Dockerfiles use full workspace paths), mediasoup uses `services/mediasoup`. `fail-fast: false` so one bad service's build doesn't cancel the other five.
+
+2. **Deploy to Staging** — **currently `if: false`** (manual deploy flow). When re-enabled, connects to Tailnet via `tailscale/github-action@v4` + ephemeral auth key, then SSHs into `/root/guard-dispatch` on VPS and runs `docker compose ... pull && up -d`.
+
+### Image registry — ghcr.io
+- Images are **currently private** on ghcr.io. Manual deploy requires `docker login ghcr.io` on the VPS (PAT with `read:packages` scope, stored in `/root/.docker/config.json`).
+- Alternative: mark packages Public via https://github.com/WeiWutichai?tab=packages — no VPS-side login needed.
+
+### Staging VPS config
+- Hostname: `srv1569870`, reachable at tailnet IP `100.67.139.123`
+- Public domain: `pguard.innoveraappcenter.com` (Let's Encrypt via certbot)
+- Port 22 **closed to public internet** — only accessible via Tailscale
+- Repo checked out at `/root/guard-dispatch` (SSH as `root`)
+- Uses `docker-compose.staging.yml` (pulls from ghcr.io, HTTPS via nginx.prod.conf, keeps MinIO, sets `MEDIASOUP_ANNOUNCED_IP`)
+
+### Deploy-related GitHub secrets (environment: `staging`)
+| Secret | Purpose |
+|---|---|
+| `STG_HOST` | tailnet IP of VPS (`100.67.139.123`) |
+| `STG_USER` | SSH user (`root`) |
+| `STG_SSH_KEY` | ed25519 private key generated on VPS |
+| `TAILSCALE_AUTHKEY` | reusable + ephemeral Tailscale auth key — runner joins tailnet before SSH |
+
+### Manual deploy (current flow)
+```bash
+# On VPS as root
+cd /root/guard-dispatch
+git pull origin main
+export REGISTRY=ghcr.io
+export IMAGE_PREFIX=weiwutichai/guard-dispatch
+export IMAGE_TAG=$(git rev-parse HEAD)
+docker compose -f docker-compose.yml -f docker-compose.staging.yml pull
+docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d --remove-orphans
+docker image prune -f
+```
+`REGISTRY`/`IMAGE_PREFIX`/`IMAGE_TAG` are **CI/CD concerns exported at deploy time** — not required in `.env` (`docker-compose.staging.yml` uses `${IMAGE_PREFIX:?}` which errors cleanly if missing).
+
+### To re-enable auto-deploy
+Delete (or flip to `true`) the `if: false` line at `jobs.deploy` in `.github/workflows/deploy.yml`. Prereq: either make ghcr packages public, OR persist `docker login ghcr.io` creds on VPS.
+
+---
+
 ## ข้อห้าม (Do NOT)
 
 ### Rust Backend
@@ -1336,6 +1394,11 @@ DAILY_OTP_LIMIT=10
 - ❌ ห้ามออก access_token/refresh_token หรือ INSERT session ใน `register_with_otp()` — endpoint ต้อง return HTTP 202 พร้อม `RegisterWithOtpResponse` เท่านั้น (ไม่มี token)
 - ❌ ห้ามใช้ plain `INSERT INTO auth.users` ใน `register_with_otp()` — **ต้องใช้ UPSERT** `ON CONFLICT (phone) DO UPDATE SET password_hash=EXCLUDED.password_hash, full_name=EXCLUDED.full_name, approval_status='pending', updated_at=NOW() WHERE auth.users.approval_status='pending'` + `fetch_optional` → None = phone registered with non-pending status → `AppError::Conflict("Please log in instead")`
 - ❌ ห้าม accept ราคาติดลบหรือเกิน ฿1,000,000 ใน service rates — `validate_service_rate()` ต้องตรวจ `0 <= base_fee <= 1_000_000` และ `1 <= min_hours <= 24`. DB CHECK constraints (migration 040) เป็น backstop เท่านั้น — ห้ามพึ่ง DB ให้ validate เองโดยไม่มี service-layer check
+- ❌ ห้ามใช้ `${{ github.repository_owner }}` หรือ `${{ github.repository }}` ตรงๆ เป็น ghcr.io tag path — GitHub owners ที่มีตัวใหญ่ (`WeiWutichai`) จะทำให้ `docker buildx push` reject ด้วย "repository name must be lowercase". ต้อง downcase ผ่าน `tr '[:upper:]' '[:lower:]'` ลง `$GITHUB_ENV` ก่อนใช้ (ดู `.github/workflows/deploy.yml`)
+- ❌ ห้ามใช้ `tailscale/github-action@v2` + `version: latest` — combo นี้ break ที่ install step ("sha256sum: no properly formatted checksum lines found") เพราะ v2 installer script ไม่ match กับ upstream checksum format ใหม่. ใช้ `@v4` เป็นอย่างน้อย (v4 pin version ภายในเอง ไม่ต้องส่ง `version:`)
+- ❌ ห้าม hardcode `context: .` ใน build-push matrix สำหรับทุก service — mediasoup Dockerfile ใช้ path สัมพันธ์กับ `services/mediasoup/` (เช่น `COPY src ./src`) ต้องตั้ง `context: services/mediasoup` แยก. Rust services ใช้ full workspace paths (`COPY services/booking/src services/booking/src`) จึง OK กับ `context: .`
+- ❌ ห้ามใส่ `REGISTRY` / `IMAGE_PREFIX` / `IMAGE_TAG` ใน `.env` บน VPS — เป็น CI/CD concerns ที่ deploy script export เองตอน runtime. Manual operations บน host ใช้ base `docker-compose.yml` (build locally) ไม่ใช่ `staging.yml`
+- ❌ ห้าม `docker-compose.staging.yml` ใช้ `${IMAGE_PREFIX:-default}` — ต้อง `${IMAGE_PREFIX:?IMAGE_PREFIX required}` เพื่อ fail ชัดเมื่อ deploy script ลืม export (ดีกว่า silently pull image ที่ไม่มีอยู่จริง)
 - ❌ ห้ามใช้ `min_price`/`max_price`/`price_per_hour` — ลบออกแล้ว (migration 037+038) ใช้ `base_fee` เดียว สูตร: `total = base_fee × hours × guards + tip`
 - ❌ ห้ามบวก `base_fee` ซ้ำใน `_total` — `_subtotal = base_fee × hours × guards` แล้ว `_total = _subtotal + _tip` (ไม่ใช่ `_subtotal + _baseFee + _tip`)
 - ❌ ห้าม `handleAddService` (web pricing page) ใช้ truthy check `if (newService.name && newService.baseFee)` — `baseFee = 0` เป็น falsy จะทำให้ปุ่ม submit เงียบ (bug M2); ต้องตรวจ `name.trim()` + `baseFee >= 0` แยก และต้องแสดง error banner เมื่อ validation fail (ห้าม `catch {}` เงียบ ๆ)
