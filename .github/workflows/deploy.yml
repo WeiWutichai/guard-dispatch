@@ -109,10 +109,14 @@ jobs:
       # the runner onto the tailnet as an ephemeral node; it'll drop off
       # automatically when the job exits.
       - name: Connect to Tailscale
-        uses: tailscale/github-action@v2
+        # Pin to v4 (latest major, released 2025). The @v2 float passing
+        # `version: latest` broke with "no properly formatted checksum
+        # lines found" because the upstream checksum URL stopped emitting
+        # SHA256SUM in the expected format. v4 resolves the tailscaled
+        # version internally and doesn't need (or accept) a version arg.
+        uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
-          version: latest
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
