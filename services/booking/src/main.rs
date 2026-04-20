@@ -51,6 +51,11 @@ use crate::state::AppState;
         handlers::get_guard_reviews,
         handlers::list_admin_reviews,
         handlers::set_review_visibility,
+        handlers::list_admin_payments,
+        handlers::list_admin_refunds,
+        handlers::get_admin_payment,
+        handlers::process_refund,
+        handlers::admin_wallet_summary,
         handlers::list_service_rates,
         handlers::get_service_rate,
         handlers::create_service_rate,
@@ -91,6 +96,10 @@ use crate::state::AppState;
         models::AdminReviewResponse,
         models::PaginatedAdminReviews,
         models::AdminReviewStats,
+        models::AdminPaymentItem,
+        models::AdminPaymentsPage,
+        models::ProcessRefundRequest,
+        models::WalletSummary,
         models::ToggleReviewVisibilityDto,
         models::ServiceRate,
         models::CreateServiceRateDto,
@@ -109,6 +118,7 @@ use crate::state::AppState;
         (name = "Payments", description = "Payment management"),
         (name = "Pricing", description = "Service rate management"),
         (name = "Progress Reports", description = "Guard hourly progress reports"),
+        (name = "Admin", description = "Admin-only endpoints: payments, refunds, wallet summary"),
     ),
 )]
 struct ApiDoc;
@@ -232,6 +242,12 @@ async fn main() -> anyhow::Result<()> {
             "/admin/reviews/{id}/visibility",
             put(handlers::set_review_visibility),
         )
+        // Admin Wallet — payments + refund workflow (migration 042)
+        .route("/admin/wallet/summary", get(handlers::admin_wallet_summary))
+        .route("/admin/payments", get(handlers::list_admin_payments))
+        .route("/admin/payments/{id}", get(handlers::get_admin_payment))
+        .route("/admin/refunds", get(handlers::list_admin_refunds))
+        .route("/admin/refunds/{id}/process", put(handlers::process_refund))
         // Guard-specific endpoints
         .route("/guard/dashboard", get(handlers::guard_dashboard))
         .route("/guard/active-job", get(handlers::get_active_job))

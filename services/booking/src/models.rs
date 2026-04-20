@@ -351,6 +351,102 @@ pub struct ReceiptsPage {
     pub total: i64,
 }
 
+// =============================================================================
+// Admin refund workflow — migration 042
+// =============================================================================
+
+/// Query params for `GET /admin/refunds`.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct AdminRefundsQuery {
+    /// Filter by refund_status — `"pending"`, `"processed"`, or `"skipped"`.
+    /// Omit to see all (any non-NULL refund_status).
+    pub status: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// Query params for `GET /admin/payments` — broader view including payments
+/// without refund rows.
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct AdminPaymentsQuery {
+    /// Filter by `payments.status` (`"completed"`, `"pending"`, `"failed"`).
+    pub status: Option<String>,
+    /// Filter by `payment_method` exact match.
+    pub method: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// Body for `PUT /admin/refunds/{id}/process`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ProcessRefundRequest {
+    /// Action: `"process"` → admin confirmed transfer; `"skip"` → won't refund.
+    pub action: String,
+    /// Bank transaction reference / slip number. Required when action=process.
+    #[serde(default)]
+    pub reference: Option<String>,
+    /// Optional admin note (shown alongside the audit trail).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Single row in the admin refund / payment tables.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminPaymentItem {
+    pub payment_id: Uuid,
+    pub request_id: Uuid,
+    pub assignment_id: Option<Uuid>,
+    pub customer_id: Uuid,
+    pub customer_name: Option<String>,
+    pub guard_id: Option<Uuid>,
+    pub guard_name: Option<String>,
+    pub service_address: String,
+    pub booked_hours: Option<i32>,
+    #[schema(value_type = Option<f64>)]
+    pub actual_hours_worked: Option<rust_decimal::Decimal>,
+    #[schema(value_type = f64)]
+    pub original_amount: rust_decimal::Decimal,
+    #[schema(value_type = Option<f64>)]
+    pub final_amount: Option<rust_decimal::Decimal>,
+    #[schema(value_type = Option<f64>)]
+    pub refund_amount: Option<rust_decimal::Decimal>,
+    #[schema(value_type = f64)]
+    pub tip_amount: rust_decimal::Decimal,
+    pub payment_method: String,
+    pub payment_status: String,
+    /// One of `"pending"`, `"processed"`, `"skipped"`, or NULL if no refund owed.
+    pub refund_status: Option<String>,
+    pub refund_processed_at: Option<DateTime<Utc>>,
+    pub refund_reference: Option<String>,
+    pub refund_processed_by: Option<Uuid>,
+    pub refund_processed_by_name: Option<String>,
+    pub paid_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminPaymentsPage {
+    pub data: Vec<AdminPaymentItem>,
+    pub total: i64,
+}
+
+/// High-level stats used by the admin wallet overview card.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WalletSummary {
+    /// Sum of `net_amount` (final + tip) for payments paid in the current calendar month.
+    #[schema(value_type = f64)]
+    pub monthly_revenue: rust_decimal::Decimal,
+    /// Count + sum of refund_amount for rows with refund_status='pending'.
+    pub pending_refunds_count: i64,
+    #[schema(value_type = f64)]
+    pub pending_refunds_total: rust_decimal::Decimal,
+    /// Count + sum of refund_amount for rows with refund_status='processed'
+    /// AND refund_processed_at in the current calendar month.
+    pub processed_refunds_count: i64,
+    #[schema(value_type = f64)]
+    pub processed_refunds_total: rust_decimal::Decimal,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ActiveJobResponse {
     pub assignment_id: Uuid,

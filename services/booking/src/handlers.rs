@@ -13,14 +13,15 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AcceptDeclineDto, ActiveJobResponse, AddTipDto, AdminReviewsQuery, AssignGuardDto,
-    AssignmentResponse, AvailableGuardResponse, AvailableGuardsQuery, CostSummaryResponse,
-    CreatePaymentDto, CreateRequestDto, CreateReviewDto, CreateServiceRateDto,
-    GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary,
-    GuardRequestResponse, ListReceiptsQuery, ListRequestsQuery, PaginatedAdminReviews,
-    PaymentResponse, ProgressReportResponse, ReceiptsPage, ReviewCompletionDto, ServiceRate,
-    StartJobDto, SubmitReviewResponse, ToggleReviewVisibilityDto, UpdateAssignmentStatusDto,
-    UpdateServiceRateDto, WorkHistoryResponse,
+    AcceptDeclineDto, ActiveJobResponse, AddTipDto, AdminPaymentItem, AdminPaymentsPage,
+    AdminPaymentsQuery, AdminRefundsQuery, AdminReviewsQuery, AssignGuardDto, AssignmentResponse,
+    AvailableGuardResponse, AvailableGuardsQuery, CostSummaryResponse, CreatePaymentDto,
+    CreateRequestDto, CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
+    GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListReceiptsQuery,
+    ListRequestsQuery, PaginatedAdminReviews, PaymentResponse, ProcessRefundRequest,
+    ProgressReportResponse, ReceiptsPage, ReviewCompletionDto, ServiceRate, StartJobDto,
+    SubmitReviewResponse, ToggleReviewVisibilityDto, UpdateAssignmentStatusDto,
+    UpdateServiceRateDto, WalletSummary, WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -628,6 +629,134 @@ pub async fn list_customer_receipts(
 ) -> Result<Json<ApiResponse<ReceiptsPage>>, AppError> {
     let page = crate::service::list_customer_receipts(&state.db, user.user_id, query).await?;
     Ok(Json(ApiResponse::success(page)))
+}
+
+// =============================================================================
+// Admin: refund workflow (migration 042)
+// =============================================================================
+
+fn require_admin(user: &AuthUser) -> Result<(), AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden(
+            "Admin role required for this endpoint".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/payments",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(AdminPaymentsQuery),
+    responses(
+        (status = 200, description = "All payments list", body = AdminPaymentsPage),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin role required", body = ErrorBody),
+    ),
+)]
+pub async fn list_admin_payments(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<AdminPaymentsQuery>,
+) -> Result<Json<ApiResponse<AdminPaymentsPage>>, AppError> {
+    require_admin(&user)?;
+    let page = crate::service::list_admin_payments(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(page)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/refunds",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(AdminRefundsQuery),
+    responses(
+        (status = 200, description = "Refunds list filtered by status", body = AdminPaymentsPage),
+        (status = 400, description = "Invalid status filter", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin role required", body = ErrorBody),
+    ),
+)]
+pub async fn list_admin_refunds(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<AdminRefundsQuery>,
+) -> Result<Json<ApiResponse<AdminPaymentsPage>>, AppError> {
+    require_admin(&user)?;
+    let page = crate::service::list_admin_refunds(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(page)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/payments/{id}",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Payment UUID")),
+    responses(
+        (status = 200, description = "Payment detail", body = AdminPaymentItem),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin role required", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_admin_payment(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<AdminPaymentItem>>, AppError> {
+    require_admin(&user)?;
+    let item = crate::service::get_admin_payment(&state.db, id).await?;
+    Ok(Json(ApiResponse::success(item)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/admin/refunds/{id}/process",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Payment UUID to process refund for")),
+    request_body = ProcessRefundRequest,
+    responses(
+        (status = 200, description = "Refund marked processed/skipped", body = AdminPaymentItem),
+        (status = 400, description = "Invalid action or missing reference", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin role required", body = ErrorBody),
+        (status = 404, description = "Payment not found", body = ErrorBody),
+        (status = 409, description = "Refund already processed/skipped", body = ErrorBody),
+    ),
+)]
+pub async fn process_refund(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<ProcessRefundRequest>,
+) -> Result<Json<ApiResponse<AdminPaymentItem>>, AppError> {
+    require_admin(&user)?;
+    let item = crate::service::process_refund(&state.db, id, user.user_id, req).await?;
+    Ok(Json(ApiResponse::success(item)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/wallet/summary",
+    tag = "Admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Wallet overview stats", body = WalletSummary),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin role required", body = ErrorBody),
+    ),
+)]
+pub async fn admin_wallet_summary(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<WalletSummary>>, AppError> {
+    require_admin(&user)?;
+    let summary = crate::service::wallet_summary(&state.db).await?;
+    Ok(Json(ApiResponse::success(summary)))
 }
 
 #[utoipa::path(
