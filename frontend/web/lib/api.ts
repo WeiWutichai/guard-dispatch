@@ -199,9 +199,12 @@ export interface ChatMessage {
   id: string;
   conversation_id: string;
   sender_id: string;
-  message_type: "text" | "image" | "system";
-  content: string;
+  message_type: "text" | "image" | "video" | "system";
+  content: string | null;
+  sender_role: string | null;
   created_at: string;
+  file_url?: string | null;
+  file_mime_type?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -786,6 +789,56 @@ export interface AdminActiveOpsResponse {
 export const activeOpsApi = {
   list: () =>
     apiFetch<AdminActiveOpsResponse>("/booking/admin/active-operations"),
+};
+
+// Chat moderation — GET /chat/admin/conversations
+export interface AdminConversationItem {
+  id: string;
+  request_id: string;
+  created_at: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  guard_id: string | null;
+  guard_name: string | null;
+  request_status: string | null;
+  message_count: number;
+  last_message: string | null;
+  last_message_at: string | null;
+  has_attachments: boolean;
+}
+
+export interface AdminConversationsPage {
+  data: AdminConversationItem[];
+  total: number;
+}
+
+export const chatModerationApi = {
+  listConversations: (params?: {
+    request_id?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.request_id) q.set("request_id", params.request_id);
+    if (params?.search) q.set("search", params.search);
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<AdminConversationsPage>(
+      `/chat/admin/conversations${qs ? `?${qs}` : ""}`
+    );
+  },
+  /** Existing endpoint — backend already grants admin bypass. */
+  listMessages: (conversationId: string, params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<ChatMessage[]>(
+      `/chat/conversations/${conversationId}/messages${qs ? `?${qs}` : ""}`
+    );
+  },
 };
 
 export const expiringDocsApi = {

@@ -32,6 +32,7 @@ use crate::state::AppState;
         handlers::mark_read,
         handlers::upload_attachment,
         handlers::get_signed_url,
+        handlers::list_admin_conversations,
     ),
     components(schemas(
         models::MessageType,
@@ -42,6 +43,8 @@ use crate::state::AppState;
         models::EnrichedConversationResponse,
         models::MessageResponse,
         models::AttachmentResponse,
+        models::AdminConversationItem,
+        models::AdminConversationsPage,
         handlers::AttachmentUploadForm,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
@@ -52,6 +55,7 @@ use crate::state::AppState;
         (name = "Conversations", description = "Conversation management"),
         (name = "Messages", description = "Message history"),
         (name = "Attachments", description = "Image attachment upload & retrieval"),
+        (name = "Admin", description = "Admin-only chat moderation"),
     ),
 )]
 struct ApiDoc;
@@ -133,7 +137,11 @@ async fn main() -> anyhow::Result<()> {
         )
         // REST — Attachments (image upload + signed URL)
         .route("/attachments", post(handlers::upload_attachment))
-        .route("/attachments/{id}", get(handlers::get_signed_url));
+        .route("/attachments/{id}", get(handlers::get_signed_url))
+        .route(
+            "/admin/conversations",
+            get(handlers::list_admin_conversations),
+        );
     let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
         let swagger =
             SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());

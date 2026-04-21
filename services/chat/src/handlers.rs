@@ -22,9 +22,9 @@ pub struct AttachmentUploadForm {
 }
 
 use crate::models::{
-    AttachmentResponse, ConversationResponse, CreateConversationRequest,
-    EnrichedConversationResponse, IncomingChatMessage, ListConversationsQuery, ListMessagesQuery,
-    MessageResponse,
+    AdminConversationsPage, AdminListConversationsQuery, AttachmentResponse, ConversationResponse,
+    CreateConversationRequest, EnrichedConversationResponse, IncomingChatMessage,
+    ListConversationsQuery, ListMessagesQuery, MessageResponse,
 };
 use crate::state::AppState;
 
@@ -225,6 +225,33 @@ pub async fn list_messages(
     let messages =
         crate::service::list_messages(&state.db, id, user.user_id, &user.role, query).await?;
     Ok(Json(ApiResponse::success(messages)))
+}
+
+/// Admin-only: list every conversation with both participants' names,
+/// message count, last message, and attachment presence. Used by the
+/// /chat moderation page in web admin.
+#[utoipa::path(
+    get,
+    path = "/admin/conversations",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(AdminListConversationsQuery),
+    responses(
+        (status = 200, description = "Paginated admin conversation list", body = AdminConversationsPage),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin role required", body = ErrorBody),
+    ),
+)]
+pub async fn list_admin_conversations(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<AdminListConversationsQuery>,
+) -> Result<Json<ApiResponse<AdminConversationsPage>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+    let page = crate::service::list_admin_conversations(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(page)))
 }
 
 #[utoipa::path(

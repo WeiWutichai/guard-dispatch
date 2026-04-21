@@ -16,6 +16,7 @@ import {
   Wallet,
   DollarSign,
   Activity,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "./LanguageProvider";
@@ -34,6 +35,7 @@ export function Sidebar() {
     { name: t.nav.expiringDocs, href: "/expiring", icon: ShieldAlert },
     { name: t.nav.customers, href: "/customers", icon: Users2 },
     { name: t.nav.reviews, href: "/reviews", icon: Star },
+    { name: t.nav.chat, href: "/chat", icon: MessageSquare },
     { name: t.nav.wallet, href: "/wallet", icon: Wallet },
     { name: t.nav.pricing, href: "/pricing", icon: DollarSign },
     { name: t.nav.tasks, href: "/tasks", icon: Briefcase },
