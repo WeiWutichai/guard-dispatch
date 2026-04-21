@@ -1,1005 +1,922 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Search,
-  Wallet,
-  ChevronDown,
-  MoreHorizontal,
-  Eye,
-  Plus,
-  Minus,
-  Download,
+  Wallet as WalletIcon,
+  DollarSign,
   Clock,
   CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Settings,
-  History,
-  Users,
+  Loader2,
   X,
-  ArrowUpRight,
-  ArrowDownRight,
-  Gift,
-  Briefcase,
-  CreditCard,
-  Save,
-  Filter,
+  AlertCircle,
+  Receipt,
+  Banknote,
+  ArrowRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
+import {
+  walletApi,
+  type AdminPaymentItem,
+  type WalletSummaryResponse,
+} from "@/lib/api";
 
-type TransactionType = "job_income" | "withdrawal" | "bonus" | "deduction";
-type WithdrawalStatus = "pending" | "approved" | "rejected";
-type WalletStatus = "active" | "suspended";
+type WalletTab = "overview" | "refunds" | "payments";
+type RefundStatusFilter = "pending" | "processed" | "skipped" | "all";
 
-interface Transaction {
-  id: string;
-  date: string;
-  type: TransactionType;
-  amount: number;
-  description: string;
+function formatMoney(n: number | null | undefined): string {
+  if (n == null) return "-";
+  return `฿${n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
-interface Guard {
-  id: string;
-  name: string;
-  withdrawable: number;
-  pending: number;
-  bankAccount: string;
-  bankName: string;
-  lastTransaction: string;
-  status: WalletStatus;
-  transactions: Transaction[];
+function formatDate(iso: string | null | undefined, locale: "th" | "en"): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleDateString(locale === "th" ? "th-TH" : "en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
-interface WithdrawalRequest {
-  id: string;
-  guardId: string;
-  guardName: string;
-  amount: number;
-  requestDate: string;
-  reason: string;
-  status: WithdrawalStatus;
+function refundBadgeStyle(status: string | null): { bg: string; text: string } {
+  switch (status) {
+    case "pending":
+      return { bg: "bg-amber-100", text: "text-amber-700" };
+    case "processed":
+      return { bg: "bg-emerald-100", text: "text-emerald-700" };
+    case "skipped":
+      return { bg: "bg-slate-200", text: "text-slate-600" };
+    default:
+      return { bg: "bg-slate-100", text: "text-slate-500" };
+  }
 }
-
-interface AdminAction {
-  id: string;
-  adminName: string;
-  actionType: string;
-  guardName: string;
-  amount: number;
-  reason: string;
-  date: string;
-}
-
-const initialGuards: Guard[] = [
-  {
-    id: "G001",
-    name: "สมชาย วงศ์ใหญ่",
-    withdrawable: 2500,
-    pending: 800,
-    bankAccount: "xxx-x-x1234-x",
-    bankName: "กสิกรไทย",
-    lastTransaction: "2024-01-15",
-    status: "active",
-    transactions: [
-      { id: "T001", date: "2024-01-15", type: "job_income", amount: 1200, description: "รักษาความปลอดภัยคอนโด ABC" },
-      { id: "T002", date: "2024-01-14", type: "withdrawal", amount: -500, description: "ถอนเงินไปบัญชี xxx-567" },
-      { id: "T003", date: "2024-01-13", type: "bonus", amount: 200, description: "โบนัสประจำเดือน" },
-    ],
-  },
-  {
-    id: "G002",
-    name: "วันชัย สมใส",
-    withdrawable: 1800,
-    pending: 450,
-    bankAccount: "xxx-x-x5678-x",
-    bankName: "กรุงเทพ",
-    lastTransaction: "2024-01-14",
-    status: "active",
-    transactions: [
-      { id: "T004", date: "2024-01-14", type: "job_income", amount: 900, description: "รักษาความปลอดภัยห้าง XYZ" },
-      { id: "T005", date: "2024-01-12", type: "withdrawal", amount: -300, description: "ถอนเงินไปบัญชี xxx-890" },
-    ],
-  },
-  {
-    id: "G003",
-    name: "อนุชา สมบูรณ์",
-    withdrawable: 3200,
-    pending: 1200,
-    bankAccount: "xxx-x-x9012-x",
-    bankName: "ไทยพาณิชย์",
-    lastTransaction: "2024-01-16",
-    status: "active",
-    transactions: [
-      { id: "T006", date: "2024-01-16", type: "job_income", amount: 1500, description: "รักษาความปลอดภัยออฟฟิศ DEF" },
-      { id: "T007", date: "2024-01-15", type: "bonus", amount: 300, description: "โบนัสพิเศษ" },
-    ],
-  },
-  {
-    id: "G004",
-    name: "ประยุทธ์ ใจดี",
-    withdrawable: 500,
-    pending: 200,
-    bankAccount: "xxx-x-x3456-x",
-    bankName: "กรุงไทย",
-    lastTransaction: "2024-01-10",
-    status: "suspended",
-    transactions: [
-      { id: "T008", date: "2024-01-10", type: "deduction", amount: -100, description: "หักค่าเสียหาย" },
-    ],
-  },
-];
-
-const initialWithdrawalRequests: WithdrawalRequest[] = [
-  { id: "W001", guardId: "G001", guardName: "สมชาย วงศ์ใหญ่", amount: 1000, requestDate: "2024-01-16", reason: "ถอนเงินเดือน", status: "pending" },
-  { id: "W002", guardId: "G002", guardName: "วันชัย สมใส", amount: 500, requestDate: "2024-01-15", reason: "ถอนเงินฉุกเฉิน", status: "pending" },
-  { id: "W003", guardId: "G003", guardName: "อนุชา สมบูรณ์", amount: 800, requestDate: "2024-01-14", reason: "ถอนเงินปกติ", status: "pending" },
-];
-
-const initialAdminActions: AdminAction[] = [
-  { id: "A001", adminName: "ผู้ดูแลระบบ A", actionType: "add_money", guardName: "สมชาย วงศ์ใหญ่", amount: 200, reason: "โบนัสประจำเดือน", date: "2024-01-15" },
-  { id: "A002", adminName: "ผู้ดูแลระบบ B", actionType: "approve_withdrawal", guardName: "วันชัย สมใส", amount: 300, reason: "ถอนเงินปกติ", date: "2024-01-14" },
-  { id: "A003", adminName: "ผู้ดูแลระบบ A", actionType: "deduct_money", guardName: "ประยุทธ์ ใจดี", amount: 100, reason: "หักค่าเสียหาย", date: "2024-01-13" },
-  { id: "A004", adminName: "ผู้ดูแลระบบ B", actionType: "reject_withdrawal", guardName: "อนุชา สมบูรณ์", amount: 500, reason: "ยอดเงินไม่เพียงพอ", date: "2024-01-12" },
-];
 
 export default function WalletPage() {
   const { locale } = useLanguage();
-  const [guards, setGuards] = useState<Guard[]>(initialGuards);
-  const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>(initialWithdrawalRequests);
-  const [adminActions, setAdminActions] = useState<AdminAction[]>(initialAdminActions);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"overview" | "requests" | "history" | "settings">("overview");
 
-  // Modal states
-  const [detailModalOpen, setDetailModalOpen] = useState(false);
-  const [selectedGuard, setSelectedGuard] = useState<Guard | null>(null);
-  const [addMoneyModalOpen, setAddMoneyModalOpen] = useState(false);
-  const [deductMoneyModalOpen, setDeductMoneyModalOpen] = useState(false);
-  const [moneyAmount, setMoneyAmount] = useState("");
-  const [moneyReason, setMoneyReason] = useState("");
+  const [activeTab, setActiveTab] = useState<WalletTab>("overview");
+  const [summary, setSummary] = useState<WalletSummaryResponse | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
-  // Settings state
-  const [settings, setSettings] = useState({
-    pendingDuration: 24,
-    minWithdrawal: 100,
-    freeWithdrawalsPerDay: 1,
-    additionalFee: 10,
-  });
+  const loadSummary = useCallback(async () => {
+    try {
+      setSummaryLoading(true);
+      setSummaryError(null);
+      const data = await walletApi.summary();
+      setSummary(data);
+    } catch (e) {
+      setSummaryError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, []);
 
-  const filteredGuards = guards.filter((guard) =>
-    guard.name.toLowerCase().includes(searchQuery.toLowerCase())
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  // Refunds state
+  const [refunds, setRefunds] = useState<AdminPaymentItem[]>([]);
+  const [refundsTotal, setRefundsTotal] = useState(0);
+  const [refundsLoading, setRefundsLoading] = useState(false);
+  const [refundsError, setRefundsError] = useState<string | null>(null);
+  const [refundStatusFilter, setRefundStatusFilter] =
+    useState<RefundStatusFilter>("pending");
+  const [selectedRefund, setSelectedRefund] = useState<AdminPaymentItem | null>(
+    null
   );
 
-  const stats = {
-    totalWithdrawable: guards.reduce((sum, g) => sum + g.withdrawable, 0),
-    totalPending: guards.reduce((sum, g) => sum + g.pending, 0),
-    pendingRequests: withdrawalRequests.filter(r => r.status === "pending").length,
-    activeGuards: guards.filter(g => g.status === "active").length,
-  };
-
-  const handleOpenDetail = (guard: Guard) => {
-    setSelectedGuard(guard);
-    setDetailModalOpen(true);
-  };
-
-  const handleApproveWithdrawal = (requestId: string) => {
-    setWithdrawalRequests(requests =>
-      requests.map(r => r.id === requestId ? { ...r, status: "approved" as WithdrawalStatus } : r)
-    );
-    // Add admin action
-    const request = withdrawalRequests.find(r => r.id === requestId);
-    if (request) {
-      setAdminActions(prev => [{
-        id: `A${Date.now()}`,
-        adminName: "Admin User",
-        actionType: "approve_withdrawal",
-        guardName: request.guardName,
-        amount: request.amount,
-        reason: request.reason,
-        date: new Date().toISOString().split('T')[0],
-      }, ...prev]);
+  const loadRefunds = useCallback(async () => {
+    try {
+      setRefundsLoading(true);
+      setRefundsError(null);
+      const page = await walletApi.listRefunds(
+        refundStatusFilter === "all"
+          ? { limit: 100 }
+          : { status: refundStatusFilter, limit: 100 }
+      );
+      setRefunds(page.data);
+      setRefundsTotal(page.total);
+    } catch (e) {
+      setRefundsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRefundsLoading(false);
     }
-  };
+  }, [refundStatusFilter]);
 
-  const handleRejectWithdrawal = (requestId: string) => {
-    setWithdrawalRequests(requests =>
-      requests.map(r => r.id === requestId ? { ...r, status: "rejected" as WithdrawalStatus } : r)
-    );
-    const request = withdrawalRequests.find(r => r.id === requestId);
-    if (request) {
-      setAdminActions([{
-        id: `A${Date.now()}`,
-        adminName: "Admin User",
-        actionType: "reject_withdrawal",
-        guardName: request.guardName,
-        amount: request.amount,
-        reason: "คำขอถูกปฏิเสธ",
-        date: new Date().toISOString().split('T')[0],
-      }, ...adminActions]);
+  useEffect(() => {
+    if (activeTab === "refunds") loadRefunds();
+  }, [activeTab, loadRefunds]);
+
+  // Payments state
+  const [payments, setPayments] = useState<AdminPaymentItem[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [paymentsError, setPaymentsError] = useState<string | null>(null);
+
+  const loadPayments = useCallback(async () => {
+    try {
+      setPaymentsLoading(true);
+      setPaymentsError(null);
+      const page = await walletApi.listPayments({
+        status: "completed",
+        limit: 100,
+      });
+      setPayments(page.data);
+    } catch (e) {
+      setPaymentsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPaymentsLoading(false);
     }
-  };
+  }, []);
 
-  const handleAddMoney = () => {
-    if (selectedGuard && moneyAmount && parseFloat(moneyAmount) > 0) {
-      const amount = parseFloat(moneyAmount);
-      setGuards(guards.map(g =>
-        g.id === selectedGuard.id
-          ? {
-            ...g,
-            withdrawable: g.withdrawable + amount,
-            transactions: [{
-              id: `T${Date.now()}`,
-              date: new Date().toISOString().split('T')[0],
-              type: "bonus" as TransactionType,
-              amount: amount,
-              description: moneyReason || "เพิ่มเงิน",
-            }, ...g.transactions]
-          }
-          : g
-      ));
-      setAdminActions([{
-        id: `A${Date.now()}`,
-        adminName: "Admin User",
-        actionType: "add_money",
-        guardName: selectedGuard.name,
-        amount: amount,
-        reason: moneyReason || "เพิ่มเงิน",
-        date: new Date().toISOString().split('T')[0],
-      }, ...adminActions]);
-      setAddMoneyModalOpen(false);
-      setMoneyAmount("");
-      setMoneyReason("");
-    }
-  };
+  useEffect(() => {
+    if (activeTab === "payments") loadPayments();
+  }, [activeTab, loadPayments]);
 
-  const handleDeductMoney = () => {
-    if (selectedGuard && moneyAmount && parseFloat(moneyAmount) > 0) {
-      const amount = parseFloat(moneyAmount);
-      setGuards(guards.map(g =>
-        g.id === selectedGuard.id
-          ? {
-            ...g,
-            withdrawable: Math.max(0, g.withdrawable - amount),
-            transactions: [{
-              id: `T${Date.now()}`,
-              date: new Date().toISOString().split('T')[0],
-              type: "deduction" as TransactionType,
-              amount: -amount,
-              description: moneyReason || "หักเงิน",
-            }, ...g.transactions]
-          }
-          : g
-      ));
-      setAdminActions([{
-        id: `A${Date.now()}`,
-        adminName: "Admin User",
-        actionType: "deduct_money",
-        guardName: selectedGuard.name,
-        amount: amount,
-        reason: moneyReason || "หักเงิน",
-        date: new Date().toISOString().split('T')[0],
-      }, ...adminActions]);
-      setDeductMoneyModalOpen(false);
-      setMoneyAmount("");
-      setMoneyReason("");
-    }
-  };
-
-  const getTransactionIcon = (type: TransactionType) => {
-    switch (type) {
-      case "job_income": return <Briefcase className="h-4 w-4 text-emerald-500" />;
-      case "withdrawal": return <ArrowUpRight className="h-4 w-4 text-red-500" />;
-      case "bonus": return <Gift className="h-4 w-4 text-purple-500" />;
-      case "deduction": return <ArrowDownRight className="h-4 w-4 text-orange-500" />;
-    }
-  };
-
-  const getTransactionLabel = (type: TransactionType) => {
-    const labels = {
-      job_income: locale === "th" ? "รายได้จากงาน" : "Job Income",
-      withdrawal: locale === "th" ? "ถอนเงิน" : "Withdrawal",
-      bonus: locale === "th" ? "โบนัส" : "Bonus",
-      deduction: locale === "th" ? "หักเงิน" : "Deduction",
-    };
-    return labels[type];
-  };
-
-  const getActionLabel = (actionType: string) => {
-    const labels: Record<string, string> = {
-      add_money: locale === "th" ? "เพิ่มเงิน" : "Add Money",
-      deduct_money: locale === "th" ? "หักเงิน" : "Deduct Money",
-      approve_withdrawal: locale === "th" ? "อนุมัติการถอน" : "Approve Withdrawal",
-      reject_withdrawal: locale === "th" ? "ปฏิเสธการถอน" : "Reject Withdrawal",
-    };
-    return labels[actionType] || actionType;
-  };
-
-  const tabs = [
-    { id: "overview" as const, label: locale === "th" ? "ภาพรวมกระเป๋าเงิน" : "Wallet Overview", icon: Wallet },
-    { id: "requests" as const, label: locale === "th" ? "คำขอถอนเงิน" : "Withdrawal Requests", icon: Clock },
-    { id: "history" as const, label: locale === "th" ? "ประวัติการดำเนินการ" : "Admin History", icon: History },
-    { id: "settings" as const, label: locale === "th" ? "ตั้งค่าระบบ" : "Settings", icon: Settings },
+  const isThai = locale === "th";
+  const tabs: { id: WalletTab; label: string }[] = [
+    { id: "overview", label: isThai ? "ภาพรวม" : "Overview" },
+    { id: "refunds", label: isThai ? "คืนเงิน" : "Refunds" },
+    { id: "payments", label: isThai ? "ชำระเงิน" : "Payments" },
   ];
 
-  const pendingRequestsCount = withdrawalRequests.filter(r => r.status === "pending").length;
-
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          {locale === "th" ? "จัดการกระเป๋าเงิน" : "Wallet Management"}
-        </h1>
-        <p className="text-slate-500 mt-1">
-          {locale === "th"
-            ? "จัดการการเงินและการถอนเงินของเจ้าหน้าที่รักษาความปลอดภัย"
-            : "Manage finances and withdrawals for security guards"}
+    <div className="p-6 max-w-7xl mx-auto">
+      <header className="mb-6">
+        <div className="flex items-center gap-3 mb-1">
+          <div className="p-2 bg-emerald-50 rounded-lg">
+            <WalletIcon className="h-5 w-5 text-emerald-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {isThai ? "กระเป๋าเงิน" : "Wallet"}
+          </h1>
+        </div>
+        <p className="text-sm text-slate-500 ml-11">
+          {isThai
+            ? "จัดการรายได้ ยอดคืนเงิน และการชำระเงินทั้งหมดในระบบ"
+            : "Manage revenue, refunds, and all payments in the system"}
         </p>
-      </div>
+      </header>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="bg-gradient-to-br from-emerald-50 to-white p-5 rounded-2xl border border-emerald-100 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-emerald-600">{locale === "th" ? "ยอดถอนได้รวม" : "Total Withdrawable"}</p>
-              <p className="text-3xl font-bold text-emerald-700 mt-1">฿{stats.totalWithdrawable.toLocaleString()}</p>
-            </div>
-            <div className="p-3 bg-emerald-100 rounded-xl">
-              <Wallet className="h-6 w-6 text-emerald-600" />
-            </div>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-amber-50 to-white p-5 rounded-2xl border border-amber-100 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-amber-600">{locale === "th" ? "ยอด Pending รวม" : "Total Pending"}</p>
-              <p className="text-3xl font-bold text-amber-700 mt-1">฿{stats.totalPending.toLocaleString()}</p>
-            </div>
-            <div className="p-3 bg-amber-100 rounded-xl">
-              <Clock className="h-6 w-6 text-amber-600" />
-            </div>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-blue-50 to-white p-5 rounded-2xl border border-blue-100 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-blue-600">{locale === "th" ? "คำขอรออนุมัติ" : "Pending Requests"}</p>
-              <p className="text-3xl font-bold text-blue-700 mt-1">{stats.pendingRequests}</p>
-            </div>
-            <div className="p-3 bg-blue-100 rounded-xl">
-              <AlertCircle className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-slate-50 to-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-slate-500">{locale === "th" ? "เจ้าหน้าที่ Active" : "Active Guards"}</p>
-              <p className="text-3xl font-bold text-slate-900 mt-1">{stats.activeGuards}</p>
-            </div>
-            <div className="p-3 bg-slate-100 rounded-xl">
-              <Users className="h-6 w-6 text-slate-600" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
+      <div className="bg-white rounded-xl border border-slate-200 mb-6">
         <div className="flex border-b border-slate-200 overflow-x-auto">
-          {tabs.map((tab) => (
+          {tabs.map((t) => (
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
               className={cn(
-                "flex items-center gap-2 px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors relative",
-                activeTab === tab.id
-                  ? "text-primary border-b-2 border-primary bg-primary/5"
-                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                "px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap",
+                activeTab === t.id
+                  ? "border-emerald-500 text-emerald-700"
+                  : "border-transparent text-slate-600 hover:text-slate-900"
               )}
             >
-              <tab.icon className="h-4 w-4" />
-              {tab.label}
-              {tab.id === "requests" && pendingRequestsCount > 0 && (
-                <span className="ml-1.5 px-2 py-0.5 text-xs font-bold bg-red-500 text-white rounded-full">
-                  {pendingRequestsCount}
-                </span>
-              )}
+              {t.label}
             </button>
           ))}
         </div>
 
-        <div className="p-5">
-          {/* Overview Tab */}
-          {activeTab === "overview" && (
-            <div className="space-y-4">
-              {/* Search */}
-              <div className="flex items-center gap-4">
-                <div className="relative flex-1">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder={locale === "th" ? "ค้นหาเจ้าหน้าที่..." : "Search guards..."}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-11 pr-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all outline-none"
-                  />
-                </div>
-              </div>
+        {activeTab === "overview" && (
+          <OverviewTab
+            summary={summary}
+            loading={summaryLoading}
+            error={summaryError}
+            onRefresh={loadSummary}
+            onGoToRefunds={() => setActiveTab("refunds")}
+            isThai={isThai}
+          />
+        )}
+        {activeTab === "refunds" && (
+          <RefundsTab
+            items={refunds}
+            total={refundsTotal}
+            loading={refundsLoading}
+            error={refundsError}
+            statusFilter={refundStatusFilter}
+            onStatusFilterChange={setRefundStatusFilter}
+            onRowClick={setSelectedRefund}
+            onRefresh={loadRefunds}
+            isThai={isThai}
+            locale={locale}
+          />
+        )}
+        {activeTab === "payments" && (
+          <PaymentsTab
+            items={payments}
+            loading={paymentsLoading}
+            error={paymentsError}
+            onRefresh={loadPayments}
+            isThai={isThai}
+            locale={locale}
+          />
+        )}
+      </div>
 
-              {/* Guards Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50/80 border-b border-slate-200">
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "เจ้าหน้าที่" : "Guard"}</th>
-                      <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "ยอดถอนได้" : "Withdrawable"}</th>
-                      <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "ยอด Pending" : "Pending"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "บัญชีธนาคาร" : "Bank Account"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "ธุรกรรมล่าสุด" : "Last Transaction"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "สถานะ" : "Status"}</th>
-                      <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "จัดการ" : "Actions"}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredGuards.map((guard) => (
-                      <tr key={guard.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-5">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 flex items-center justify-center flex-shrink-0">
-                              <span className="text-sm font-bold text-primary">{guard.name.charAt(0)}</span>
-                            </div>
-                            <div>
-                              <p className="font-semibold text-slate-900">{guard.name}</p>
-                              <p className="text-xs text-slate-400">ID: {guard.id}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          <span className="text-sm font-bold text-emerald-600">฿{guard.withdrawable.toLocaleString()}</span>
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          <span className="text-sm font-medium text-amber-600">฿{guard.pending.toLocaleString()}</span>
-                        </td>
-                        <td className="py-4 px-5">
-                          <div>
-                            <p className="text-sm font-medium text-slate-700">{guard.bankAccount}</p>
-                            <p className="text-xs text-slate-400">{guard.bankName}</p>
-                          </div>
-                        </td>
-                        <td className="py-4 px-5">
-                          <p className="text-sm text-slate-500">{guard.lastTransaction}</p>
-                        </td>
-                        <td className="py-4 px-5">
-                          <span className={cn(
-                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold",
-                            guard.status === "active"
-                              ? "bg-emerald-100 text-emerald-700"
-                              : "bg-red-100 text-red-700"
-                          )}>
-                            <span className={cn(
-                              "w-1.5 h-1.5 rounded-full",
-                              guard.status === "active" ? "bg-emerald-500" : "bg-red-500"
-                            )}></span>
-                            {guard.status === "active" ? (locale === "th" ? "ใช้งาน" : "Active") : (locale === "th" ? "ระงับ" : "Suspended")}
-                          </span>
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          <button
-                            onClick={() => handleOpenDetail(guard)}
-                            className="p-2.5 bg-slate-100 hover:bg-primary hover:text-white rounded-xl transition-all"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+      {selectedRefund && (
+        <RefundModal
+          item={selectedRefund}
+          onClose={() => setSelectedRefund(null)}
+          onCompleted={() => {
+            setSelectedRefund(null);
+            loadRefunds();
+            loadSummary();
+          }}
+          isThai={isThai}
+          locale={locale}
+        />
+      )}
+    </div>
+  );
+}
 
-              {filteredGuards.length === 0 && (
-                <div className="py-16 text-center">
-                  <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                    <Users className="h-8 w-8 text-slate-400" />
-                  </div>
-                  <p className="text-slate-500 font-medium">{locale === "th" ? "ไม่พบเจ้าหน้าที่" : "No guards found"}</p>
-                </div>
+// ---------------------------------------------------------------------------
+// Overview Tab
+// ---------------------------------------------------------------------------
+
+function OverviewTab(props: {
+  summary: WalletSummaryResponse | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+  onGoToRefunds: () => void;
+  isThai: boolean;
+}) {
+  const { summary, loading, error, onRefresh, onGoToRefunds, isThai } = props;
+
+  if (loading && !summary) {
+    return (
+      <div className="p-12 flex justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
+      </div>
+    );
+  }
+
+  if (error && !summary) {
+    return (
+      <div className="p-8 text-center">
+        <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
+        <p className="text-red-600 mb-3">
+          {isThai ? "โหลดข้อมูลไม่สำเร็จ" : "Failed to load summary"}
+        </p>
+        <button
+          onClick={onRefresh}
+          className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700"
+        >
+          {isThai ? "ลองใหม่" : "Retry"}
+        </button>
+      </div>
+    );
+  }
+
+  const s = summary;
+  return (
+    <div className="p-6 space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          icon={<DollarSign className="h-5 w-5 text-emerald-600" />}
+          iconBg="bg-emerald-50"
+          label={isThai ? "รายได้เดือนนี้" : "Monthly revenue"}
+          value={formatMoney(s?.monthly_revenue ?? 0)}
+          subtext={
+            isThai ? "ค่าบริการ + ทิป (สุทธิ)" : "Final price + tips (net)"
+          }
+        />
+        <StatCard
+          icon={<Clock className="h-5 w-5 text-amber-600" />}
+          iconBg="bg-amber-50"
+          label={isThai ? "รอดำเนินการคืนเงิน" : "Pending refunds"}
+          value={formatMoney(s?.pending_refunds_total ?? 0)}
+          subtext={`${s?.pending_refunds_count ?? 0} ${
+            isThai ? "รายการ" : "items"
+          }`}
+          highlight={Boolean(s && s.pending_refunds_count > 0)}
+          onClick={onGoToRefunds}
+        />
+        <StatCard
+          icon={<CheckCircle2 className="h-5 w-5 text-blue-600" />}
+          iconBg="bg-blue-50"
+          label={isThai ? "โอนคืนแล้วเดือนนี้" : "Refunded this month"}
+          value={formatMoney(s?.processed_refunds_total ?? 0)}
+          subtext={`${s?.processed_refunds_count ?? 0} ${
+            isThai ? "รายการ" : "items"
+          }`}
+        />
+        <StatCard
+          icon={<Receipt className="h-5 w-5 text-slate-600" />}
+          iconBg="bg-slate-50"
+          label={isThai ? "สุทธิหลังคืนเงิน" : "Net after refunds"}
+          value={formatMoney(
+            (s?.monthly_revenue ?? 0) - (s?.processed_refunds_total ?? 0)
+          )}
+          subtext={isThai ? "รายได้ที่เก็บจริง" : "Actual retained revenue"}
+        />
+      </div>
+
+      {s && s.pending_refunds_count > 0 && (
+        <button
+          onClick={onGoToRefunds}
+          className="w-full p-4 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors flex items-center justify-between"
+        >
+          <div className="flex items-center gap-3 text-left">
+            <AlertCircle className="h-5 w-5 text-amber-600" />
+            <div>
+              <div className="font-semibold text-amber-900">
+                {isThai
+                  ? `มี ${s.pending_refunds_count} รายการรอโอนคืน รวม ${formatMoney(
+                      s.pending_refunds_total
+                    )}`
+                  : `${s.pending_refunds_count} refunds awaiting transfer (${formatMoney(
+                      s.pending_refunds_total
+                    )})`}
+              </div>
+              <div className="text-sm text-amber-700">
+                {isThai ? "คลิกเพื่อดำเนินการ" : "Click to process"}
+              </div>
+            </div>
+          </div>
+          <ArrowRight className="h-5 w-5 text-amber-700" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function StatCard(props: {
+  icon: React.ReactNode;
+  iconBg: string;
+  label: string;
+  value: string;
+  subtext?: string;
+  highlight?: boolean;
+  onClick?: () => void;
+}) {
+  const body = (
+    <div
+      className={cn(
+        "p-5 rounded-xl border bg-white transition-colors",
+        props.highlight
+          ? "border-amber-300 ring-1 ring-amber-200"
+          : "border-slate-200",
+        props.onClick && "hover:bg-slate-50 cursor-pointer"
+      )}
+    >
+      <div className="flex items-start justify-between mb-3">
+        <div className={cn("p-2 rounded-lg", props.iconBg)}>{props.icon}</div>
+      </div>
+      <div className="text-xs text-slate-500 mb-1">{props.label}</div>
+      <div className="text-2xl font-bold text-slate-900">{props.value}</div>
+      {props.subtext && (
+        <div className="text-xs text-slate-500 mt-1">{props.subtext}</div>
+      )}
+    </div>
+  );
+  return props.onClick ? (
+    <button onClick={props.onClick} className="text-left">
+      {body}
+    </button>
+  ) : (
+    body
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Refunds Tab
+// ---------------------------------------------------------------------------
+
+function RefundsTab(props: {
+  items: AdminPaymentItem[];
+  total: number;
+  loading: boolean;
+  error: string | null;
+  statusFilter: RefundStatusFilter;
+  onStatusFilterChange: (s: RefundStatusFilter) => void;
+  onRowClick: (item: AdminPaymentItem) => void;
+  onRefresh: () => void;
+  isThai: boolean;
+  locale: "th" | "en";
+}) {
+  const {
+    items,
+    total,
+    loading,
+    error,
+    statusFilter,
+    onStatusFilterChange,
+    onRowClick,
+    onRefresh,
+    isThai,
+    locale,
+  } = props;
+
+  const filters: { id: RefundStatusFilter; label: string }[] = [
+    { id: "pending", label: isThai ? "รอดำเนินการ" : "Pending" },
+    { id: "processed", label: isThai ? "โอนแล้ว" : "Processed" },
+    { id: "skipped", label: isThai ? "ข้าม" : "Skipped" },
+    { id: "all", label: isThai ? "ทั้งหมด" : "All" },
+  ];
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex gap-2 flex-wrap">
+          {filters.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => onStatusFilterChange(f.id)}
+              className={cn(
+                "px-3 py-1.5 rounded-full text-sm font-medium transition-colors",
+                statusFilter === f.id
+                  ? "bg-emerald-600 text-white"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200"
               )}
-            </div>
-          )}
-
-          {/* Withdrawal Requests Tab */}
-          {activeTab === "requests" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-slate-900">
-                  {locale === "th" ? "คำขอถอนเงินรอการอนุมัติ" : "Pending Withdrawal Requests"}
-                </h3>
-                <span className="px-3 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-lg">
-                  {pendingRequestsCount} {locale === "th" ? "รายการ" : "Items"}
-                </span>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50/80 border-b border-slate-200">
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "เจ้าหน้าที่" : "Guard"}</th>
-                      <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "จำนวนเงิน" : "Amount"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "วันที่ขอ" : "Request Date"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "เหตุผล" : "Reason"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "สถานะ" : "Status"}</th>
-                      <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "การดำเนินการ" : "Actions"}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {withdrawalRequests.map((request) => (
-                      <tr key={request.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-5">
-                          <p className="font-semibold text-slate-900">{request.guardName}</p>
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          <span className="text-sm font-bold text-slate-900">฿{request.amount.toLocaleString()}</span>
-                        </td>
-                        <td className="py-4 px-5">
-                          <p className="text-sm text-slate-500">{request.requestDate}</p>
-                        </td>
-                        <td className="py-4 px-5">
-                          <p className="text-sm text-slate-600">{request.reason}</p>
-                        </td>
-                        <td className="py-4 px-5">
-                          <span className={cn(
-                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold",
-                            request.status === "pending" ? "bg-amber-100 text-amber-700" :
-                              request.status === "approved" ? "bg-emerald-100 text-emerald-700" :
-                                "bg-red-100 text-red-700"
-                          )}>
-                            {request.status === "pending" ? (locale === "th" ? "รออนุมัติ" : "Pending") :
-                              request.status === "approved" ? (locale === "th" ? "อนุมัติ" : "Approved") :
-                                (locale === "th" ? "ปฏิเสธ" : "Rejected")}
-                          </span>
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          {request.status === "pending" && (
-                            <div className="flex items-center justify-end gap-2">
-                              <button
-                                onClick={() => handleApproveWithdrawal(request.id)}
-                                className="px-4 py-2 bg-emerald-500 text-white text-sm font-medium rounded-xl hover:bg-emerald-600 transition-colors flex items-center gap-1.5"
-                              >
-                                <CheckCircle2 className="h-4 w-4" />
-                                {locale === "th" ? "อนุมัติ" : "Approve"}
-                              </button>
-                              <button
-                                onClick={() => handleRejectWithdrawal(request.id)}
-                                className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-xl hover:bg-red-600 transition-colors flex items-center gap-1.5"
-                              >
-                                <XCircle className="h-4 w-4" />
-                                {locale === "th" ? "ปฏิเสธ" : "Reject"}
-                              </button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {withdrawalRequests.length === 0 && (
-                <div className="py-16 text-center">
-                  <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                    <Clock className="h-8 w-8 text-slate-400" />
-                  </div>
-                  <p className="text-slate-500 font-medium">{locale === "th" ? "ไม่มีคำขอถอนเงิน" : "No withdrawal requests"}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Admin History Tab */}
-          {activeTab === "history" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-slate-900">
-                  {locale === "th" ? "ประวัติการดำเนินการของผู้ดูแลระบบ" : "Admin Action History"}
-                </h3>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50/80 border-b border-slate-200">
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "ผู้ดูแลระบบ" : "Admin"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "การดำเนินการ" : "Action"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "เจ้าหน้าที่" : "Guard"}</th>
-                      <th className="text-right py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "จำนวนเงิน" : "Amount"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "เหตุผล" : "Reason"}</th>
-                      <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">{locale === "th" ? "วันที่" : "Date"}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {adminActions.map((action) => (
-                      <tr key={action.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-5">
-                          <p className="font-medium text-slate-900">{action.adminName}</p>
-                        </td>
-                        <td className="py-4 px-5">
-                          <span className={cn(
-                            "inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold",
-                            action.actionType === "add_money" ? "bg-emerald-100 text-emerald-700" :
-                              action.actionType === "deduct_money" ? "bg-orange-100 text-orange-700" :
-                                action.actionType === "approve_withdrawal" ? "bg-blue-100 text-blue-700" :
-                                  "bg-red-100 text-red-700"
-                          )}>
-                            {getActionLabel(action.actionType)}
-                          </span>
-                        </td>
-                        <td className="py-4 px-5">
-                          <p className="text-sm font-medium text-primary">{action.guardName}</p>
-                        </td>
-                        <td className="py-4 px-5 text-right">
-                          <span className="text-sm font-bold text-slate-900">฿{action.amount.toLocaleString()}</span>
-                        </td>
-                        <td className="py-4 px-5">
-                          <p className="text-sm text-slate-600">{action.reason}</p>
-                        </td>
-                        <td className="py-4 px-5">
-                          <p className="text-sm text-slate-500">{action.date}</p>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Settings Tab */}
-          {activeTab === "settings" && (
-            <div className="space-y-6 max-w-2xl">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-slate-900">
-                  {locale === "th" ? "การตั้งค่าระบบกระเป๋าเงิน" : "Wallet System Settings"}
-                </h3>
-              </div>
-
-              <div className="space-y-5">
-                {/* Pending Duration */}
-                <div className="bg-slate-50 rounded-xl p-5">
-                  <label className="text-sm font-bold text-slate-700 block mb-2">
-                    {locale === "th" ? "ระยะเวลา Pending (ชั่วโมง)" : "Pending Duration (Hours)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={settings.pendingDuration}
-                    onChange={(e) => setSettings({ ...settings, pendingDuration: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                  />
-                  <p className="text-xs text-slate-500 mt-2">
-                    {locale === "th"
-                      ? "ระยะเวลาที่เงินจะอยู่ในสถานะ Pending หลังจากงานเสร็จสิ้น"
-                      : "Duration money stays in Pending status after job completion"}
-                  </p>
-                </div>
-
-                {/* Minimum Withdrawal */}
-                <div className="bg-slate-50 rounded-xl p-5">
-                  <label className="text-sm font-bold text-slate-700 block mb-2">
-                    {locale === "th" ? "จำนวนเงินขั้นต่ำในการถอน (บาท)" : "Minimum Withdrawal Amount (Baht)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={settings.minWithdrawal}
-                    onChange={(e) => setSettings({ ...settings, minWithdrawal: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                  />
-                  <p className="text-xs text-slate-500 mt-2">
-                    {locale === "th"
-                      ? "จำนวนเงินขั้นต่ำที่เจ้าหน้าที่สามารถถอนได้"
-                      : "Minimum amount guards can withdraw"}
-                  </p>
-                </div>
-
-                {/* Free Withdrawals Per Day */}
-                <div className="bg-slate-50 rounded-xl p-5">
-                  <label className="text-sm font-bold text-slate-700 block mb-2">
-                    {locale === "th" ? "จำนวนครั้งถอนฟรีต่อวัน" : "Free Withdrawals Per Day"}
-                  </label>
-                  <input
-                    type="number"
-                    value={settings.freeWithdrawalsPerDay}
-                    onChange={(e) => setSettings({ ...settings, freeWithdrawalsPerDay: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                  />
-                  <p className="text-xs text-slate-500 mt-2">
-                    {locale === "th"
-                      ? "จำนวนครั้งที่เจ้าหน้าที่สามารถถอนเงินฟรีต่อวัน"
-                      : "Number of free withdrawals guards can make per day"}
-                  </p>
-                </div>
-
-                {/* Additional Fee */}
-                <div className="bg-slate-50 rounded-xl p-5">
-                  <label className="text-sm font-bold text-slate-700 block mb-2">
-                    {locale === "th" ? "ค่าธรรมเนียมถอนเพิ่มเติม (บาท)" : "Additional Withdrawal Fee (Baht)"}
-                  </label>
-                  <input
-                    type="number"
-                    value={settings.additionalFee}
-                    onChange={(e) => setSettings({ ...settings, additionalFee: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none"
-                  />
-                  <p className="text-xs text-slate-500 mt-2">
-                    {locale === "th"
-                      ? "ค่าธรรมเนียมสำหรับการถอนเงินเกินจำนวนครั้งฟรี"
-                      : "Fee for withdrawals beyond free limit"}
-                  </p>
-                </div>
-
-                {/* Save Button */}
-                <div className="flex justify-end pt-4">
-                  <button className="px-6 py-3 bg-primary text-white font-medium rounded-xl hover:bg-emerald-600 transition-colors flex items-center gap-2 shadow-lg shadow-primary/20">
-                    <Save className="h-4 w-4" />
-                    {locale === "th" ? "บันทึกการตั้งค่า" : "Save Settings"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="text-sm text-slate-500">
+          {isThai ? "ทั้งหมด" : "Total"}:{" "}
+          <span className="font-semibold text-slate-900">{total}</span>
         </div>
       </div>
 
-      {/* Guard Detail Modal */}
-      {detailModalOpen && selectedGuard && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-5 border-b border-slate-200">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary/20 to-primary/10 flex items-center justify-center">
-                  <span className="text-lg font-bold text-primary">{selectedGuard.name.charAt(0)}</span>
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">
-                    {locale === "th" ? "รายละเอียดกระเป๋าเงิน" : "Wallet Details"}
-                  </h2>
-                  <p className="text-sm text-slate-500">{selectedGuard.name}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setDetailModalOpen(false)}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
-              >
-                <X className="h-5 w-5 text-slate-400" />
-              </button>
-            </div>
-
-            {/* Balance Cards */}
-            <div className="p-5 border-b border-slate-100">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-emerald-50 rounded-xl p-4 text-center">
-                  <p className="text-sm text-emerald-600 font-medium">{locale === "th" ? "ยอดถอนได้" : "Withdrawable"}</p>
-                  <p className="text-2xl font-bold text-emerald-700 mt-1">฿{selectedGuard.withdrawable.toLocaleString()}</p>
-                </div>
-                <div className="bg-amber-50 rounded-xl p-4 text-center">
-                  <p className="text-sm text-amber-600 font-medium">{locale === "th" ? "ยอด Pending" : "Pending"}</p>
-                  <p className="text-2xl font-bold text-amber-700 mt-1">฿{selectedGuard.pending.toLocaleString()}</p>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => setAddMoneyModalOpen(true)}
-                  className="flex-1 px-4 py-2.5 bg-emerald-500 text-white text-sm font-medium rounded-xl hover:bg-emerald-600 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Plus className="h-4 w-4" />
-                  {locale === "th" ? "เพิ่มเงิน" : "Add Money"}
-                </button>
-                <button
-                  onClick={() => setDeductMoneyModalOpen(true)}
-                  className="flex-1 px-4 py-2.5 bg-orange-500 text-white text-sm font-medium rounded-xl hover:bg-orange-600 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Minus className="h-4 w-4" />
-                  {locale === "th" ? "หักเงิน" : "Deduct Money"}
-                </button>
-                <button className="px-4 py-2.5 bg-slate-100 text-slate-700 text-sm font-medium rounded-xl hover:bg-slate-200 transition-colors flex items-center gap-2">
-                  <Download className="h-4 w-4" />
-                  {locale === "th" ? "ส่งออก" : "Export"}
-                </button>
-              </div>
-            </div>
-
-            {/* Transaction History */}
-            <div className="flex-1 overflow-y-auto p-5">
-              <h3 className="text-sm font-bold text-slate-700 mb-4">
-                {locale === "th" ? "ประวัติธุรกรรม" : "Transaction History"}
-              </h3>
-              <div className="space-y-3">
-                {selectedGuard.transactions.map((tx) => (
-                  <div key={tx.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-white rounded-lg">
-                        {getTransactionIcon(tx.type)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">{getTransactionLabel(tx.type)}</p>
-                        <p className="text-xs text-slate-500">{tx.description}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className={cn(
-                        "text-sm font-bold",
-                        tx.amount > 0 ? "text-emerald-600" : "text-red-600"
-                      )}>
-                        {tx.amount > 0 ? "+" : ""}฿{Math.abs(tx.amount).toLocaleString()}
-                      </p>
-                      <p className="text-xs text-slate-400">{tx.date}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+      {error && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+          {error}
+          <button
+            onClick={onRefresh}
+            className="ml-3 underline hover:no-underline"
+          >
+            {isThai ? "ลองใหม่" : "Retry"}
+          </button>
         </div>
       )}
 
-      {/* Add Money Modal */}
-      {addMoneyModalOpen && selectedGuard && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex items-center justify-between p-5 border-b border-slate-200">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-emerald-100 rounded-xl">
-                  <Plus className="h-5 w-5 text-emerald-600" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">
-                    {locale === "th" ? "เพิ่มเงิน" : "Add Money"}
-                  </h2>
-                  <p className="text-sm text-slate-500">{selectedGuard.name}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => { setAddMoneyModalOpen(false); setMoneyAmount(""); setMoneyReason(""); }}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
-              >
-                <X className="h-5 w-5 text-slate-400" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <div>
-                <label className="text-sm font-medium text-slate-700 mb-2 block">
-                  {locale === "th" ? "จำนวนเงิน (บาท)" : "Amount (Baht)"}
-                </label>
-                <input
-                  type="number"
-                  value={moneyAmount}
-                  onChange={(e) => setMoneyAmount(e.target.value)}
-                  placeholder="0"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:bg-white transition-all outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-slate-700 mb-2 block">
-                  {locale === "th" ? "เหตุผล" : "Reason"}
-                </label>
-                <textarea
-                  value={moneyReason}
-                  onChange={(e) => setMoneyReason(e.target.value)}
-                  placeholder={locale === "th" ? "ระบุเหตุผล..." : "Enter reason..."}
-                  rows={3}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:bg-white transition-all outline-none resize-none"
-                />
-              </div>
-            </div>
-            <div className="flex gap-3 p-5 border-t border-slate-200">
-              <button
-                onClick={() => { setAddMoneyModalOpen(false); setMoneyAmount(""); setMoneyReason(""); }}
-                className="flex-1 px-4 py-2.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors"
-              >
-                {locale === "th" ? "ยกเลิก" : "Cancel"}
-              </button>
-              <button
-                onClick={handleAddMoney}
-                disabled={!moneyAmount || parseFloat(moneyAmount) <= 0}
-                className={cn(
-                  "flex-1 px-4 py-2.5 text-sm font-medium text-white rounded-xl flex items-center justify-center gap-2 transition-colors",
-                  moneyAmount && parseFloat(moneyAmount) > 0
-                    ? "bg-emerald-500 hover:bg-emerald-600"
-                    : "bg-slate-300 cursor-not-allowed"
-                )}
-              >
-                <Plus className="h-4 w-4" />
-                {locale === "th" ? "เพิ่มเงิน" : "Add Money"}
-              </button>
-            </div>
-          </div>
+      {loading && items.length === 0 && (
+        <div className="p-12 flex justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
         </div>
       )}
 
-      {/* Deduct Money Modal */}
-      {deductMoneyModalOpen && selectedGuard && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex items-center justify-between p-5 border-b border-slate-200">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-orange-100 rounded-xl">
-                  <Minus className="h-5 w-5 text-orange-600" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">
-                    {locale === "th" ? "หักเงิน" : "Deduct Money"}
-                  </h2>
-                  <p className="text-sm text-slate-500">{selectedGuard.name}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => { setDeductMoneyModalOpen(false); setMoneyAmount(""); setMoneyReason(""); }}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
-              >
-                <X className="h-5 w-5 text-slate-400" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="bg-orange-50 rounded-xl p-3 text-center">
-                <p className="text-sm text-orange-600">{locale === "th" ? "ยอดถอนได้ปัจจุบัน" : "Current Withdrawable"}</p>
-                <p className="text-xl font-bold text-orange-700">฿{selectedGuard.withdrawable.toLocaleString()}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-slate-700 mb-2 block">
-                  {locale === "th" ? "จำนวนเงินที่หัก (บาท)" : "Deduction Amount (Baht)"}
-                </label>
-                <input
-                  type="number"
-                  value={moneyAmount}
-                  onChange={(e) => setMoneyAmount(e.target.value)}
-                  placeholder="0"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:bg-white transition-all outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-slate-700 mb-2 block">
-                  {locale === "th" ? "เหตุผล" : "Reason"}
-                </label>
-                <textarea
-                  value={moneyReason}
-                  onChange={(e) => setMoneyReason(e.target.value)}
-                  placeholder={locale === "th" ? "ระบุเหตุผล..." : "Enter reason..."}
-                  rows={3}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:bg-white transition-all outline-none resize-none"
-                />
-              </div>
-            </div>
-            <div className="flex gap-3 p-5 border-t border-slate-200">
-              <button
-                onClick={() => { setDeductMoneyModalOpen(false); setMoneyAmount(""); setMoneyReason(""); }}
-                className="flex-1 px-4 py-2.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors"
-              >
-                {locale === "th" ? "ยกเลิก" : "Cancel"}
-              </button>
-              <button
-                onClick={handleDeductMoney}
-                disabled={!moneyAmount || parseFloat(moneyAmount) <= 0}
-                className={cn(
-                  "flex-1 px-4 py-2.5 text-sm font-medium text-white rounded-xl flex items-center justify-center gap-2 transition-colors",
-                  moneyAmount && parseFloat(moneyAmount) > 0
-                    ? "bg-orange-500 hover:bg-orange-600"
-                    : "bg-slate-300 cursor-not-allowed"
-                )}
-              >
-                <Minus className="h-4 w-4" />
-                {locale === "th" ? "หักเงิน" : "Deduct"}
-              </button>
-            </div>
-          </div>
+      {!loading && items.length === 0 && !error && (
+        <div className="p-12 text-center text-slate-500">
+          <Banknote className="h-10 w-10 mx-auto mb-3 text-slate-300" />
+          {isThai ? "ไม่มีรายการ" : "No refunds"}
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-slate-200">
+                <Th>{isThai ? "วันที่" : "Date"}</Th>
+                <Th>{isThai ? "ลูกค้า" : "Customer"}</Th>
+                <Th>{isThai ? "เจ้าหน้าที่" : "Guard"}</Th>
+                <Th className="text-right">
+                  {isThai ? "ราคาเดิม" : "Original"}
+                </Th>
+                <Th className="text-right">
+                  {isThai ? "ราคาจริง" : "Final"}
+                </Th>
+                <Th className="text-right">
+                  {isThai ? "ยอดคืน" : "Refund"}
+                </Th>
+                <Th className="text-center">{isThai ? "สถานะ" : "Status"}</Th>
+                <Th className="text-right"></Th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => {
+                const s = refundBadgeStyle(item.refund_status);
+                return (
+                  <tr
+                    key={item.payment_id}
+                    onClick={() => onRowClick(item)}
+                    className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                  >
+                    <Td>{formatDate(item.paid_at, locale)}</Td>
+                    <Td>
+                      <div className="font-medium text-slate-900">
+                        {item.customer_name ?? "-"}
+                      </div>
+                      <div className="text-xs text-slate-500 truncate max-w-[200px]">
+                        {item.service_address}
+                      </div>
+                    </Td>
+                    <Td>{item.guard_name ?? "-"}</Td>
+                    <Td className="text-right">
+                      {formatMoney(item.original_amount)}
+                    </Td>
+                    <Td className="text-right">
+                      {formatMoney(item.final_amount)}
+                    </Td>
+                    <Td className="text-right font-bold text-amber-600">
+                      {formatMoney(item.refund_amount)}
+                    </Td>
+                    <Td className="text-center">
+                      <span
+                        className={cn(
+                          "inline-flex px-2 py-0.5 rounded-full text-xs font-semibold",
+                          s.bg,
+                          s.text
+                        )}
+                      >
+                        {item.refund_status ?? "-"}
+                      </span>
+                    </Td>
+                    <Td className="text-right">
+                      <ArrowRight className="h-4 w-4 text-slate-400 inline" />
+                    </Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Payments Tab (read-only)
+// ---------------------------------------------------------------------------
+
+function PaymentsTab(props: {
+  items: AdminPaymentItem[];
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+  isThai: boolean;
+  locale: "th" | "en";
+}) {
+  const { items, loading, error, onRefresh, isThai, locale } = props;
+
+  if (loading && items.length === 0) {
+    return (
+      <div className="p-12 flex justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
+      </div>
+    );
+  }
+
+  if (error && items.length === 0) {
+    return (
+      <div className="p-8 text-center">
+        <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
+        <p className="text-red-600 mb-3">{error}</p>
+        <button
+          onClick={onRefresh}
+          className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700"
+        >
+          {isThai ? "ลองใหม่" : "Retry"}
+        </button>
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="p-12 text-center text-slate-500">
+        <Receipt className="h-10 w-10 mx-auto mb-3 text-slate-300" />
+        {isThai ? "ไม่มีการชำระเงิน" : "No payments"}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-slate-200">
+            <Th>{isThai ? "วันที่" : "Date"}</Th>
+            <Th>{isThai ? "ลูกค้า" : "Customer"}</Th>
+            <Th>{isThai ? "เจ้าหน้าที่" : "Guard"}</Th>
+            <Th className="text-right">
+              {isThai ? "ยอดสุทธิ" : "Net amount"}
+            </Th>
+            <Th>{isThai ? "วิธีการ" : "Method"}</Th>
+            <Th className="text-center">{isThai ? "คืนเงิน" : "Refund"}</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((p) => {
+            const net = (p.final_amount ?? p.original_amount) + p.tip_amount;
+            const s = refundBadgeStyle(p.refund_status);
+            return (
+              <tr key={p.payment_id} className="border-b border-slate-100">
+                <Td>{formatDate(p.paid_at, locale)}</Td>
+                <Td>{p.customer_name ?? "-"}</Td>
+                <Td>{p.guard_name ?? "-"}</Td>
+                <Td className="text-right font-semibold">{formatMoney(net)}</Td>
+                <Td>
+                  <span className="text-xs uppercase text-slate-600">
+                    {p.payment_method}
+                  </span>
+                </Td>
+                <Td className="text-center">
+                  {p.refund_status ? (
+                    <span
+                      className={cn(
+                        "inline-flex px-2 py-0.5 rounded-full text-xs font-semibold",
+                        s.bg,
+                        s.text
+                      )}
+                    >
+                      {p.refund_status}
+                    </span>
+                  ) : (
+                    <span className="text-slate-300">—</span>
+                  )}
+                </Td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Refund Process / Skip Modal
+// ---------------------------------------------------------------------------
+
+function RefundModal(props: {
+  item: AdminPaymentItem;
+  onClose: () => void;
+  onCompleted: () => void;
+  isThai: boolean;
+  locale: "th" | "en";
+}) {
+  const { item, onClose, onCompleted, isThai, locale } = props;
+  const [reference, setReference] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const readonly = item.refund_status !== "pending";
+
+  const submit = async (action: "process" | "skip") => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await walletApi.processRefund(item.payment_id, {
+        action,
+        reference: reference.trim() || undefined,
+        note: note.trim() || undefined,
+      });
+      onCompleted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
+        <div className="sticky top-0 bg-white flex items-center justify-between p-5 border-b border-slate-200">
+          <h2 className="text-lg font-bold text-slate-900">
+            {readonly
+              ? isThai
+                ? "รายละเอียดการคืนเงิน"
+                : "Refund detail"
+              : isThai
+                ? "ดำเนินการคืนเงิน"
+                : "Process refund"}
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-1.5 hover:bg-slate-100 rounded-lg"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <InfoRow
+            label={isThai ? "ลูกค้า" : "Customer"}
+            value={item.customer_name ?? "-"}
+          />
+          <InfoRow
+            label={isThai ? "เจ้าหน้าที่" : "Guard"}
+            value={item.guard_name ?? "-"}
+          />
+          <InfoRow
+            label={isThai ? "สถานที่ปฏิบัติงาน" : "Service location"}
+            value={item.service_address}
+          />
+          <InfoRow
+            label={isThai ? "ชั่วโมงที่จอง" : "Booked hours"}
+            value={
+              item.booked_hours != null
+                ? `${item.booked_hours} ${isThai ? "ชม." : "hrs"}`
+                : "-"
+            }
+          />
+          <InfoRow
+            label={isThai ? "ชั่วโมงที่ปฏิบัติจริง" : "Actual hours"}
+            value={
+              item.actual_hours_worked != null
+                ? `${item.actual_hours_worked} ${isThai ? "ชม." : "hrs"}`
+                : "-"
+            }
+          />
+
+          <div className="bg-slate-50 rounded-xl p-4 space-y-2">
+            <MoneyRow
+              label={isThai ? "ราคาเดิม" : "Original"}
+              value={formatMoney(item.original_amount)}
+            />
+            {item.final_amount != null && (
+              <MoneyRow
+                label={isThai ? "ราคาจริง (prorated)" : "Final (prorated)"}
+                value={formatMoney(item.final_amount)}
+              />
+            )}
+            <MoneyRow
+              label={isThai ? "ยอดคืน" : "Refund owed"}
+              value={formatMoney(item.refund_amount)}
+              highlight
+            />
+          </div>
+
+          {readonly && (
+            <div className="space-y-2 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-600">
+                  {isThai ? "สถานะ" : "Status"}
+                </span>
+                <span className="font-semibold text-emerald-700 capitalize">
+                  {item.refund_status}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-600">
+                  {isThai ? "ดำเนินการเมื่อ" : "Processed at"}
+                </span>
+                <span className="text-slate-900">
+                  {formatDate(item.refund_processed_at, locale)}
+                </span>
+              </div>
+              {item.refund_reference && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-600">
+                    {isThai ? "เลขที่อ้างอิง" : "Reference"}
+                  </span>
+                  <span className="font-mono text-slate-900">
+                    {item.refund_reference}
+                  </span>
+                </div>
+              )}
+              {item.refund_processed_by_name && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-600">
+                    {isThai ? "ดำเนินการโดย" : "Processed by"}
+                  </span>
+                  <span className="text-slate-900">
+                    {item.refund_processed_by_name}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!readonly && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  {isThai
+                    ? "เลขที่อ้างอิงการโอน (bank slip)"
+                    : "Bank transfer reference"}
+                </label>
+                <input
+                  type="text"
+                  value={reference}
+                  onChange={(e) => setReference(e.target.value)}
+                  maxLength={200}
+                  placeholder={
+                    isThai
+                      ? "เช่น SLIP-2026-001234"
+                      : "e.g. SLIP-2026-001234"
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  {isThai
+                    ? "จำเป็นเมื่อยืนยันโอนคืนแล้ว"
+                    : "Required when confirming transfer"}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  {isThai ? "หมายเหตุ (ไม่บังคับ)" : "Note (optional)"}
+                </label>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={2}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400"
+                />
+              </div>
+
+              {error && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => submit("skip")}
+                  disabled={submitting}
+                  className="flex-1 px-4 py-2.5 border border-slate-300 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {isThai ? "ข้ามรายการนี้" : "Skip"}
+                </button>
+                <button
+                  onClick={() => submit("process")}
+                  disabled={submitting || !reference.trim()}
+                  className="flex-1 px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {submitting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4" />
+                  )}
+                  {isThai ? "ยืนยันโอนคืนแล้ว" : "Confirm transferred"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InfoRow(props: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between items-start gap-3">
+      <span className="text-sm text-slate-600">{props.label}</span>
+      <span className="text-sm font-medium text-slate-900 text-right max-w-[60%]">
+        {props.value}
+      </span>
+    </div>
+  );
+}
+
+function MoneyRow(props: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex justify-between items-center",
+        props.highlight ? "text-amber-700 font-bold" : "text-slate-700"
+      )}
+    >
+      <span className="text-sm">{props.label}</span>
+      <span className="text-sm">{props.value}</span>
+    </div>
+  );
+}
+
+function Th(props: {
+  children?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <th
+      className={cn(
+        "py-3 px-3 text-xs font-semibold text-slate-500 uppercase",
+        props.className ?? "text-left"
+      )}
+    >
+      {props.children}
+    </th>
+  );
+}
+
+function Td(props: {
+  children?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <td className={cn("py-3 px-3 text-sm text-slate-700", props.className)}>
+      {props.children}
+    </td>
   );
 }

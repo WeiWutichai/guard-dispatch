@@ -617,6 +617,99 @@ export const reviewsApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Admin Wallet / Payments / Refunds (migration 042)
+// ---------------------------------------------------------------------------
+
+export interface AdminPaymentItem {
+  payment_id: string;
+  request_id: string;
+  assignment_id: string | null;
+  customer_id: string;
+  customer_name: string | null;
+  guard_id: string | null;
+  guard_name: string | null;
+  service_address: string;
+  booked_hours: number | null;
+  actual_hours_worked: number | null;
+  original_amount: number;
+  final_amount: number | null;
+  refund_amount: number | null;
+  tip_amount: number;
+  payment_method: string;
+  payment_status: string;
+  refund_status: "pending" | "processed" | "skipped" | null;
+  refund_processed_at: string | null;
+  refund_reference: string | null;
+  refund_processed_by: string | null;
+  refund_processed_by_name: string | null;
+  paid_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AdminPaymentsPage {
+  data: AdminPaymentItem[];
+  total: number;
+}
+
+export interface WalletSummaryResponse {
+  monthly_revenue: number;
+  pending_refunds_count: number;
+  pending_refunds_total: number;
+  processed_refunds_count: number;
+  processed_refunds_total: number;
+}
+
+export const walletApi = {
+  summary: () =>
+    apiFetch<WalletSummaryResponse>("/booking/admin/wallet/summary"),
+
+  listPayments: (params?: {
+    status?: string;
+    method?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.method) q.set("method", params.method);
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<AdminPaymentsPage>(
+      `/booking/admin/payments${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  getPayment: (id: string) =>
+    apiFetch<AdminPaymentItem>(`/booking/admin/payments/${id}`),
+
+  listRefunds: (params?: {
+    status?: "pending" | "processed" | "skipped";
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<AdminPaymentsPage>(
+      `/booking/admin/refunds${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  /** Mark a refund processed (bank transfer done) or skipped (customer waived). */
+  processRefund: (
+    paymentId: string,
+    body: { action: "process" | "skip"; reference?: string; note?: string }
+  ) =>
+    apiFetch<AdminPaymentItem>(
+      `/booking/admin/refunds/${paymentId}/process`,
+      { method: "PUT", body: JSON.stringify(body) }
+    ),
+};
+
+// ---------------------------------------------------------------------------
 // Reverse Geocoding (OpenStreetMap Nominatim)
 // ---------------------------------------------------------------------------
 
