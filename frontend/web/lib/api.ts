@@ -191,33 +191,12 @@ export interface ChatMessage {
 // frontend can check auth state without exposing the actual token.
 // ---------------------------------------------------------------------------
 
-/** Check if the user likely has an active session (cookie-based). */
-export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  if (
-    document.cookie
-      .split(";")
-      .some((c) => c.trim().startsWith("logged_in="))
-  ) {
-    return "cookie-auth";
-  }
-  return null;
-}
-
-export function getRefreshToken(): string | null {
-  // Refresh token is in an httpOnly cookie — not accessible from JS
-  return null;
-}
-
-export function setTokens(
-  _accessToken: string,
-  _refreshToken: string
-): void {
-  // No-op: tokens are set via Set-Cookie headers from the backend
-}
-
-export function clearTokens(): void {
-  // No-op: tokens are cleared via Set-Cookie headers from the backend logout
+/** True when the non-httpOnly `logged_in=1` marker cookie is present. */
+export function hasLoggedInCookie(): boolean {
+  if (typeof window === "undefined") return false;
+  return document.cookie
+    .split(";")
+    .some((c) => c.trim().startsWith("logged_in="));
 }
 
 // ---------------------------------------------------------------------------
@@ -304,23 +283,33 @@ async function apiFetch<T>(
   );
 }
 
+// Singleton promise so concurrent 401s share a single refresh call.
+// Without this, N parallel requests would each fire `POST /auth/refresh`,
+// rotating the refresh token N times and racing the session-limit cap (5).
+// Mirrors the mobile Dio interceptor's `_isReactiveRefreshing` flag.
+let refreshInFlight: Promise<boolean> | null = null;
+
 async function tryRefreshToken(): Promise<boolean> {
-  try {
-    // The refresh_token cookie is sent automatically
-    const response = await fetch(`${BASE_PATH}/api/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: "" }), // Backend reads from cookie
-      credentials: "same-origin",
-    });
-
-    if (!response.ok) return false;
-
-    const data: ApiResponse<AuthResponse> = await response.json();
-    return data.success && !!data.data;
-  } catch {
-    return false;
-  }
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      // The refresh_token cookie is sent automatically
+      const response = await fetch(`${BASE_PATH}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: "" }), // Backend reads from cookie
+        credentials: "same-origin",
+      });
+      if (!response.ok) return false;
+      const data: ApiResponse<AuthResponse> = await response.json();
+      return data.success && !!data.data;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
 // ---------------------------------------------------------------------------
@@ -896,8 +885,16 @@ export const notificationApi = {
 
   markAsRead: (id: string) =>
     apiFetch<NotificationLog>(`/notification/notifications/${id}/read`, {
-      method: "POST",
+      method: "PUT",
     }),
+
+  markAllAsRead: () =>
+    apiFetch<{ count: number }>("/notification/notifications/read-all", {
+      method: "PUT",
+    }),
+
+  unreadCount: () =>
+    apiFetch<{ count: number }>("/notification/notifications/unread-count"),
 
   registerFcmToken: (token: string, deviceType: string) =>
     apiFetch<null>("/notification/tokens", {
@@ -943,16 +940,16 @@ export const chatApi = {
 
   uploadAttachment: async (conversationId: string, file: File) => {
     const formData = new FormData();
+    formData.append("conversation_id", conversationId);
     formData.append("file", file);
 
-    const response = await fetch(
-      `${BASE_PATH}/api/chat/conversations/${conversationId}/attachments`,
-      {
-        method: "POST",
-        body: formData,
-        credentials: "same-origin", // Send cookies for auth
-      }
-    );
+    // Backend route is POST /chat/attachments (flat, not nested under conversations).
+    // conversation_id travels in the multipart body — matches the mobile client.
+    const response = await fetch(`${BASE_PATH}/api/chat/attachments`, {
+      method: "POST",
+      body: formData,
+      credentials: "same-origin", // Send cookies for auth
+    });
 
     const data = await response.json();
     if (data.success && data.data) return data.data;

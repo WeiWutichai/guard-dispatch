@@ -15,7 +15,6 @@ import {
   Save,
   Calculator,
   Gift,
-  Check,
   Clock,
   Loader2,
 } from "lucide-react";
@@ -134,6 +133,9 @@ export default function PricingPage() {
   const [selectedArea, setSelectedArea] = useState<AreaRate | null>(null);
 
   const [addServiceError, setAddServiceError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingDeleteName, setPendingDeleteName] = useState<string>("");
 
   // New service form
   const [newService, setNewService] = useState<Partial<ServiceRate>>({
@@ -191,12 +193,29 @@ export default function PricingPage() {
     }
   };
 
-  const handleDeleteService = async (id: string) => {
+  const requestDeleteService = (svc: ServiceRate) => {
+    setPendingDeleteId(svc.id);
+    setPendingDeleteName(svc.name);
+    setActionError(null);
+  };
+
+  const cancelDeleteService = () => {
+    setPendingDeleteId(null);
+    setPendingDeleteName("");
+  };
+
+  const confirmDeleteService = async () => {
+    if (!pendingDeleteId) return;
+    const id = pendingDeleteId;
+    setActionError(null);
     try {
       await pricingApi.deleteServiceRate(id);
+      setPendingDeleteId(null);
+      setPendingDeleteName("");
       loadServiceRates();
-    } catch {
-      // silently fail
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionError(msg || (locale === "th" ? "ลบไม่สำเร็จ" : "Delete failed"));
     }
   };
 
@@ -207,6 +226,7 @@ export default function PricingPage() {
 
   const handleUpdateService = async () => {
     if (!editingService) return;
+    setActionError(null);
     try {
       await pricingApi.updateServiceRate(editingService.id, {
         name: editingService.name,
@@ -217,8 +237,9 @@ export default function PricingPage() {
       setEditServiceModalOpen(false);
       setEditingService(null);
       loadServiceRates();
-    } catch {
-      // silently fail — could add toast later
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionError(msg || (locale === "th" ? "บันทึกไม่สำเร็จ" : "Update failed"));
     }
   };
 
@@ -329,6 +350,18 @@ export default function PricingPage() {
                 </button>
               </div>
 
+              {actionError && (
+                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <span className="flex-1">{actionError}</span>
+                  <button
+                    onClick={() => setActionError(null)}
+                    className="text-red-600 hover:text-red-800 font-medium"
+                  >
+                    {locale === "th" ? "ปิด" : "Dismiss"}
+                  </button>
+                </div>
+              )}
+
               {loadingServices ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-6 w-6 text-primary animate-spin" />
@@ -367,7 +400,7 @@ export default function PricingPage() {
                               <Edit3 className="h-4 w-4" />
                             </button>
                             <button
-                              onClick={() => handleDeleteService(service.id)}
+                              onClick={() => requestDeleteService(service)}
                               className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                               title={locale === "th" ? "ลบ" : "Delete"}
                             >
@@ -706,6 +739,47 @@ export default function PricingPage() {
           )}
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {pendingDeleteId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="p-5 border-b border-slate-200">
+              <h2 className="text-lg font-bold text-slate-900">
+                {locale === "th" ? "ยืนยันการลบ" : "Confirm deletion"}
+              </h2>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-slate-700">
+                {locale === "th" ? "คุณกำลังจะลบบริการ" : "You are about to delete the service"}{" "}
+                <span className="font-semibold text-slate-900">
+                  &ldquo;{pendingDeleteName}&rdquo;
+                </span>
+                . {locale === "th" ? "การกระทำนี้ไม่สามารถย้อนกลับได้จากหน้านี้" : "This cannot be undone from here."}
+              </p>
+              {actionError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  {actionError}
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-slate-200 flex justify-end gap-3">
+              <button
+                onClick={cancelDeleteService}
+                className="px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                {locale === "th" ? "ยกเลิก" : "Cancel"}
+              </button>
+              <button
+                onClick={confirmDeleteService}
+                className="px-5 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+              >
+                {locale === "th" ? "ลบ" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Service Modal */}
       {addServiceModalOpen && (
