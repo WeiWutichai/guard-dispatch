@@ -106,6 +106,27 @@ export interface Assignment {
   notes: string | null;
 }
 
+// Progress reports submitted hourly by guards during an active assignment.
+// Admin uses these to resolve disputes ("did the guard actually show up?").
+export interface ProgressReportMediaItem {
+  id: string;
+  url: string;
+  mime_type: string;
+  file_size: number;
+  sort_order: number;
+}
+
+export interface ProgressReportItem {
+  id: string;
+  assignment_id: string;
+  guard_id: string;
+  hour_number: number;
+  message: string | null;
+  photo_url: string | null; // legacy single-photo field
+  media: ProgressReportMediaItem[];
+  created_at: string;
+}
+
 // Pricing types
 export interface ServiceRateResponse {
   id: string;
@@ -494,6 +515,13 @@ export const bookingApi = {
       method: "PUT",
       body: JSON.stringify({ status }),
     }),
+
+  /** Progress reports for an assignment (hourly guard check-ins with optional photos).
+   *  Backend grants admin blanket access; non-admin must be the guard or customer. */
+  listProgressReports: (assignmentId: string) =>
+    apiFetch<ProgressReportItem[]>(
+      `/booking/assignments/${assignmentId}/progress-reports`
+    ),
 };
 
 // ---------------------------------------------------------------------------
