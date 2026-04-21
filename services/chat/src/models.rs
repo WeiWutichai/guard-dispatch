@@ -265,3 +265,59 @@ impl From<AttachmentRow> for AttachmentResponse {
         }
     }
 }
+
+// =============================================================================
+// Admin — chat moderation
+// =============================================================================
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct AdminListConversationsQuery {
+    /// Optional filter: show only conversations attached to this request.
+    pub request_id: Option<Uuid>,
+    /// Optional search: matches guard/customer full_name (case-insensitive).
+    pub search: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// One conversation row for the admin moderation list.
+/// Unlike the per-user enriched conversation, this shows BOTH participants'
+/// names so admin doesn't need role context to read the list.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminConversationItem {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub customer_id: Option<Uuid>,
+    pub customer_name: Option<String>,
+    pub guard_id: Option<Uuid>,
+    pub guard_name: Option<String>,
+    pub request_status: Option<String>,
+    pub message_count: i64,
+    pub last_message: Option<String>,
+    pub last_message_at: Option<DateTime<Utc>>,
+    pub has_attachments: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminConversationsPage {
+    pub data: Vec<AdminConversationItem>,
+    pub total: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, sqlx::FromRow)]
+pub struct AdminConversationRow {
+    pub id: Uuid,
+    pub request_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub customer_id: Option<Uuid>,
+    pub customer_name: Option<String>,
+    pub guard_id: Option<Uuid>,
+    pub guard_name: Option<String>,
+    pub request_status: Option<String>,
+    pub message_count: i64,
+    pub last_message: Option<String>,
+    pub last_message_at: Option<DateTime<Utc>>,
+    pub has_attachments: bool,
+}

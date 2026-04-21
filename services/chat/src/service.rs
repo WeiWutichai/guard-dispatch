@@ -463,3 +463,134 @@ pub async fn mark_read(
 
     Ok(())
 }
+
+// =============================================================================
+// Admin — list all conversations (moderation)
+// =============================================================================
+
+/// List every conversation with both participants' names, message count,
+/// last message, and whether any attachments exist. Admin-only.
+///
+/// JOINs `booking.guard_requests` + `booking.assignments` + `auth.users` +
+/// `auth.customer_profiles` to resolve participant names regardless of
+/// acting role — cross-schema so we use runtime `sqlx::query_as`.
+pub async fn list_admin_conversations(
+    db: &PgPool,
+    query: crate::models::AdminListConversationsQuery,
+) -> Result<crate::models::AdminConversationsPage, AppError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // ILIKE escape — mirror the audit log service's approach
+    let search_pattern = query.search.as_ref().filter(|s| !s.is_empty()).map(|s| {
+        format!(
+            "%{}%",
+            s.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        )
+    });
+
+    let rows = sqlx::query_as::<_, crate::models::AdminConversationRow>(
+        r#"
+        SELECT
+            c.id,
+            c.request_id,
+            c.created_at,
+            gr.customer_id,
+            COALESCE(cp_cust.full_name, u_cust.full_name) AS customer_name,
+            (
+                SELECT a.guard_id FROM booking.assignments a
+                WHERE a.request_id = c.request_id
+                ORDER BY a.assigned_at DESC
+                LIMIT 1
+            ) AS guard_id,
+            (
+                SELECT u_g.full_name FROM booking.assignments a
+                JOIN auth.users u_g ON u_g.id = a.guard_id
+                WHERE a.request_id = c.request_id
+                ORDER BY a.assigned_at DESC
+                LIMIT 1
+            ) AS guard_name,
+            gr.status::text AS request_status,
+            (SELECT COUNT(*)::bigint FROM chat.messages m WHERE m.conversation_id = c.id) AS message_count,
+            (SELECT m.content FROM chat.messages m
+             WHERE m.conversation_id = c.id
+             ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+            (SELECT m.created_at FROM chat.messages m
+             WHERE m.conversation_id = c.id
+             ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
+            EXISTS(
+                SELECT 1 FROM chat.messages m
+                JOIN chat.attachments at ON at.message_id = m.id
+                WHERE m.conversation_id = c.id
+            ) AS has_attachments
+        FROM chat.conversations c
+        INNER JOIN booking.guard_requests gr ON gr.id = c.request_id
+        LEFT JOIN auth.users u_cust ON u_cust.id = gr.customer_id
+        LEFT JOIN auth.customer_profiles cp_cust ON cp_cust.user_id = gr.customer_id
+        WHERE ($1::uuid IS NULL OR c.request_id = $1)
+          AND (
+            $2::text IS NULL
+            OR COALESCE(cp_cust.full_name, u_cust.full_name) ILIKE $2
+            OR EXISTS(
+                SELECT 1 FROM booking.assignments a
+                JOIN auth.users u_g ON u_g.id = a.guard_id
+                WHERE a.request_id = c.request_id AND u_g.full_name ILIKE $2
+            )
+          )
+        ORDER BY last_message_at DESC NULLS LAST
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(query.request_id)
+    .bind(&search_pattern)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(db)
+    .await?;
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM chat.conversations c
+        INNER JOIN booking.guard_requests gr ON gr.id = c.request_id
+        LEFT JOIN auth.users u_cust ON u_cust.id = gr.customer_id
+        LEFT JOIN auth.customer_profiles cp_cust ON cp_cust.user_id = gr.customer_id
+        WHERE ($1::uuid IS NULL OR c.request_id = $1)
+          AND (
+            $2::text IS NULL
+            OR COALESCE(cp_cust.full_name, u_cust.full_name) ILIKE $2
+            OR EXISTS(
+                SELECT 1 FROM booking.assignments a
+                JOIN auth.users u_g ON u_g.id = a.guard_id
+                WHERE a.request_id = c.request_id AND u_g.full_name ILIKE $2
+            )
+          )
+        "#,
+    )
+    .bind(query.request_id)
+    .bind(&search_pattern)
+    .fetch_one(db)
+    .await?;
+
+    let data = rows
+        .into_iter()
+        .map(|r| crate::models::AdminConversationItem {
+            id: r.id,
+            request_id: r.request_id,
+            created_at: r.created_at,
+            customer_id: r.customer_id,
+            customer_name: r.customer_name,
+            guard_id: r.guard_id,
+            guard_name: r.guard_name,
+            request_status: r.request_status,
+            message_count: r.message_count,
+            last_message: r.last_message,
+            last_message_at: r.last_message_at,
+            has_attachments: r.has_attachments,
+        })
+        .collect();
+
+    Ok(crate::models::AdminConversationsPage { data, total })
+}
