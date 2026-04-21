@@ -88,11 +88,22 @@ export function Header() {
     };
 
     const handleMarkAsRead = async (id: string) => {
+        // Optimistic flip — rollback on failure so the red badge reflects truth.
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
         try {
             await notificationApi.markAsRead(id);
-            setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
         } catch {
-            // Ignore
+            setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: false } : n));
+        }
+    };
+
+    const handleMarkAllAsRead = async () => {
+        const previous = notifications;
+        setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+        try {
+            await notificationApi.markAllAsRead();
+        } catch {
+            setNotifications(previous);
         }
     };
 
@@ -179,6 +190,14 @@ export function Header() {
                                         </span>
                                     )}
                                 </div>
+                                {unreadCount > 0 && (
+                                    <button
+                                        onClick={handleMarkAllAsRead}
+                                        className="text-xs font-medium text-primary hover:text-emerald-700 transition-colors"
+                                    >
+                                        {locale === "th" ? "อ่านทั้งหมด" : "Mark all read"}
+                                    </button>
+                                )}
                             </div>
 
                             <div className="max-h-[400px] overflow-y-auto divide-y divide-slate-100">

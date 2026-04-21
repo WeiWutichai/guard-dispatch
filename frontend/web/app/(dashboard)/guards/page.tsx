@@ -526,7 +526,10 @@ export default function GuardsPage() {
                             <span className="text-slate-400">
                               {t.guards.modal.accountNumber}:
                             </span>{" "}
-                            {guardProfile.account_number}
+                            <span className="font-mono tracking-wider">
+                              {"*".repeat(Math.max(0, guardProfile.account_number.length - 4)) +
+                                guardProfile.account_number.slice(-4)}
+                            </span>
                           </div>
                         )}
                         {guardProfile.account_name && (
