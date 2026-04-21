@@ -16,11 +16,21 @@ import {
   ShieldX,
   Loader2,
   X,
+  Activity,
+  UserCheck,
+  XCircle,
+  Briefcase,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
 import { useAuth } from "@/components/AuthProvider";
-import { trackingApi, batchReverseGeocode, type GuardLocationWithName } from "@/lib/api";
+import {
+  trackingApi,
+  batchReverseGeocode,
+  bookingApi,
+  type GuardLocationWithName,
+  type GuardRequest,
+} from "@/lib/api";
 import { type DisplayGuard } from "./types";
 
 // Lazy-load the map component (Leaflet requires window/DOM)
@@ -84,6 +94,7 @@ export default function MapPage() {
   const { t } = useLanguage();
   const { user, isLoading: authLoading } = useAuth();
   const [guards, setGuards] = useState<DisplayGuard[]>([]);
+  const [requests, setRequests] = useState<GuardRequest[]>([]);
   const [selectedGuard, setSelectedGuard] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<
     "all" | "active" | "idle" | "offline"
@@ -131,11 +142,26 @@ export default function MapPage() {
     }
   }, []);
 
+  const fetchRequests = useCallback(async () => {
+    try {
+      const data = await bookingApi.listRequests({ limit: 100 });
+      setRequests(data);
+    } catch {
+      // Tolerate API error — overview cards just show 0s.
+    }
+  }, []);
+
+  const refresh = useCallback(() => {
+    fetchLocations();
+    fetchRequests();
+  }, [fetchLocations, fetchRequests]);
+
   useEffect(() => {
     // Initial fetch + auto-refresh every 30 seconds
     let cancelled = false;
     const load = async () => {
-      if (!cancelled) await fetchLocations();
+      if (cancelled) return;
+      await Promise.all([fetchLocations(), fetchRequests()]);
     };
     load();
     const interval = setInterval(load, 30_000);
@@ -143,7 +169,7 @@ export default function MapPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [fetchLocations]);
+  }, [fetchLocations, fetchRequests]);
 
   const filteredGuards = useMemo(() => {
     const query = debouncedSearch.toLowerCase().trim();
@@ -169,6 +195,29 @@ export default function MapPage() {
     }
     return { total: guards.length, active, idle, offline };
   }, [guards]);
+
+  const bookingStats = useMemo(() => {
+    let pending = 0,
+      assigned = 0,
+      inProgress = 0,
+      completed = 0,
+      cancelled = 0;
+    for (const r of requests) {
+      if (r.status === "pending") pending++;
+      else if (r.status === "assigned") assigned++;
+      else if (r.status === "in_progress") inProgress++;
+      else if (r.status === "completed") completed++;
+      else if (r.status === "cancelled") cancelled++;
+    }
+    return {
+      total: requests.length,
+      pending,
+      assigned,
+      inProgress,
+      completed,
+      cancelled,
+    };
+  }, [requests]);
 
   const handleGuardSelect = useCallback(
     (guardId: string) => {
@@ -295,7 +344,7 @@ export default function MapPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={fetchLocations}
+            onClick={refresh}
             className="inline-flex items-center px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg font-medium text-sm hover:bg-slate-50 transition-colors"
           >
             <RefreshCw className="h-4 w-4 mr-2" />
@@ -311,57 +360,129 @@ export default function MapPage() {
         </div>
       </div>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-xl border border-slate-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-slate-900">
-                {stats.total}
-              </p>
-              <p className="text-sm text-slate-500">{t.map.totalOnMap}</p>
+      {/* Booking Summary */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-700">
+            {t.map.bookingSummary}
+          </h2>
+          <span className="text-xs text-slate-500">
+            {t.map.totalRequests}: <span className="font-semibold text-slate-900">{bookingStats.total}</span>
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-slate-700">{bookingStats.pending}</p>
+                <p className="text-sm text-slate-500">{t.map.requestPending}</p>
+              </div>
+              <div className="p-2 bg-slate-100 rounded-lg">
+                <Clock className="h-5 w-5 text-slate-600" />
+              </div>
             </div>
-            <div className="p-2 bg-slate-100 rounded-lg">
-              <Users className="h-5 w-5 text-slate-600" />
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-amber-600">{bookingStats.assigned}</p>
+                <p className="text-sm text-slate-500">{t.map.requestAssigned}</p>
+              </div>
+              <div className="p-2 bg-amber-50 rounded-lg">
+                <UserCheck className="h-5 w-5 text-amber-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-blue-600">{bookingStats.inProgress}</p>
+                <p className="text-sm text-slate-500">{t.map.requestInProgress}</p>
+              </div>
+              <div className="p-2 bg-blue-50 rounded-lg">
+                <Activity className="h-5 w-5 text-blue-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-emerald-600">{bookingStats.completed}</p>
+                <p className="text-sm text-slate-500">{t.map.requestCompleted}</p>
+              </div>
+              <div className="p-2 bg-emerald-50 rounded-lg">
+                <Briefcase className="h-5 w-5 text-emerald-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-red-600">{bookingStats.cancelled}</p>
+                <p className="text-sm text-slate-500">{t.map.requestCancelled}</p>
+              </div>
+              <div className="p-2 bg-red-50 rounded-lg">
+                <XCircle className="h-5 w-5 text-red-600" />
+              </div>
             </div>
           </div>
         </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-emerald-600">
-                {stats.active}
-              </p>
-              <p className="text-sm text-slate-500">{t.map.active}</p>
+      </section>
+
+      {/* Guard Status */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-slate-700">{t.map.guardStatus}</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-slate-900">
+                  {stats.total}
+                </p>
+                <p className="text-sm text-slate-500">{t.map.totalOnMap}</p>
+              </div>
+              <div className="p-2 bg-slate-100 rounded-lg">
+                <Users className="h-5 w-5 text-slate-600" />
+              </div>
             </div>
-            <div className="p-2 bg-emerald-50 rounded-lg">
-              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-emerald-600">
+                  {stats.active}
+                </p>
+                <p className="text-sm text-slate-500">{t.map.active}</p>
+              </div>
+              <div className="p-2 bg-emerald-50 rounded-lg">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-amber-600">{stats.idle}</p>
+                <p className="text-sm text-slate-500">{t.map.idle}</p>
+              </div>
+              <div className="p-2 bg-amber-50 rounded-lg">
+                <Clock className="h-5 w-5 text-amber-600" />
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-2xl font-bold text-red-600">{stats.offline}</p>
+                <p className="text-sm text-slate-500">{t.map.offline}</p>
+              </div>
+              <div className="p-2 bg-red-50 rounded-lg">
+                <ShieldX className="h-5 w-5 text-red-600" />
+              </div>
             </div>
           </div>
         </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-amber-600">{stats.idle}</p>
-              <p className="text-sm text-slate-500">{t.map.idle}</p>
-            </div>
-            <div className="p-2 bg-amber-50 rounded-lg">
-              <Clock className="h-5 w-5 text-amber-600" />
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-red-600">{stats.offline}</p>
-              <p className="text-sm text-slate-500">{t.map.offline}</p>
-            </div>
-            <div className="p-2 bg-red-50 rounded-lg">
-              <ShieldX className="h-5 w-5 text-red-600" />
-            </div>
-          </div>
-        </div>
-      </div>
+      </section>
 
       {/* Search bar */}
       <div className="bg-white rounded-xl border border-slate-200 p-4">

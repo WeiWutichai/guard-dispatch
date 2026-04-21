@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
   Map as MapIcon,
   Users,
   Users2,
@@ -27,7 +26,6 @@ export function Sidebar() {
   const { user } = useAuth();
 
   const navigation = [
-    { name: t.nav.dashboard, href: "/", icon: LayoutDashboard },
     { name: t.nav.liveMap, href: "/map", icon: MapIcon },
     { name: t.nav.applicants, href: "/applicants", icon: UserPlus },
     { name: t.nav.guards, href: "/guards", icon: Users },
