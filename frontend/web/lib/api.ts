@@ -697,6 +697,32 @@ export interface AuditLogsPage {
   total: number;
 }
 
+// Document expiry dashboard — GET /auth/admin/guard-profiles/expiring
+export interface ExpiringDocsItem {
+  user_id: string;
+  full_name: string;
+  phone: string;
+  avatar_url: string | null;
+  /** ISO date (YYYY-MM-DD) — earliest expiry across the 5 docs. */
+  earliest_expiry: string;
+  /** Negative = already expired. */
+  days_until_expiry: number;
+  id_card_expiry: string | null;
+  security_license_expiry: string | null;
+  training_cert_expiry: string | null;
+  criminal_check_expiry: string | null;
+  driver_license_expiry: string | null;
+}
+
+export interface ExpiringDocsPage {
+  data: ExpiringDocsItem[];
+  total: number;
+  /** Across all guards, not limited by the query window. */
+  expired_count: number;
+  /** Guards with at least one doc expiring in the next 30 days. */
+  expiring_soon_count: number;
+}
+
 export const auditApi = {
   list: (params?: {
     search?: string;
@@ -718,6 +744,20 @@ export const auditApi = {
     const qs = q.toString();
     return apiFetch<AuditLogsPage>(
       `/auth/admin/audit-logs${qs ? `?${qs}` : ""}`
+    );
+  },
+};
+
+export const expiringDocsApi = {
+  list: (params?: { within_days?: number; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.within_days !== undefined)
+      q.set("within_days", String(params.within_days));
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<ExpiringDocsPage>(
+      `/auth/admin/guard-profiles/expiring${qs ? `?${qs}` : ""}`
     );
   },
 };

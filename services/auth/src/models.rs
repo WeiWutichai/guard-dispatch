@@ -523,6 +523,72 @@ impl From<GuardProfileResponse> for PublicGuardProfileResponse {
 }
 
 // =============================================================================
+// Document Expiry dashboard (admin)
+// =============================================================================
+
+/// Query params for `GET /admin/guard-profiles/expiring`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListExpiringDocsQuery {
+    /// Only return guards with at least one doc expiring within N days.
+    /// Default = 30. Pass a big number (e.g. 999999) to include already-expired docs only.
+    pub within_days: Option<i32>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// One expiring-document row per guard.
+/// Only the expiry fields that fall within `within_days` (or are already past)
+/// are populated — other fields are `None` so the admin UI can highlight
+/// just the at-risk documents.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExpiringDocsItem {
+    pub user_id: Uuid,
+    pub full_name: String,
+    pub phone: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    /// Earliest expiry across the 5 docs (for sort). Date only.
+    pub earliest_expiry: chrono::NaiveDate,
+    /// Days until the earliest expiry. Negative = already expired.
+    pub days_until_expiry: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_card_expiry: Option<chrono::NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_license_expiry: Option<chrono::NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub training_cert_expiry: Option<chrono::NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub criminal_check_expiry: Option<chrono::NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver_license_expiry: Option<chrono::NaiveDate>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExpiringDocsPage {
+    pub data: Vec<ExpiringDocsItem>,
+    pub total: i64,
+    /// Count of rows where `days_until_expiry < 0` (already expired).
+    pub expired_count: i64,
+    /// Count of rows expiring within the next 30 days (regardless of query param).
+    pub expiring_soon_count: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, sqlx::FromRow)]
+pub struct ExpiringDocsRow {
+    pub user_id: Uuid,
+    pub full_name: String,
+    pub phone: String,
+    pub avatar_url: Option<String>,
+    pub id_card_expiry: Option<chrono::NaiveDate>,
+    pub security_license_expiry: Option<chrono::NaiveDate>,
+    pub training_cert_expiry: Option<chrono::NaiveDate>,
+    pub criminal_check_expiry: Option<chrono::NaiveDate>,
+    pub driver_license_expiry: Option<chrono::NaiveDate>,
+    pub earliest_expiry: chrono::NaiveDate,
+}
+
+// =============================================================================
 // Customer Profile DTOs
 // =============================================================================
 
