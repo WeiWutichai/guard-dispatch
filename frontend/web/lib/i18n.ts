@@ -14,9 +14,7 @@ type TranslationStructure = {
   customers: Record<string, any>;
   tasks: Record<string, string>;
   map: Record<string, string>;
-  recruitment: Record<string, string>;
   reports: Record<string, string>;
-  automation: Record<string, string>;
   settings: Record<string, string>;
   profile: Record<string, string>;
 };
@@ -55,9 +53,7 @@ export const translations = {
       pricing: "กำหนดราคา",
       activity: "Activity Log",
       tasks: "จัดการงาน",
-      recruitment: "สรรหาบุคลากร",
       reports: "รายงาน",
-      automation: "กฎอัตโนมัติ",
       settings: "ตั้งค่า",
     },
 
@@ -318,39 +314,6 @@ export const translations = {
     },
 
     // Recruitment
-    recruitment: {
-      title: "ไปป์ไลน์สรรหาบุคลากร",
-      subtitle: "ติดตามและจัดการใบสมัคร",
-      addCandidate: "เพิ่มผู้สมัคร",
-      applied: "สมัครแล้ว",
-      screening: "คัดกรอง",
-      interview: "สัมภาษณ์",
-      evaluation: "ประเมินผล",
-      offer: "เสนองาน",
-      hired: "รับเข้าทำงาน",
-      rejected: "ปฏิเสธ",
-      searchPlaceholder: "ค้นหาผู้สมัคร...",
-      view: "มุมมอง",
-      pipeline: "ไปป์ไลน์",
-      list: "รายการ",
-      candidate: "ผู้สมัคร",
-      position: "ตำแหน่ง",
-      stage: "ขั้นตอน",
-      avgScore: "คะแนนเฉลี่ย",
-      notEvaluated: "ยังไม่ประเมิน",
-      viewDetails: "ดูรายละเอียด",
-      personality: "บุคลิกภาพ",
-      communication: "การสื่อสาร",
-      knowledge: "ความรู้",
-      problemSolving: "การแก้ปัญหา",
-      moveToNextStage: "ย้ายไปขั้นตอนถัดไป",
-      scheduleInterview: "นัดสัมภาษณ์",
-      reject: "ปฏิเสธ",
-      addEvaluation: "เพิ่มการประเมิน",
-      noScoresYet: "ยังไม่มีคะแนนประเมิน",
-      interviewEvaluation: "การประเมินการสัมภาษณ์",
-    },
-
     // Reports
     reports: {
       title: "รายงานและการวิเคราะห์",
@@ -381,33 +344,6 @@ export const translations = {
       site: "สถานที่",
       completionRate: "อัตราความสำเร็จ",
       revenue: "รายได้",
-    },
-
-    // Automation
-    automation: {
-      title: "กฎอัตโนมัติ",
-      subtitle: "กำหนดค่าตรรกะ if-then สำหรับการตอบสนองอัตโนมัติ",
-      createRule: "สร้างกฎ",
-      totalRules: "กฎทั้งหมด",
-      active: "ใช้งาน",
-      paused: "หยุดชั่วคราว",
-      drafts: "แบบร่าง",
-      totalTriggers: "ทริกเกอร์ทั้งหมด",
-      status: "สถานะ",
-      if: "ถ้า",
-      then: "แล้ว",
-      timeBased: "ตามเวลา",
-      eventBased: "ตามเหตุการณ์",
-      conditionBased: "ตามเงื่อนไข",
-      pushNotification: "การแจ้งเตือนแบบพุช",
-      email: "อีเมล",
-      sms: "SMS",
-      createTaskAction: "สร้างงาน",
-      emergencyAlert: "แจ้งเตือนฉุกเฉิน",
-      triggers: "ทริกเกอร์",
-      lastTriggered: "ทริกเกอร์ล่าสุด",
-      noRulesFound: "ไม่พบกฎอัตโนมัติ",
-      createFirstRule: "สร้างกฎแรกเพื่อเริ่มต้น",
     },
 
     // Settings
@@ -495,9 +431,7 @@ export const translations = {
       pricing: "Pricing",
       activity: "Activity Log",
       tasks: "Task Management",
-      recruitment: "Recruitment",
       reports: "Reports",
-      automation: "Automation Rules",
       settings: "Settings",
     },
 
@@ -758,39 +692,6 @@ export const translations = {
     },
 
     // Recruitment
-    recruitment: {
-      title: "Recruitment Pipeline",
-      subtitle: "Track and manage candidate applications",
-      addCandidate: "Add Candidate",
-      applied: "Applied",
-      screening: "Screening",
-      interview: "Interview",
-      evaluation: "Evaluation",
-      offer: "Offer",
-      hired: "Hired",
-      rejected: "Rejected",
-      searchPlaceholder: "Search candidates...",
-      view: "View",
-      pipeline: "Pipeline",
-      list: "List",
-      candidate: "Candidate",
-      position: "Position",
-      stage: "Stage",
-      avgScore: "Avg Score",
-      notEvaluated: "Not evaluated",
-      viewDetails: "View Details",
-      personality: "Personality",
-      communication: "Communication",
-      knowledge: "Knowledge",
-      problemSolving: "Problem Solving",
-      moveToNextStage: "Move to Next Stage",
-      scheduleInterview: "Schedule Interview",
-      reject: "Reject",
-      addEvaluation: "Add Evaluation",
-      noScoresYet: "No evaluation scores yet",
-      interviewEvaluation: "Interview Evaluation",
-    },
-
     // Reports
     reports: {
       title: "Reports & Analytics",
@@ -821,33 +722,6 @@ export const translations = {
       site: "Site",
       completionRate: "Completion Rate",
       revenue: "Revenue",
-    },
-
-    // Automation
-    automation: {
-      title: "Automation Rules",
-      subtitle: "Configure if-then logic for automated responses",
-      createRule: "Create Rule",
-      totalRules: "Total Rules",
-      active: "Active",
-      paused: "Paused",
-      drafts: "Drafts",
-      totalTriggers: "Total Triggers",
-      status: "Status",
-      if: "If",
-      then: "Then",
-      timeBased: "Time-based",
-      eventBased: "Event-based",
-      conditionBased: "Condition-based",
-      pushNotification: "Push Notification",
-      email: "Email",
-      sms: "SMS",
-      createTaskAction: "Create Task",
-      emergencyAlert: "Emergency Alert",
-      triggers: "triggers",
-      lastTriggered: "Last",
-      noRulesFound: "No automation rules found",
-      createFirstRule: "Create your first rule to get started",
     },
 
     // Settings

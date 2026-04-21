@@ -287,6 +287,46 @@ pub struct PaginatedUsers {
 }
 
 // =============================================================================
+// Audit Log (admin)
+// =============================================================================
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListAuditLogsQuery {
+    /// Fuzzy search across `action` (e.g. `"login"`, `"POST /requests"`).
+    pub search: Option<String>,
+    /// Filter by first path segment (e.g. `"auth"`, `"booking"`).
+    pub entity_type: Option<String>,
+    /// Filter by a specific user_id (UUID).
+    pub user_id: Option<Uuid>,
+    /// Inclusive lower bound on `created_at` (RFC 3339).
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    /// Inclusive upper bound on `created_at` (RFC 3339).
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuditLogItem {
+    pub id: Uuid,
+    pub user_id: Option<Uuid>,
+    /// Enriched from auth.users when user_id is resolvable.
+    pub user_name: Option<String>,
+    pub user_role: Option<String>,
+    pub action: String,
+    pub entity_type: String,
+    pub entity_id: Option<Uuid>,
+    pub ip_address: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuditLogsPage {
+    pub data: Vec<AuditLogItem>,
+    pub total: i64,
+}
+
+// =============================================================================
 // Profile Token Reissue DTOs
 // =============================================================================
 

@@ -570,6 +570,30 @@ pub async fn list_users(
 }
 
 #[utoipa::path(
+    get,
+    path = "/admin/audit-logs",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(crate::models::ListAuditLogsQuery),
+    responses(
+        (status = 200, description = "Paginated audit log entries", body = crate::models::AuditLogsPage),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin access required", body = ErrorBody),
+    ),
+)]
+pub async fn list_audit_logs(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<crate::models::ListAuditLogsQuery>,
+) -> Result<Json<ApiResponse<crate::models::AuditLogsPage>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+    let result = crate::service::list_audit_logs(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(result)))
+}
+
+#[utoipa::path(
     patch,
     path = "/users/{id}/approval",
     tag = "Admin",
