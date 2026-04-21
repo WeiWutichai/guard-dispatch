@@ -1344,6 +1344,153 @@ pub async fn list_audit_logs(
 }
 
 // =============================================================================
+// Document Expiry Dashboard (Admin)
+// =============================================================================
+
+/// List approved guards with at least one document expiring within `within_days`
+/// (or already expired). Ordered by earliest expiry ascending so the admin
+/// sees the most urgent at the top.
+pub async fn list_expiring_docs(
+    db: &PgPool,
+    query: crate::models::ListExpiringDocsQuery,
+) -> Result<crate::models::ExpiringDocsPage, AppError> {
+    let within_days = query.within_days.unwrap_or(30).clamp(1, 3650);
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Only look at approved guards with active accounts — don't nag about
+    // rejected/pending applicants whose paperwork doesn't matter yet.
+    let rows = sqlx::query_as::<_, crate::models::ExpiringDocsRow>(
+        r#"
+        SELECT
+            u.id AS user_id,
+            u.full_name,
+            u.phone,
+            u.avatar_url,
+            gp.id_card_expiry,
+            gp.security_license_expiry,
+            gp.training_cert_expiry,
+            gp.criminal_check_expiry,
+            gp.driver_license_expiry,
+            LEAST(
+                COALESCE(gp.id_card_expiry, DATE '9999-12-31'),
+                COALESCE(gp.security_license_expiry, DATE '9999-12-31'),
+                COALESCE(gp.training_cert_expiry, DATE '9999-12-31'),
+                COALESCE(gp.criminal_check_expiry, DATE '9999-12-31'),
+                COALESCE(gp.driver_license_expiry, DATE '9999-12-31')
+            ) AS earliest_expiry
+        FROM auth.users u
+        JOIN auth.guard_profiles gp ON gp.user_id = u.id
+        WHERE u.role = 'guard'
+          AND u.approval_status = 'approved'
+          AND u.is_active = true
+          AND LEAST(
+            COALESCE(gp.id_card_expiry, DATE '9999-12-31'),
+            COALESCE(gp.security_license_expiry, DATE '9999-12-31'),
+            COALESCE(gp.training_cert_expiry, DATE '9999-12-31'),
+            COALESCE(gp.criminal_check_expiry, DATE '9999-12-31'),
+            COALESCE(gp.driver_license_expiry, DATE '9999-12-31')
+          ) <= (CURRENT_DATE + ($1::integer || ' days')::interval)
+        ORDER BY earliest_expiry ASC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(within_days)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(db)
+    .await?;
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM auth.users u
+        JOIN auth.guard_profiles gp ON gp.user_id = u.id
+        WHERE u.role = 'guard'
+          AND u.approval_status = 'approved'
+          AND u.is_active = true
+          AND LEAST(
+            COALESCE(gp.id_card_expiry, DATE '9999-12-31'),
+            COALESCE(gp.security_license_expiry, DATE '9999-12-31'),
+            COALESCE(gp.training_cert_expiry, DATE '9999-12-31'),
+            COALESCE(gp.criminal_check_expiry, DATE '9999-12-31'),
+            COALESCE(gp.driver_license_expiry, DATE '9999-12-31')
+          ) <= (CURRENT_DATE + ($1::integer || ' days')::interval)
+        "#,
+    )
+    .bind(within_days)
+    .fetch_one(db)
+    .await?;
+
+    // Always compute these summary counters against the fixed 30-day window
+    // so the admin dashboard cards don't jump around when the query filter
+    // changes.
+    #[derive(sqlx::FromRow)]
+    struct Counters {
+        expired: i64,
+        expiring_soon: i64,
+    }
+    let counters: Counters = sqlx::query_as(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE LEAST(
+                COALESCE(gp.id_card_expiry, DATE '9999-12-31'),
+                COALESCE(gp.security_license_expiry, DATE '9999-12-31'),
+                COALESCE(gp.training_cert_expiry, DATE '9999-12-31'),
+                COALESCE(gp.criminal_check_expiry, DATE '9999-12-31'),
+                COALESCE(gp.driver_license_expiry, DATE '9999-12-31')
+            ) < CURRENT_DATE) AS expired,
+            COUNT(*) FILTER (WHERE LEAST(
+                COALESCE(gp.id_card_expiry, DATE '9999-12-31'),
+                COALESCE(gp.security_license_expiry, DATE '9999-12-31'),
+                COALESCE(gp.training_cert_expiry, DATE '9999-12-31'),
+                COALESCE(gp.criminal_check_expiry, DATE '9999-12-31'),
+                COALESCE(gp.driver_license_expiry, DATE '9999-12-31')
+            ) BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days') AS expiring_soon
+        FROM auth.users u
+        JOIN auth.guard_profiles gp ON gp.user_id = u.id
+        WHERE u.role = 'guard'
+          AND u.approval_status = 'approved'
+          AND u.is_active = true
+        "#,
+    )
+    .fetch_one(db)
+    .await?;
+
+    let today = chrono::Utc::now().date_naive();
+    let data = rows
+        .into_iter()
+        .map(|r| {
+            let days_until_expiry = (r.earliest_expiry - today).num_days() as i32;
+            // Null out fields that aren't at-risk so the UI can highlight
+            // just the dates that matter for this row.
+            let horizon = today + chrono::Duration::days(within_days as i64);
+            let at_risk = |d: Option<chrono::NaiveDate>| d.filter(|dd| *dd <= horizon);
+            crate::models::ExpiringDocsItem {
+                user_id: r.user_id,
+                full_name: r.full_name,
+                phone: r.phone,
+                avatar_url: r.avatar_url,
+                earliest_expiry: r.earliest_expiry,
+                days_until_expiry,
+                id_card_expiry: at_risk(r.id_card_expiry),
+                security_license_expiry: at_risk(r.security_license_expiry),
+                training_cert_expiry: at_risk(r.training_cert_expiry),
+                criminal_check_expiry: at_risk(r.criminal_check_expiry),
+                driver_license_expiry: at_risk(r.driver_license_expiry),
+            }
+        })
+        .collect();
+
+    Ok(crate::models::ExpiringDocsPage {
+        data,
+        total,
+        expired_count: counters.expired,
+        expiring_soon_count: counters.expiring_soon,
+    })
+}
+
+// =============================================================================
 // Update Approval Status (Admin)
 // =============================================================================
 

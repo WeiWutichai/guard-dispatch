@@ -594,6 +594,30 @@ pub async fn list_audit_logs(
 }
 
 #[utoipa::path(
+    get,
+    path = "/admin/guard-profiles/expiring",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(crate::models::ListExpiringDocsQuery),
+    responses(
+        (status = 200, description = "Approved guards with expiring documents", body = crate::models::ExpiringDocsPage),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin access required", body = ErrorBody),
+    ),
+)]
+pub async fn list_expiring_docs(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<crate::models::ListExpiringDocsQuery>,
+) -> Result<Json<ApiResponse<crate::models::ExpiringDocsPage>>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+    let result = crate::service::list_expiring_docs(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(result)))
+}
+
+#[utoipa::path(
     patch,
     path = "/users/{id}/approval",
     tag = "Admin",

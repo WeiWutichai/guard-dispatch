@@ -42,6 +42,7 @@ use crate::state::AppState;
         handlers::register_with_otp,
         handlers::list_users,
         handlers::list_audit_logs,
+        handlers::list_expiring_docs,
         handlers::update_approval_status,
         handlers::get_guard_profile,
         handlers::check_status,
@@ -79,6 +80,8 @@ use crate::state::AppState;
         models::PaginatedUsers,
         models::AuditLogItem,
         models::AuditLogsPage,
+        models::ExpiringDocsItem,
+        models::ExpiringDocsPage,
         shared::models::UserRole,
         shared::models::ApprovalStatus,
         models::GuardProfileResponse,
@@ -267,7 +270,11 @@ async fn main() -> anyhow::Result<()> {
             "/admin/customer-profile/{user_id}/approval",
             patch(handlers::update_customer_approval),
         )
-        .route("/admin/audit-logs", get(handlers::list_audit_logs));
+        .route("/admin/audit-logs", get(handlers::list_audit_logs))
+        .route(
+            "/admin/guard-profiles/expiring",
+            get(handlers::list_expiring_docs),
+        );
     // Only mount Swagger UI when ENABLE_SWAGGER is set (disabled in production)
     let app = if std::env::var("ENABLE_SWAGGER").is_ok() {
         let swagger =
