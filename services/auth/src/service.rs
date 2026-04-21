@@ -1235,6 +1235,115 @@ pub async fn list_users(db: &PgPool, query: ListUsersQuery) -> Result<PaginatedU
 }
 
 // =============================================================================
+// Audit Log (Admin)
+// =============================================================================
+
+pub async fn list_audit_logs(
+    db: &PgPool,
+    query: crate::models::ListAuditLogsQuery,
+) -> Result<crate::models::AuditLogsPage, AppError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 500);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    let search_pattern = query
+        .search
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{}%", escape_ilike(s)));
+
+    let entity_filter = query
+        .entity_type
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned();
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: Uuid,
+        user_id: Option<Uuid>,
+        user_name: Option<String>,
+        user_role: Option<String>,
+        action: String,
+        entity_type: String,
+        entity_id: Option<Uuid>,
+        // INET maps to sqlx::types::ipnetwork::IpNetwork but we serialize as
+        // text to keep the API response stable + avoid pulling the ipnetwork
+        // dep through to TS. Cast to TEXT in the query.
+        ip_address: Option<String>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    let rows = sqlx::query_as::<_, Row>(
+        r#"
+        SELECT
+            a.id,
+            a.user_id,
+            u.full_name AS user_name,
+            u.role::text AS user_role,
+            a.action,
+            a.entity_type,
+            a.entity_id,
+            host(a.ip_address) AS ip_address,
+            a.created_at
+        FROM audit.audit_logs a
+        LEFT JOIN auth.users u ON u.id = a.user_id
+        WHERE ($1::text IS NULL OR a.entity_type = $1)
+          AND ($2::uuid IS NULL OR a.user_id = $2)
+          AND ($3::timestamptz IS NULL OR a.created_at >= $3)
+          AND ($4::timestamptz IS NULL OR a.created_at <= $4)
+          AND ($5::text IS NULL OR a.action ILIKE $5)
+        ORDER BY a.created_at DESC
+        LIMIT $6 OFFSET $7
+        "#,
+    )
+    .bind(&entity_filter)
+    .bind(query.user_id)
+    .bind(query.from)
+    .bind(query.to)
+    .bind(&search_pattern)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(db)
+    .await?;
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM audit.audit_logs a
+        WHERE ($1::text IS NULL OR a.entity_type = $1)
+          AND ($2::uuid IS NULL OR a.user_id = $2)
+          AND ($3::timestamptz IS NULL OR a.created_at >= $3)
+          AND ($4::timestamptz IS NULL OR a.created_at <= $4)
+          AND ($5::text IS NULL OR a.action ILIKE $5)
+        "#,
+    )
+    .bind(&entity_filter)
+    .bind(query.user_id)
+    .bind(query.from)
+    .bind(query.to)
+    .bind(&search_pattern)
+    .fetch_one(db)
+    .await?;
+
+    let data = rows
+        .into_iter()
+        .map(|r| crate::models::AuditLogItem {
+            id: r.id,
+            user_id: r.user_id,
+            user_name: r.user_name,
+            user_role: r.user_role,
+            action: r.action,
+            entity_type: r.entity_type,
+            entity_id: r.entity_id,
+            ip_address: r.ip_address,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(crate::models::AuditLogsPage { data, total })
+}
+
+// =============================================================================
 // Update Approval Status (Admin)
 // =============================================================================
 

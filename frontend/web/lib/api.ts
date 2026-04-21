@@ -659,6 +659,52 @@ export interface WalletSummaryResponse {
   processed_refunds_total: number;
 }
 
+// ---------------------------------------------------------------------------
+// Admin Audit Log (reads audit.audit_logs)
+// ---------------------------------------------------------------------------
+
+export interface AuditLogItem {
+  id: string;
+  user_id: string | null;
+  user_name: string | null;
+  user_role: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface AuditLogsPage {
+  data: AuditLogItem[];
+  total: number;
+}
+
+export const auditApi = {
+  list: (params?: {
+    search?: string;
+    entity_type?: string;
+    user_id?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.search) q.set("search", params.search);
+    if (params?.entity_type) q.set("entity_type", params.entity_type);
+    if (params?.user_id) q.set("user_id", params.user_id);
+    if (params?.from) q.set("from", params.from);
+    if (params?.to) q.set("to", params.to);
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    if (params?.offset !== undefined) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<AuditLogsPage>(
+      `/auth/admin/audit-logs${qs ? `?${qs}` : ""}`
+    );
+  },
+};
+
 export const walletApi = {
   summary: () =>
     apiFetch<WalletSummaryResponse>("/booking/admin/wallet/summary"),

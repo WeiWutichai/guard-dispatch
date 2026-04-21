@@ -15,7 +15,7 @@ import {
   Star,
   Wallet,
   DollarSign,
-  Activity
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "./LanguageProvider";
@@ -36,9 +36,7 @@ export function Sidebar() {
     { name: t.nav.wallet, href: "/wallet", icon: Wallet },
     { name: t.nav.pricing, href: "/pricing", icon: DollarSign },
     { name: t.nav.tasks, href: "/tasks", icon: Briefcase },
-    { name: t.nav.recruitment, href: "/recruitment", icon: UserPlus },
     { name: t.nav.reports, href: "/reports", icon: FileText },
-    { name: t.nav.automation, href: "/automation", icon: ShieldCheck },
     { name: t.nav.activity, href: "/activity", icon: Activity },
     { name: t.nav.settings, href: "/settings", icon: Settings },
   ];
