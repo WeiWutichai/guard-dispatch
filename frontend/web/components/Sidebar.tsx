@@ -28,6 +28,7 @@ export function Sidebar() {
 
   const navigation = [
     { name: t.nav.liveMap, href: "/map", icon: MapIcon },
+    { name: t.nav.operations, href: "/operations", icon: Activity },
     { name: t.nav.applicants, href: "/applicants", icon: UserPlus },
     { name: t.nav.guards, href: "/guards", icon: Users },
     { name: t.nav.expiringDocs, href: "/expiring", icon: ShieldAlert },

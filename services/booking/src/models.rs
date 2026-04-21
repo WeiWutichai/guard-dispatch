@@ -430,6 +430,85 @@ pub struct AdminPaymentsPage {
     pub total: i64,
 }
 
+// =============================================================================
+// Admin — Active Operations dashboard
+// =============================================================================
+
+/// One active assignment (in-flight job) for the admin ops view.
+/// "Active" = status IN (pending_acceptance, accepted, en_route, arrived, pending_completion)
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminActiveOpItem {
+    pub assignment_id: Uuid,
+    pub request_id: Uuid,
+    pub status: String,
+    pub urgency: String,
+    pub customer_id: Uuid,
+    pub customer_name: Option<String>,
+    pub guard_id: Uuid,
+    pub guard_name: Option<String>,
+    pub guard_phone: Option<String>,
+    pub guard_avatar_url: Option<String>,
+    pub address: String,
+    pub location_lat: f64,
+    pub location_lng: f64,
+    pub scheduled_start: DateTime<Utc>,
+    pub booked_hours: Option<i32>,
+    pub assigned_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    /// Latest guard GPS snapshot (may be stale — `gps_recorded_at` tells you how old).
+    pub guard_lat: Option<f64>,
+    pub guard_lng: Option<f64>,
+    pub guard_is_online: Option<bool>,
+    pub gps_recorded_at: Option<DateTime<Utc>>,
+    /// How many hourly reports have been submitted so far.
+    pub progress_reports_count: i64,
+    /// The highest `hour_number` submitted (null if none yet).
+    pub latest_hour_reported: Option<i32>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminActiveOpsResponse {
+    pub data: Vec<AdminActiveOpItem>,
+    pub total: i64,
+    /// Rows whose status is still pending_acceptance and scheduled_start is in the past
+    /// by more than 5 minutes — guard hasn't responded to a booking that's already due.
+    pub awaiting_acceptance: i64,
+    /// Rows whose status is accepted or en_route but scheduled_start has passed — guard
+    /// accepted but didn't show up (or didn't tap "Start").
+    pub late_to_start: i64,
+    /// Rows whose `started_at + booked_hours < now` — guard is working overtime
+    /// and hasn't submitted for customer review.
+    pub overdue: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, sqlx::FromRow)]
+pub struct AdminActiveOpRow {
+    pub assignment_id: Uuid,
+    pub request_id: Uuid,
+    pub status: String,
+    pub urgency: String,
+    pub customer_id: Uuid,
+    pub customer_name: Option<String>,
+    pub guard_id: Uuid,
+    pub guard_name: Option<String>,
+    pub guard_phone: Option<String>,
+    pub guard_avatar_url: Option<String>,
+    pub address: String,
+    pub location_lat: f64,
+    pub location_lng: f64,
+    pub scheduled_start: DateTime<Utc>,
+    pub booked_hours: Option<i32>,
+    pub assigned_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub guard_lat: Option<f64>,
+    pub guard_lng: Option<f64>,
+    pub guard_is_online: Option<bool>,
+    pub gps_recorded_at: Option<DateTime<Utc>>,
+    pub progress_reports_count: i64,
+    pub latest_hour_reported: Option<i32>,
+}
+
 /// High-level stats used by the admin wallet overview card.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WalletSummary {
