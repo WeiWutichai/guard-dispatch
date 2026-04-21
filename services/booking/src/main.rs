@@ -53,6 +53,7 @@ use crate::state::AppState;
         handlers::set_review_visibility,
         handlers::list_admin_payments,
         handlers::list_admin_refunds,
+        handlers::list_active_operations,
         handlers::get_admin_payment,
         handlers::process_refund,
         handlers::admin_wallet_summary,
@@ -98,6 +99,8 @@ use crate::state::AppState;
         models::AdminReviewStats,
         models::AdminPaymentItem,
         models::AdminPaymentsPage,
+        models::AdminActiveOpItem,
+        models::AdminActiveOpsResponse,
         models::ProcessRefundRequest,
         models::WalletSummary,
         models::ToggleReviewVisibilityDto,
@@ -248,6 +251,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/payments/{id}", get(handlers::get_admin_payment))
         .route("/admin/refunds", get(handlers::list_admin_refunds))
         .route("/admin/refunds/{id}/process", put(handlers::process_refund))
+        .route(
+            "/admin/active-operations",
+            get(handlers::list_active_operations),
+        )
         // Guard-specific endpoints
         .route("/guard/dashboard", get(handlers::guard_dashboard))
         .route("/guard/active-job", get(handlers::get_active_job))

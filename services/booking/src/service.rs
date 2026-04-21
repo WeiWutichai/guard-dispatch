@@ -2979,6 +2979,122 @@ pub async fn list_admin_refunds(
     Ok(crate::models::AdminPaymentsPage { data, total })
 }
 
+/// Active-operations dashboard — assignments currently in flight
+/// (status IN pending_acceptance, accepted, en_route, arrived, pending_completion),
+/// joined with latest guard GPS + progress-report counters.
+/// Cross-schema JOINs force runtime sqlx::query_as (can't prove at compile time).
+pub async fn list_active_operations(
+    db: &PgPool,
+) -> Result<crate::models::AdminActiveOpsResponse, AppError> {
+    let rows = sqlx::query_as::<_, crate::models::AdminActiveOpRow>(
+        r#"
+        SELECT
+            a.id AS assignment_id,
+            a.request_id,
+            a.status::text AS status,
+            gr.urgency::text AS urgency,
+            gr.customer_id,
+            cu.full_name AS customer_name,
+            a.guard_id,
+            gu.full_name AS guard_name,
+            gu.phone AS guard_phone,
+            gu.avatar_url AS guard_avatar_url,
+            gr.address,
+            gr.location_lat,
+            gr.location_lng,
+            gr.scheduled_start,
+            gr.booked_hours,
+            a.assigned_at,
+            a.started_at,
+            gl.lat AS guard_lat,
+            gl.lng AS guard_lng,
+            gl.is_online AS guard_is_online,
+            gl.recorded_at AS gps_recorded_at,
+            COALESCE(pr.reports_count, 0)::bigint AS progress_reports_count,
+            pr.latest_hour AS latest_hour_reported
+        FROM booking.assignments a
+        JOIN booking.guard_requests gr ON gr.id = a.request_id
+        LEFT JOIN auth.users gu ON gu.id = a.guard_id
+        LEFT JOIN auth.users cu ON cu.id = gr.customer_id
+        LEFT JOIN tracking.guard_locations gl ON gl.guard_id = a.guard_id
+        LEFT JOIN (
+            SELECT assignment_id,
+                   COUNT(*) AS reports_count,
+                   MAX(hour_number) AS latest_hour
+            FROM booking.progress_reports
+            GROUP BY assignment_id
+        ) pr ON pr.assignment_id = a.id
+        WHERE a.status IN (
+            'pending_acceptance', 'accepted', 'en_route', 'arrived', 'pending_completion'
+        )
+        ORDER BY gr.scheduled_start ASC
+        "#,
+    )
+    .fetch_all(db)
+    .await?;
+
+    // Counters are computed over the same result set so the dashboard
+    // cards reflect exactly what's in the list — no second round-trip.
+    let now = chrono::Utc::now();
+    let mut awaiting_acceptance = 0i64;
+    let mut late_to_start = 0i64;
+    let mut overdue = 0i64;
+
+    for r in &rows {
+        let late_threshold = r.scheduled_start + chrono::Duration::minutes(5);
+        match r.status.as_str() {
+            "pending_acceptance" if now > late_threshold => awaiting_acceptance += 1,
+            "accepted" | "en_route" if now > late_threshold => late_to_start += 1,
+            _ => {}
+        }
+
+        if let (Some(started), Some(booked_hours)) = (r.started_at, r.booked_hours) {
+            let expected_end = started + chrono::Duration::hours(booked_hours as i64);
+            if now > expected_end && r.status != "pending_completion" {
+                overdue += 1;
+            }
+        }
+    }
+
+    let data: Vec<crate::models::AdminActiveOpItem> = rows
+        .into_iter()
+        .map(|r| crate::models::AdminActiveOpItem {
+            assignment_id: r.assignment_id,
+            request_id: r.request_id,
+            status: r.status,
+            urgency: r.urgency,
+            customer_id: r.customer_id,
+            customer_name: r.customer_name,
+            guard_id: r.guard_id,
+            guard_name: r.guard_name,
+            guard_phone: r.guard_phone,
+            guard_avatar_url: r.guard_avatar_url,
+            address: r.address,
+            location_lat: r.location_lat,
+            location_lng: r.location_lng,
+            scheduled_start: r.scheduled_start,
+            booked_hours: r.booked_hours,
+            assigned_at: r.assigned_at,
+            started_at: r.started_at,
+            guard_lat: r.guard_lat,
+            guard_lng: r.guard_lng,
+            guard_is_online: r.guard_is_online,
+            gps_recorded_at: r.gps_recorded_at,
+            progress_reports_count: r.progress_reports_count,
+            latest_hour_reported: r.latest_hour_reported,
+        })
+        .collect();
+
+    let total = data.len() as i64;
+    Ok(crate::models::AdminActiveOpsResponse {
+        data,
+        total,
+        awaiting_acceptance,
+        late_to_start,
+        overdue,
+    })
+}
+
 /// Fetch a single admin payment row (used for the refund-detail modal).
 pub async fn get_admin_payment(
     db: &PgPool,

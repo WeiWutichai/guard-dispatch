@@ -748,6 +748,46 @@ export const auditApi = {
   },
 };
 
+// Active-operations dashboard — GET /booking/admin/active-operations
+export interface AdminActiveOpItem {
+  assignment_id: string;
+  request_id: string;
+  status: string;
+  urgency: string;
+  customer_id: string;
+  customer_name: string | null;
+  guard_id: string;
+  guard_name: string | null;
+  guard_phone: string | null;
+  guard_avatar_url: string | null;
+  address: string;
+  location_lat: number;
+  location_lng: number;
+  scheduled_start: string;
+  booked_hours: number | null;
+  assigned_at: string;
+  started_at: string | null;
+  guard_lat: number | null;
+  guard_lng: number | null;
+  guard_is_online: boolean | null;
+  gps_recorded_at: string | null;
+  progress_reports_count: number;
+  latest_hour_reported: number | null;
+}
+
+export interface AdminActiveOpsResponse {
+  data: AdminActiveOpItem[];
+  total: number;
+  awaiting_acceptance: number;
+  late_to_start: number;
+  overdue: number;
+}
+
+export const activeOpsApi = {
+  list: () =>
+    apiFetch<AdminActiveOpsResponse>("/booking/admin/active-operations"),
+};
+
 export const expiringDocsApi = {
   list: (params?: { within_days?: number; limit?: number; offset?: number }) => {
     const q = new URLSearchParams();

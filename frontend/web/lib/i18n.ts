@@ -43,6 +43,7 @@ export const translations = {
     // Navigation
     nav: {
       liveMap: "แผนที่สด",
+      operations: "การปฏิบัติการสด",
       guards: "พนักงานรักษาความปลอดภัย",
       expiringDocs: "เอกสารใกล้หมดอายุ",
       applicants: "ผู้สมัคร",
@@ -412,6 +413,7 @@ export const translations = {
     // Navigation
     nav: {
       liveMap: "Live Map",
+      operations: "Active Operations",
       guards: "Security Guards",
       expiringDocs: "Expiring Documents",
       applicants: "Applicants",

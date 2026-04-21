@@ -689,6 +689,29 @@ pub async fn list_admin_refunds(
     Ok(Json(ApiResponse::success(page)))
 }
 
+/// Admin-only active-operations dashboard.
+/// Lists every in-flight assignment (pending_acceptance → pending_completion)
+/// with the latest guard GPS snapshot + progress-report counters.
+#[utoipa::path(
+    get,
+    path = "/admin/active-operations",
+    tag = "Admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Active assignments with GPS + progress counters", body = crate::models::AdminActiveOpsResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Admin role required", body = ErrorBody),
+    ),
+)]
+pub async fn list_active_operations(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<crate::models::AdminActiveOpsResponse>>, AppError> {
+    require_admin(&user)?;
+    let page = crate::service::list_active_operations(&state.db).await?;
+    Ok(Json(ApiResponse::success(page)))
+}
+
 #[utoipa::path(
     get,
     path = "/admin/payments/{id}",
