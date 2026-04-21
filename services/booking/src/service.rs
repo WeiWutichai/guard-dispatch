@@ -2480,12 +2480,17 @@ async fn prorate_payment_in_tx(
     let (actual_hours, final_amount, refund_amount) =
         compute_proration(original_amount, booked_hours, actual_seconds);
 
+    // Set refund_status to 'pending' atomically when refund is owed (>0).
+    // Admin marks it 'processed' later via the /admin/refunds workflow
+    // (migration 042). If refund==0 the column stays NULL and the row
+    // doesn't show up in the admin refund queue.
     sqlx::query(
         r#"
         UPDATE booking.payments
         SET actual_hours_worked = $2,
             final_amount        = $3,
-            refund_amount       = $4
+            refund_amount       = $4,
+            refund_status       = CASE WHEN $4 > 0 THEN 'pending' ELSE refund_status END
         WHERE id = $1
         "#,
     )
@@ -2746,6 +2751,402 @@ pub async fn list_customer_receipts(
         .collect();
 
     Ok(crate::models::ReceiptsPage { data, total })
+}
+
+// =============================================================================
+// Admin refund workflow (migration 042)
+// =============================================================================
+
+#[derive(sqlx::FromRow)]
+struct AdminPaymentRow {
+    payment_id: Uuid,
+    request_id: Uuid,
+    assignment_id: Option<Uuid>,
+    customer_id: Uuid,
+    customer_name: Option<String>,
+    guard_id: Option<Uuid>,
+    guard_name: Option<String>,
+    service_address: String,
+    booked_hours: Option<i32>,
+    actual_hours_worked: Option<Decimal>,
+    original_amount: Decimal,
+    final_amount: Option<Decimal>,
+    refund_amount: Option<Decimal>,
+    tip_amount: Decimal,
+    payment_method: String,
+    payment_status: String,
+    refund_status: Option<String>,
+    refund_processed_at: Option<chrono::DateTime<Utc>>,
+    refund_reference: Option<String>,
+    refund_processed_by: Option<Uuid>,
+    refund_processed_by_name: Option<String>,
+    paid_at: Option<chrono::DateTime<Utc>>,
+    completed_at: Option<chrono::DateTime<Utc>>,
+}
+
+impl From<AdminPaymentRow> for crate::models::AdminPaymentItem {
+    fn from(r: AdminPaymentRow) -> Self {
+        Self {
+            payment_id: r.payment_id,
+            request_id: r.request_id,
+            assignment_id: r.assignment_id,
+            customer_id: r.customer_id,
+            customer_name: r.customer_name,
+            guard_id: r.guard_id,
+            guard_name: r.guard_name,
+            service_address: r.service_address,
+            booked_hours: r.booked_hours,
+            actual_hours_worked: r.actual_hours_worked,
+            original_amount: r.original_amount,
+            final_amount: r.final_amount,
+            refund_amount: r.refund_amount,
+            tip_amount: r.tip_amount,
+            payment_method: r.payment_method,
+            payment_status: r.payment_status,
+            refund_status: r.refund_status,
+            refund_processed_at: r.refund_processed_at,
+            refund_reference: r.refund_reference,
+            refund_processed_by: r.refund_processed_by,
+            refund_processed_by_name: r.refund_processed_by_name,
+            paid_at: r.paid_at,
+            completed_at: r.completed_at,
+        }
+    }
+}
+
+/// Validate the action string from `ProcessRefundRequest` and return
+/// the DB `refund_status` value + whether a reference is required.
+/// Centralized so the test suite can exercise the rules without a DB.
+fn validate_refund_action(action: &str, reference: Option<&str>) -> Result<&'static str, AppError> {
+    match action {
+        "process" => {
+            let Some(r) = reference else {
+                return Err(AppError::BadRequest(
+                    "reference is required when action='process'".to_string(),
+                ));
+            };
+            if r.trim().is_empty() {
+                return Err(AppError::BadRequest(
+                    "reference cannot be empty".to_string(),
+                ));
+            }
+            if r.len() > 200 {
+                return Err(AppError::BadRequest(
+                    "reference too long (max 200 chars)".to_string(),
+                ));
+            }
+            Ok("processed")
+        }
+        "skip" => Ok("skipped"),
+        _ => Err(AppError::BadRequest(format!(
+            "Invalid action: {action}. Must be 'process' or 'skip'"
+        ))),
+    }
+}
+
+const ADMIN_PAYMENT_BASE_SELECT: &str = r#"
+    SELECT
+        p.id                   AS payment_id,
+        p.request_id,
+        a.id                   AS assignment_id,
+        p.customer_id,
+        COALESCE(cp.full_name, cu.full_name) AS customer_name,
+        a.guard_id,
+        gu.full_name           AS guard_name,
+        r.address              AS service_address,
+        r.booked_hours,
+        p.actual_hours_worked,
+        p.amount               AS original_amount,
+        p.final_amount,
+        p.refund_amount,
+        p.tip_amount,
+        p.payment_method,
+        p.status               AS payment_status,
+        p.refund_status,
+        p.refund_processed_at,
+        p.refund_reference,
+        p.refund_processed_by,
+        adm.full_name          AS refund_processed_by_name,
+        p.paid_at,
+        a.completed_at
+    FROM booking.payments p
+    JOIN booking.guard_requests r  ON r.id = p.request_id
+    LEFT JOIN auth.users cu        ON cu.id = p.customer_id
+    LEFT JOIN auth.customer_profiles cp ON cp.user_id = p.customer_id
+    LEFT JOIN booking.assignments a
+        ON a.request_id = r.id AND a.status = 'completed'::assignment_status
+    LEFT JOIN auth.users gu        ON gu.id = a.guard_id
+    LEFT JOIN auth.users adm       ON adm.id = p.refund_processed_by
+"#;
+
+/// List all payments (optionally filtered). Admin-only.
+pub async fn list_admin_payments(
+    db: &PgPool,
+    query: crate::models::AdminPaymentsQuery,
+) -> Result<crate::models::AdminPaymentsPage, AppError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Use dynamic query with bound params instead of string interp (SQL-injection safe).
+    let sql = format!(
+        "{base}
+        WHERE ($1::text IS NULL OR p.status = $1)
+          AND ($2::text IS NULL OR p.payment_method = $2)
+        ORDER BY p.paid_at DESC NULLS LAST, p.created_at DESC
+        LIMIT $3 OFFSET $4",
+        base = ADMIN_PAYMENT_BASE_SELECT
+    );
+
+    let rows = sqlx::query_as::<_, AdminPaymentRow>(&sql)
+        .bind(&query.status)
+        .bind(&query.method)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(db)
+        .await?;
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM booking.payments p
+        WHERE ($1::text IS NULL OR p.status = $1)
+          AND ($2::text IS NULL OR p.payment_method = $2)
+        "#,
+    )
+    .bind(&query.status)
+    .bind(&query.method)
+    .fetch_one(db)
+    .await?;
+
+    let data = rows
+        .into_iter()
+        .map(crate::models::AdminPaymentItem::from)
+        .collect();
+
+    Ok(crate::models::AdminPaymentsPage { data, total })
+}
+
+/// List refund rows — filters by refund_status (defaults to all non-NULL).
+pub async fn list_admin_refunds(
+    db: &PgPool,
+    query: crate::models::AdminRefundsQuery,
+) -> Result<crate::models::AdminPaymentsPage, AppError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Validate status filter to avoid surprises.
+    if let Some(s) = &query.status {
+        if !matches!(s.as_str(), "pending" | "processed" | "skipped") {
+            return Err(AppError::BadRequest(format!(
+                "Invalid refund status: {s}. Must be pending, processed, or skipped"
+            )));
+        }
+    }
+
+    let sql = format!(
+        "{base}
+        WHERE p.refund_status IS NOT NULL
+          AND ($1::text IS NULL OR p.refund_status = $1)
+        ORDER BY p.paid_at DESC NULLS LAST, p.created_at DESC
+        LIMIT $2 OFFSET $3",
+        base = ADMIN_PAYMENT_BASE_SELECT
+    );
+
+    let rows = sqlx::query_as::<_, AdminPaymentRow>(&sql)
+        .bind(&query.status)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(db)
+        .await?;
+
+    let total: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM booking.payments p
+        WHERE p.refund_status IS NOT NULL
+          AND ($1::text IS NULL OR p.refund_status = $1)
+        "#,
+    )
+    .bind(&query.status)
+    .fetch_one(db)
+    .await?;
+
+    let data = rows
+        .into_iter()
+        .map(crate::models::AdminPaymentItem::from)
+        .collect();
+
+    Ok(crate::models::AdminPaymentsPage { data, total })
+}
+
+/// Fetch a single admin payment row (used for the refund-detail modal).
+pub async fn get_admin_payment(
+    db: &PgPool,
+    payment_id: Uuid,
+) -> Result<crate::models::AdminPaymentItem, AppError> {
+    let sql = format!("{base} WHERE p.id = $1", base = ADMIN_PAYMENT_BASE_SELECT);
+    let row = sqlx::query_as::<_, AdminPaymentRow>(&sql)
+        .bind(payment_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Payment not found".to_string()))?;
+    Ok(row.into())
+}
+
+/// Admin marks a pending refund as processed (money transferred) or skipped
+/// (customer waived / merged into next booking / etc).
+///
+/// Idempotency: a row already in state 'processed' or 'skipped' cannot be
+/// re-opened by this endpoint (would require a dedicated "reopen refund"
+/// flow — not scoped here). We reject the transition and return Conflict.
+pub async fn process_refund(
+    db: &PgPool,
+    payment_id: Uuid,
+    admin_id: Uuid,
+    req: crate::models::ProcessRefundRequest,
+) -> Result<crate::models::AdminPaymentItem, AppError> {
+    let new_status = validate_refund_action(&req.action, req.reference.as_deref())?;
+
+    let mut tx = db.begin().await?;
+
+    #[derive(sqlx::FromRow)]
+    struct Existing {
+        refund_status: Option<String>,
+        refund_amount: Option<Decimal>,
+    }
+    let existing: Existing = sqlx::query_as(
+        r#"
+        SELECT refund_status, refund_amount
+        FROM booking.payments
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(payment_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Payment not found".to_string()))?;
+
+    match existing.refund_status.as_deref() {
+        Some("pending") => {}
+        Some("processed") | Some("skipped") => {
+            return Err(AppError::Conflict(format!(
+                "Refund is already {} — cannot change",
+                existing.refund_status.as_deref().unwrap_or("?")
+            )));
+        }
+        _ => {
+            // refund_status IS NULL — refund_amount must be >0 OR this payment
+            // never had a refund obligation. Either way the admin shouldn't be
+            // "processing" it.
+            let owed = existing.refund_amount.unwrap_or(Decimal::ZERO);
+            if owed <= Decimal::ZERO {
+                return Err(AppError::BadRequest(
+                    "This payment has no refund owed".to_string(),
+                ));
+            }
+            // If somehow refund_amount>0 but status is NULL (pre-migration data
+            // or future path that skipped the backfill), treat as pending.
+        }
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE booking.payments
+        SET refund_status        = $2,
+            refund_processed_at  = NOW(),
+            refund_reference     = $3,
+            refund_processed_by  = $4
+        WHERE id = $1
+        "#,
+    )
+    .bind(payment_id)
+    .bind(new_status)
+    .bind(req.reference.as_deref())
+    .bind(admin_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    // Note admin_note is not persisted yet (would require its own column or
+    // an audit table row). Captured here for future expansion.
+    if let Some(note) = &req.note {
+        tracing::info!(
+            payment_id = %payment_id,
+            admin_id = %admin_id,
+            action = %req.action,
+            note = %note,
+            "admin processed refund with note"
+        );
+    } else {
+        tracing::info!(
+            payment_id = %payment_id,
+            admin_id = %admin_id,
+            action = %req.action,
+            "admin processed refund"
+        );
+    }
+
+    get_admin_payment(db, payment_id).await
+}
+
+/// Aggregate stats for the admin wallet overview card.
+pub async fn wallet_summary(db: &PgPool) -> Result<crate::models::WalletSummary, AppError> {
+    // Monthly revenue = sum of net (final_amount + tip_amount) for
+    // `status='completed'` paid in the current calendar month (UTC). Falls back
+    // to amount when final_amount is NULL (job didn't reach proration yet).
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        monthly_revenue: Option<Decimal>,
+        pending_refunds_count: i64,
+        pending_refunds_total: Option<Decimal>,
+        processed_refunds_count: i64,
+        processed_refunds_total: Option<Decimal>,
+    }
+
+    let row: Row = sqlx::query_as(
+        r#"
+        SELECT
+            (
+                SELECT COALESCE(SUM(COALESCE(final_amount, amount) + tip_amount), 0)
+                FROM booking.payments
+                WHERE status = 'completed'
+                  AND paid_at IS NOT NULL
+                  AND date_trunc('month', paid_at) = date_trunc('month', NOW())
+            )                                                                     AS monthly_revenue,
+            (
+                SELECT COUNT(*)::bigint FROM booking.payments
+                WHERE refund_status = 'pending'
+            )                                                                     AS pending_refunds_count,
+            (
+                SELECT COALESCE(SUM(refund_amount), 0) FROM booking.payments
+                WHERE refund_status = 'pending'
+            )                                                                     AS pending_refunds_total,
+            (
+                SELECT COUNT(*)::bigint FROM booking.payments
+                WHERE refund_status = 'processed'
+                  AND refund_processed_at IS NOT NULL
+                  AND date_trunc('month', refund_processed_at) = date_trunc('month', NOW())
+            )                                                                     AS processed_refunds_count,
+            (
+                SELECT COALESCE(SUM(refund_amount), 0) FROM booking.payments
+                WHERE refund_status = 'processed'
+                  AND refund_processed_at IS NOT NULL
+                  AND date_trunc('month', refund_processed_at) = date_trunc('month', NOW())
+            )                                                                     AS processed_refunds_total
+        "#,
+    )
+    .fetch_one(db)
+    .await?;
+
+    Ok(crate::models::WalletSummary {
+        monthly_revenue: row.monthly_revenue.unwrap_or(Decimal::ZERO),
+        pending_refunds_count: row.pending_refunds_count,
+        pending_refunds_total: row.pending_refunds_total.unwrap_or(Decimal::ZERO),
+        processed_refunds_count: row.processed_refunds_count,
+        processed_refunds_total: row.processed_refunds_total.unwrap_or(Decimal::ZERO),
+    })
 }
 
 /// Customer adds a tip to the guard from the completion-summary screen.
@@ -3969,5 +4370,64 @@ mod tests {
         let a = Uuid::parse_str("aaaaaaaa-1111-1111-1111-111111111111").unwrap();
         let b = Uuid::parse_str("bbbbbbbb-2222-2222-2222-222222222222").unwrap();
         assert_ne!(format_receipt_no(a, None), format_receipt_no(b, None));
+    }
+
+    // =========================================================================
+    // validate_refund_action — admin refund workflow (migration 042)
+    // =========================================================================
+
+    #[test]
+    fn refund_action_process_with_reference_maps_to_processed() {
+        let status = validate_refund_action("process", Some("SLIP-123456")).unwrap();
+        assert_eq!(status, "processed");
+    }
+
+    #[test]
+    fn refund_action_process_requires_reference() {
+        let err = validate_refund_action("process", None).unwrap_err();
+        assert!(format!("{err:?}").contains("reference is required"));
+    }
+
+    #[test]
+    fn refund_action_process_rejects_empty_reference() {
+        let err = validate_refund_action("process", Some("")).unwrap_err();
+        assert!(format!("{err:?}").contains("empty"));
+        let err = validate_refund_action("process", Some("   ")).unwrap_err();
+        assert!(format!("{err:?}").contains("empty"));
+    }
+
+    #[test]
+    fn refund_action_process_rejects_overly_long_reference() {
+        let long = "x".repeat(201);
+        let err = validate_refund_action("process", Some(&long)).unwrap_err();
+        assert!(format!("{err:?}").contains("too long"));
+    }
+
+    #[test]
+    fn refund_action_skip_allowed_without_reference() {
+        let status = validate_refund_action("skip", None).unwrap();
+        assert_eq!(status, "skipped");
+    }
+
+    #[test]
+    fn refund_action_skip_ignores_reference() {
+        // Providing a reference on skip is harmless — we just don't require it.
+        let status = validate_refund_action("skip", Some("BANK-REF")).unwrap();
+        assert_eq!(status, "skipped");
+    }
+
+    #[test]
+    fn refund_action_rejects_unknown_action() {
+        let err = validate_refund_action("reopen", Some("ref")).unwrap_err();
+        assert!(format!("{err:?}").contains("Invalid action"));
+        let err = validate_refund_action("", Some("ref")).unwrap_err();
+        assert!(format!("{err:?}").contains("Invalid action"));
+    }
+
+    #[test]
+    fn refund_action_process_accepts_reference_at_max_length() {
+        let at_max = "a".repeat(200);
+        let status = validate_refund_action("process", Some(&at_max)).unwrap();
+        assert_eq!(status, "processed");
     }
 }
