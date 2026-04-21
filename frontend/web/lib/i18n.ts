@@ -5,7 +5,6 @@ type TranslationStructure = {
   common: Record<string, string>;
   nav: Record<string, string>;
   header: Record<string, string>;
-  dashboard: Record<string, string>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   applicants: Record<string, any>; // includes nested modal.guardProfile
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,7 +42,6 @@ export const translations = {
 
     // Navigation
     nav: {
-      dashboard: "แดชบอร์ด",
       liveMap: "แผนที่สด",
       guards: "พนักงานรักษาความปลอดภัย",
       applicants: "ผู้สมัคร",
@@ -64,23 +62,6 @@ export const translations = {
       settings: "ตั้งค่า",
       logout: "ออกจากระบบ",
       logoutSuccess: "ออกจากระบบสำเร็จ",
-    },
-
-    // Dashboard
-    dashboard: {
-      title: "ภาพรวมแดชบอร์ด",
-      subtitle: "ยินดีต้อนรับกลับมา นี่คือสิ่งที่เกิดขึ้นวันนี้",
-      activeGuards: "พนักงานที่ปฏิบัติงาน",
-      liveTasks: "งานที่กำลังดำเนินการ",
-      completedToday: "เสร็จสิ้นวันนี้",
-      totalRevenue: "รายได้รวม",
-      liveOperationsMap: "แผนที่ปฏิบัติการสด",
-      viewFullMap: "ดูแผนที่เต็ม",
-      mapLoading: "กำลังโหลดแผนที่...",
-      mapInitializing: "กำลังเริ่มต้นระบบติดตามแบบเรียลไทม์",
-      recentAlerts: "การแจ้งเตือนล่าสุด",
-      guardMissingCheckin: "พนักงานไม่เช็คอิน",
-      viewAllAlerts: "ดูการแจ้งเตือนทั้งหมด",
     },
 
     // Applicants
@@ -311,6 +292,14 @@ export const translations = {
       exitFullscreen: "ออกจากเต็มจอ",
       allFilter: "ทั้งหมด",
       unauthorized: "คุณไม่มีสิทธิ์เข้าถึงหน้านี้",
+      guardStatus: "สถานะพนักงาน",
+      bookingSummary: "สรุปสถานะคำขอ",
+      requestPending: "รอดำเนินการ",
+      requestAssigned: "มอบหมายแล้ว",
+      requestInProgress: "กำลังดำเนินการ",
+      requestCompleted: "เสร็จสิ้น",
+      requestCancelled: "ยกเลิก",
+      totalRequests: "คำขอทั้งหมด",
     },
 
     // Recruitment
@@ -421,7 +410,6 @@ export const translations = {
 
     // Navigation
     nav: {
-      dashboard: "Dashboard",
       liveMap: "Live Map",
       guards: "Security Guards",
       applicants: "Applicants",
@@ -442,23 +430,6 @@ export const translations = {
       settings: "Settings",
       logout: "Logout",
       logoutSuccess: "Logged out successfully",
-    },
-
-    // Dashboard
-    dashboard: {
-      title: "Dashboard Overview",
-      subtitle: "Welcome back. Here's what's happening today.",
-      activeGuards: "Active Guards",
-      liveTasks: "Live Tasks",
-      completedToday: "Completed Today",
-      totalRevenue: "Total Revenue",
-      liveOperationsMap: "Live Operations Map",
-      viewFullMap: "View Full Map",
-      mapLoading: "Map Interface Loading...",
-      mapInitializing: "Real-time tracking is being initialized",
-      recentAlerts: "Recent Alerts",
-      guardMissingCheckin: "Guard Missing Check-in",
-      viewAllAlerts: "View All Alerts",
     },
 
     // Applicants
@@ -689,6 +660,14 @@ export const translations = {
       exitFullscreen: "Exit Fullscreen",
       allFilter: "All",
       unauthorized: "You do not have access to this page",
+      guardStatus: "Guard Status",
+      bookingSummary: "Booking Status",
+      requestPending: "Pending",
+      requestAssigned: "Assigned",
+      requestInProgress: "In Progress",
+      requestCompleted: "Completed",
+      requestCancelled: "Cancelled",
+      totalRequests: "Total Requests",
     },
 
     // Recruitment
