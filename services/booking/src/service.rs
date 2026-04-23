@@ -4658,3 +4658,334 @@ mod tests {
         assert_eq!(status, "processed");
     }
 }
+
+// =============================================================================
+// C2 — In-app call lifecycle
+// Peer-to-peer WebRTC. Rust stores the call log + forwards SDP/ICE over
+// the signaling WS (see handlers::call_signaling_ws). No MediaSoup/SFU.
+// =============================================================================
+
+pub async fn initiate_call(
+    db: &PgPool,
+    caller_id: Uuid,
+    req: crate::models::InitiateCallDto,
+) -> Result<crate::models::CallResponse, AppError> {
+    if caller_id == req.callee_id {
+        return Err(AppError::BadRequest(
+            "Cannot call yourself".to_string(),
+        ));
+    }
+
+    // Ensure callee exists, is active, and isn't an admin (admins aren't
+    // reachable via the mobile UI).
+    let callee_role: Option<String> = sqlx::query_scalar(
+        "SELECT role::text FROM auth.users WHERE id = $1 AND is_active = true",
+    )
+    .bind(req.callee_id)
+    .fetch_optional(db)
+    .await?;
+    match callee_role {
+        None => return Err(AppError::NotFound("Callee not found".to_string())),
+        Some(r) if r == "admin" => {
+            return Err(AppError::BadRequest("Cannot call admin".to_string()));
+        }
+        _ => {}
+    }
+
+    // Reject if callee already has an active incoming/outgoing call — avoids
+    // duplicate ringing. 30-second stale window in case a client died mid-call.
+    let busy: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM calls.call_logs
+        WHERE (caller_id = $1 OR callee_id = $1)
+          AND status IN ('initiated', 'ringing', 'accepted', 'connected')
+          AND started_at > NOW() - INTERVAL '30 seconds'
+        ORDER BY started_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(req.callee_id)
+    .fetch_optional(db)
+    .await?;
+    if busy.is_some() {
+        return Err(AppError::Conflict("Callee is busy".to_string()));
+    }
+
+    let row = sqlx::query_as::<_, crate::models::CallLogRow>(
+        r#"
+        INSERT INTO calls.call_logs (
+            caller_id, callee_id, call_type, status, assignment_id, conversation_id
+        )
+        VALUES ($1, $2, $3::calls.call_type, 'initiated'::calls.call_status, $4, $5)
+        RETURNING id, caller_id, callee_id, call_type, status, assignment_id, conversation_id,
+                  started_at, answered_at, ended_at, duration_seconds, end_reason
+        "#,
+    )
+    .bind(caller_id)
+    .bind(req.callee_id)
+    .bind(serde_json::to_string(&req.call_type).unwrap_or_else(|_| "\"audio\"".to_string()).trim_matches('"').to_string())
+    .bind(req.assignment_id)
+    .bind(req.conversation_id)
+    .fetch_one(db)
+    .await?;
+
+    // Mark as ringing + push FCM. The client listens for the
+    // `incoming_call` data payload and opens the incoming call screen.
+    sqlx::query("UPDATE calls.call_logs SET status = 'ringing', updated_at = NOW() WHERE id = $1")
+        .bind(row.id)
+        .execute(db)
+        .await?;
+
+    spawn_notification(
+        db.clone(),
+        req.callee_id,
+        "สายเรียกเข้า".to_string(),
+        format!("มีสายเรียกเข้า ({})", match req.call_type {
+            crate::models::CallType::Audio => "เสียง",
+            crate::models::CallType::Video => "วิดีโอ",
+        }),
+        "system",
+        Some(serde_json::json!({
+            "kind": "incoming_call",
+            "call_id": row.id.to_string(),
+            "caller_id": caller_id.to_string(),
+            "call_type": req.call_type,
+            "target_role": "any",
+        })),
+    );
+
+    Ok(crate::models::CallResponse::from(crate::models::CallLogRow {
+        status: crate::models::CallStatus::Ringing,
+        ..row
+    }))
+}
+
+pub async fn accept_call(
+    db: &PgPool,
+    call_id: Uuid,
+    user_id: Uuid,
+) -> Result<crate::models::CallResponse, AppError> {
+    let row = sqlx::query_as::<_, crate::models::CallLogRow>(
+        r#"
+        UPDATE calls.call_logs
+        SET status = 'accepted', answered_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND callee_id = $2 AND status IN ('initiated', 'ringing')
+        RETURNING id, caller_id, callee_id, call_type, status, assignment_id, conversation_id,
+                  started_at, answered_at, ended_at, duration_seconds, end_reason
+        "#,
+    )
+    .bind(call_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| {
+        AppError::BadRequest("Call not found or not pending acceptance".to_string())
+    })?;
+    Ok(row.into())
+}
+
+pub async fn reject_call(
+    db: &PgPool,
+    call_id: Uuid,
+    user_id: Uuid,
+) -> Result<crate::models::CallResponse, AppError> {
+    let row = sqlx::query_as::<_, crate::models::CallLogRow>(
+        r#"
+        UPDATE calls.call_logs
+        SET status = 'rejected', ended_at = NOW(), end_reason = 'rejected_by_callee', updated_at = NOW()
+        WHERE id = $1 AND callee_id = $2 AND status IN ('initiated', 'ringing')
+        RETURNING id, caller_id, callee_id, call_type, status, assignment_id, conversation_id,
+                  started_at, answered_at, ended_at, duration_seconds, end_reason
+        "#,
+    )
+    .bind(call_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| {
+        AppError::BadRequest("Call not found or cannot be rejected".to_string())
+    })?;
+
+    // Notify caller their call was rejected.
+    spawn_notification(
+        db.clone(),
+        row.caller_id,
+        "สายไม่ได้รับ".to_string(),
+        "ปลายสายปฏิเสธการรับสาย".to_string(),
+        "system",
+        Some(serde_json::json!({
+            "kind": "call_rejected",
+            "call_id": call_id.to_string(),
+            "target_role": "any",
+        })),
+    );
+
+    Ok(row.into())
+}
+
+pub async fn end_call(
+    db: &PgPool,
+    call_id: Uuid,
+    user_id: Uuid,
+    reason: &str,
+) -> Result<crate::models::CallResponse, AppError> {
+    // Caller or callee can end. Compute duration only if answered_at is set.
+    let row = sqlx::query_as::<_, crate::models::CallLogRow>(
+        r#"
+        UPDATE calls.call_logs
+        SET status = CASE
+                WHEN status IN ('initiated', 'ringing') THEN 'missed'::calls.call_status
+                ELSE 'ended'::calls.call_status
+            END,
+            ended_at = NOW(),
+            end_reason = $3,
+            duration_seconds = CASE
+                WHEN answered_at IS NOT NULL
+                THEN GREATEST(0, EXTRACT(EPOCH FROM (NOW() - answered_at))::INTEGER)
+                ELSE NULL
+            END,
+            updated_at = NOW()
+        WHERE id = $1
+          AND (caller_id = $2 OR callee_id = $2)
+          AND status NOT IN ('ended', 'rejected', 'missed', 'failed')
+        RETURNING id, caller_id, callee_id, call_type, status, assignment_id, conversation_id,
+                  started_at, answered_at, ended_at, duration_seconds, end_reason
+        "#,
+    )
+    .bind(call_id)
+    .bind(user_id)
+    .bind(reason)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| {
+        AppError::BadRequest("Call not found or already ended".to_string())
+    })?;
+
+    Ok(row.into())
+}
+
+pub async fn get_call(
+    db: &PgPool,
+    call_id: Uuid,
+    user_id: Uuid,
+    role: &str,
+) -> Result<crate::models::CallResponse, AppError> {
+    let row = sqlx::query_as::<_, crate::models::CallLogRow>(
+        r#"
+        SELECT id, caller_id, callee_id, call_type, status, assignment_id, conversation_id,
+               started_at, answered_at, ended_at, duration_seconds, end_reason
+        FROM calls.call_logs
+        WHERE id = $1
+        "#,
+    )
+    .bind(call_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Call not found".to_string()))?;
+
+    if role != "admin" && row.caller_id != user_id && row.callee_id != user_id {
+        return Err(AppError::Forbidden(
+            "You are not a participant of this call".to_string(),
+        ));
+    }
+    Ok(row.into())
+}
+
+pub async fn list_admin_calls(
+    db: &PgPool,
+    query: crate::models::AdminCallsQuery,
+) -> Result<crate::models::AdminCallsPage, AppError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let status_filter = query.status.as_deref();
+    let search = query.search.as_deref().filter(|s| !s.trim().is_empty());
+
+    // Build dynamic SQL — status + full-name search both optional.
+    let mut sql = String::from(
+        r#"
+        SELECT cl.id, cl.caller_id, cl.callee_id,
+               caller.full_name AS caller_name, callee.full_name AS callee_name,
+               cl.call_type, cl.status, cl.assignment_id,
+               cl.started_at, cl.answered_at, cl.ended_at,
+               cl.duration_seconds, cl.end_reason
+        FROM calls.call_logs cl
+        LEFT JOIN auth.users caller ON caller.id = cl.caller_id
+        LEFT JOIN auth.users callee ON callee.id = cl.callee_id
+        WHERE 1=1
+        "#,
+    );
+    let mut count_sql = String::from("SELECT COUNT(*) FROM calls.call_logs cl LEFT JOIN auth.users caller ON caller.id = cl.caller_id LEFT JOIN auth.users callee ON callee.id = cl.callee_id WHERE 1=1");
+
+    let mut bind_idx = 1;
+    let mut status_val: Option<String> = None;
+    if let Some(s) = status_filter {
+        let clause = format!(" AND cl.status = ${bind_idx}::calls.call_status");
+        sql.push_str(&clause);
+        count_sql.push_str(&clause);
+        status_val = Some(s.to_string());
+        bind_idx += 1;
+    }
+    let mut search_val: Option<String> = None;
+    if let Some(s) = search {
+        let clause = format!(
+            " AND (caller.full_name ILIKE ${bind_idx} OR callee.full_name ILIKE ${bind_idx})"
+        );
+        sql.push_str(&clause);
+        count_sql.push_str(&clause);
+        search_val = Some(format!("%{s}%"));
+        bind_idx += 1;
+    }
+    sql.push_str(&format!(
+        " ORDER BY cl.started_at DESC LIMIT ${} OFFSET ${}",
+        bind_idx,
+        bind_idx + 1
+    ));
+
+    // Execute data query
+    let mut q = sqlx::query_as::<_, crate::models::AdminCallRow>(&sql);
+    if let Some(v) = &status_val {
+        q = q.bind(v);
+    }
+    if let Some(v) = &search_val {
+        q = q.bind(v);
+    }
+    q = q.bind(limit).bind(offset);
+    let rows = q.fetch_all(db).await?;
+
+    // Count query — same filters, no limit/offset
+    let mut c = sqlx::query_scalar::<_, i64>(&count_sql);
+    if let Some(v) = &status_val {
+        c = c.bind(v);
+    }
+    if let Some(v) = &search_val {
+        c = c.bind(v);
+    }
+    let total = c.fetch_one(db).await?;
+
+    Ok(crate::models::AdminCallsPage {
+        data: rows.into_iter().map(Into::into).collect(),
+        total,
+    })
+}
+
+/// Mark an active call `connected` once both ends report ICE success. Used by
+/// the mobile clients right after `onConnectionState=connected`.
+pub async fn mark_call_connected(
+    db: &PgPool,
+    call_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE calls.call_logs
+        SET status = 'connected', updated_at = NOW()
+        WHERE id = $1 AND (caller_id = $2 OR callee_id = $2)
+          AND status = 'accepted'
+        "#,
+    )
+    .bind(call_id)
+    .bind(user_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}

@@ -13,11 +13,12 @@ use shared::error::{AppError, ErrorBody};
 use shared::models::ApiResponse;
 
 use crate::models::{
-    AcceptDeclineDto, ActiveJobResponse, AddTipDto, AdminPaymentItem, AdminPaymentsPage,
-    AdminPaymentsQuery, AdminRefundsQuery, AdminReviewsQuery, AssignGuardDto, AssignmentResponse,
-    AvailableGuardResponse, AvailableGuardsQuery, CostSummaryResponse, CreatePaymentDto,
-    CreateRequestDto, CreateReviewDto, CreateServiceRateDto, GuardDashboardSummary, GuardEarnings,
-    GuardJobResponse, GuardJobsQuery, GuardRatingsSummary, GuardRequestResponse, ListReceiptsQuery,
+    AcceptDeclineDto, ActiveJobResponse, AddTipDto, AdminCallsPage, AdminCallsQuery,
+    AdminPaymentItem, AdminPaymentsPage, AdminPaymentsQuery, AdminRefundsQuery, AdminReviewsQuery,
+    AssignGuardDto, AssignmentResponse, AvailableGuardResponse, AvailableGuardsQuery, CallResponse,
+    CostSummaryResponse, CreatePaymentDto, CreateRequestDto, CreateReviewDto, CreateServiceRateDto,
+    EndCallDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery,
+    GuardRatingsSummary, GuardRequestResponse, InitiateCallDto, ListReceiptsQuery,
     ListRequestsQuery, PaginatedAdminReviews, PaymentResponse, ProcessRefundRequest,
     ProgressReportResponse, ReceiptsPage, ReviewCompletionDto, ServiceRate, StartJobDto,
     SubmitReviewResponse, ToggleReviewVisibilityDto, UpdateAssignmentStatusDto,
@@ -1363,4 +1364,296 @@ pub async fn list_progress_reports(
     .await?;
 
     Ok(Json(ApiResponse::success(reports)))
+}
+
+// =============================================================================
+// C2 — Call lifecycle + signalling WS
+// =============================================================================
+
+#[utoipa::path(
+    post,
+    path = "/calls/initiate",
+    tag = "Calls",
+    security(("bearer" = [])),
+    request_body = InitiateCallDto,
+    responses(
+        (status = 200, description = "Call created", body = CallResponse),
+        (status = 400, description = "Bad request", body = ErrorBody),
+        (status = 409, description = "Callee busy", body = ErrorBody),
+    ),
+)]
+pub async fn initiate_call(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(req): Json<InitiateCallDto>,
+) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
+    let resp = crate::service::initiate_call(&state.db, user.user_id, req).await?;
+    Ok(Json(ApiResponse::success(resp)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/calls/{id}/accept",
+    tag = "Calls",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Call ID")),
+    responses((status = 200, description = "Call accepted", body = CallResponse)),
+)]
+pub async fn accept_call(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
+    let resp = crate::service::accept_call(&state.db, id, user.user_id).await?;
+    // Notify caller via signalling so their ringing UI can flip to "connected"
+    // immediately without waiting for the HTTP response to propagate. Fire-and-forget.
+    publish_call_event(&state.redis_conn, id, "accepted");
+    Ok(Json(ApiResponse::success(resp)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/calls/{id}/reject",
+    tag = "Calls",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Call ID")),
+    responses((status = 200, description = "Call rejected", body = CallResponse)),
+)]
+pub async fn reject_call(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
+    let resp = crate::service::reject_call(&state.db, id, user.user_id).await?;
+    publish_call_event(&state.redis_conn, id, "rejected");
+    Ok(Json(ApiResponse::success(resp)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/calls/{id}/end",
+    tag = "Calls",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Call ID")),
+    request_body = EndCallDto,
+    responses((status = 200, description = "Call ended", body = CallResponse)),
+)]
+pub async fn end_call(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<EndCallDto>,
+) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
+    let resp = crate::service::end_call(&state.db, id, user.user_id, &req.reason).await?;
+    publish_call_event(&state.redis_conn, id, "ended");
+    Ok(Json(ApiResponse::success(resp)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/calls/{id}/connected",
+    tag = "Calls",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Call ID")),
+    responses((status = 204, description = "Marked connected")),
+)]
+pub async fn mark_call_connected(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, AppError> {
+    crate::service::mark_call_connected(&state.db, id, user.user_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/calls/{id}",
+    tag = "Calls",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Call ID")),
+    responses((status = 200, description = "Call detail", body = CallResponse)),
+)]
+pub async fn get_call(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
+    let resp = crate::service::get_call(&state.db, id, user.user_id, &user.role).await?;
+    Ok(Json(ApiResponse::success(resp)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/calls",
+    tag = "Calls",
+    security(("bearer" = [])),
+    params(AdminCallsQuery),
+    responses((status = 200, description = "Call logs", body = AdminCallsPage)),
+)]
+pub async fn list_admin_calls(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<AdminCallsQuery>,
+) -> Result<Json<ApiResponse<AdminCallsPage>>, AppError> {
+    require_admin(&user)?;
+    let page = crate::service::list_admin_calls(&state.db, query).await?;
+    Ok(Json(ApiResponse::success(page)))
+}
+
+// ─── Signalling WebSocket ────────────────────────────────────────────────────
+// Forwards SDP offers/answers + ICE candidates between the two peers via
+// Redis PubSub on channel `call_sig:{call_id}`. Connection authorised only
+// if the user is caller or callee on this call.
+
+pub fn publish_call_event(redis_conn: &redis::aio::MultiplexedConnection, call_id: uuid::Uuid, kind: &str) {
+    use redis::AsyncCommands;
+    let mut conn = redis_conn.clone();
+    let channel = format!("call_sig:{call_id}");
+    let payload = serde_json::json!({
+        "type": "status",
+        "status": kind,
+    })
+    .to_string();
+    tokio::spawn(async move {
+        let _: Result<(), redis::RedisError> = conn.publish(channel, payload).await;
+    });
+}
+
+#[utoipa::path(
+    get,
+    path = "/ws/call",
+    tag = "Calls",
+    security(("bearer" = [])),
+    responses(
+        (status = 101, description = "Signalling WebSocket. Send `{\"call_id\":\"<uuid>\"}` as the first message; then exchange `{\"type\":\"offer|answer|candidate\",\"data\":...}` messages."),
+    ),
+)]
+pub async fn call_signaling_ws(
+    State(state): State<Arc<AppState>>,
+    ws: WebSocketUpgrade,
+    user: AuthUser,
+) -> Result<impl IntoResponse, AppError> {
+    Ok(ws.on_upgrade(move |socket| handle_call_signaling(socket, state, user)))
+}
+
+async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
+    use futures_util::StreamExt;
+
+    // First message = call_id (same pattern as ws_assignment_status so we
+    // never put sensitive ids in the URL).
+    let call_id_str: String = loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(t))) => {
+                let trimmed = t.trim();
+                if !trimmed.is_empty() {
+                    break trimmed.to_string();
+                }
+            }
+            Some(Ok(Message::Close(_))) | None => return,
+            _ => continue,
+        }
+    };
+
+    // Accept either a bare UUID or `{"call_id":"..."}` for client flexibility.
+    let call_id = match uuid::Uuid::parse_str(&call_id_str).ok().or_else(|| {
+        serde_json::from_str::<serde_json::Value>(&call_id_str)
+            .ok()
+            .and_then(|v| v.get("call_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .and_then(|s| uuid::Uuid::parse_str(&s).ok())
+    }) {
+        Some(id) => id,
+        None => {
+            let _ = socket.send(Message::Text("invalid call_id".into())).await;
+            return;
+        }
+    };
+
+    // Authorize — must be caller or callee.
+    let participants: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
+        "SELECT caller_id, callee_id FROM calls.call_logs WHERE id = $1",
+    )
+    .bind(call_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let Some((caller_id, callee_id)) = participants else {
+        let _ = socket.send(Message::Text("call not found".into())).await;
+        return;
+    };
+    if user.user_id != caller_id && user.user_id != callee_id {
+        let _ = socket.send(Message::Text("forbidden".into())).await;
+        return;
+    }
+
+    // Subscribe to Redis channel `call_sig:{call_id}`
+    let mut pubsub = match state.redis_client.get_async_pubsub().await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("call_signaling: pubsub failed: {e}");
+            return;
+        }
+    };
+    let channel = format!("call_sig:{call_id}");
+    if let Err(e) = pubsub.subscribe(&channel).await {
+        tracing::error!("call_signaling: subscribe failed: {e}");
+        return;
+    }
+    let mut pubsub_stream = pubsub.on_message();
+
+    // Acknowledge connection
+    let _ = socket
+        .send(Message::Text(
+            serde_json::json!({"type":"subscribed"}).to_string().into(),
+        ))
+        .await;
+
+    loop {
+        tokio::select! {
+            // pubsub → client
+            Some(msg) = pubsub_stream.next() => {
+                let payload: String = match msg.get_payload() { Ok(p) => p, Err(_) => continue };
+                // Drop self-echo: senders tag their own messages with sender_id
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    if v.get("sender_id").and_then(|x| x.as_str()) == Some(&user.user_id.to_string()) {
+                        continue;
+                    }
+                }
+                if socket.send(Message::Text(payload.into())).await.is_err() { break; }
+            }
+
+            // client → pubsub
+            msg = socket.recv() => {
+                let Some(msg) = msg else { break };
+                let text = match msg {
+                    Ok(Message::Text(t)) => t,
+                    Ok(Message::Close(_)) => break,
+                    Ok(Message::Ping(p)) => {
+                        let _ = socket.send(Message::Pong(p)).await;
+                        continue;
+                    }
+                    _ => continue,
+                };
+
+                // Stamp sender_id so the other side can distinguish.
+                let mut value: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert(
+                        "sender_id".to_string(),
+                        serde_json::Value::String(user.user_id.to_string()),
+                    );
+                }
+                let out = value.to_string();
+
+                use redis::AsyncCommands;
+                let mut conn = state.redis_conn.clone();
+                let _: Result<(), redis::RedisError> =
+                    conn.publish(&channel, &out).await;
+            }
+        }
+    }
 }

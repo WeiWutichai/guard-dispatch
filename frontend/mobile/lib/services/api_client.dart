@@ -20,6 +20,10 @@ class ApiClient {
     return Platform.isIOS ? 'http://localhost:80' : 'http://10.0.2.2:80';
   }
 
+  /// Exposed so WebSocket helpers (CallService, TrackingService, ChatService)
+  /// can derive their own `ws://` / `wss://` URLs.
+  static String get baseUrl => _defaultBaseUrl;
+
   late final Dio dio;
 
   ApiClient({String? baseUrl}) {

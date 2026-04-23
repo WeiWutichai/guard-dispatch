@@ -63,6 +63,10 @@ dependencies:
   # Biometric authentication
   local_auth: ^2.3.0
 
+  # In-app calls — peer-to-peer WebRTC (Rust handles signalling + audit).
+  flutter_webrtc: ^0.12.2
+  permission_handler: ^11.3.1
+
   # Map & Location
   flutter_map: ^8.2.2
   latlong2: ^0.9.1
