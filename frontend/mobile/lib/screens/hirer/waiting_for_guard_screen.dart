@@ -78,7 +78,7 @@ class _WaitingForGuardScreenState extends State<WaitingForGuardScreen>
       );
 
       final status = assignment['status'] as String?;
-      if (status == 'accepted') {
+      if (status == 'accepted' || status == 'awaiting_payment') {
         _pollTimer?.cancel();
         Navigator.pushReplacement(
           context,

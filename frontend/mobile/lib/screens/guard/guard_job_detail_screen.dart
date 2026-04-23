@@ -174,6 +174,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
     final urgency = job['urgency'] as String? ?? 'medium';
 
     final detailLines = _parseDescription(description);
+    final jobType = _extractJobType(description);
     final statusLabel = _statusLabel(assignmentStatus, isThai);
     final statusColor = _statusColor(assignmentStatus);
 
@@ -293,6 +294,62 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                     ],
                   ),
                   const SizedBox(height: 20),
+
+                  // Job type banner — shown prominently so guards see the
+                  // job category (งานหมู่บ้าน, งานโรงงาน, ...) before accepting.
+                  if (jobType != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: AppColors.primary.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.work_rounded,
+                              size: 18,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isThai ? 'ประเภทงาน' : 'Job Type',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                jobType,
+                                style: GoogleFonts.inter(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
 
                   // Customer info card
                   Container(
@@ -850,6 +907,23 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
   // =========================================================================
   // Description parser
   // =========================================================================
+
+  /// Extract the "ประเภทงาน: xxx" / "Job Type: xxx" line from the description
+  /// blob the customer submits during booking. Returns just the value (after the colon).
+  String? _extractJobType(String description) {
+    for (final line in description.split('\n')) {
+      final trimmed = line.trim();
+      final lower = trimmed.toLowerCase();
+      if (lower.startsWith('ประเภทงาน:') || lower.startsWith('job type:')) {
+        final idx = trimmed.indexOf(':');
+        if (idx >= 0 && idx < trimmed.length - 1) {
+          final value = trimmed.substring(idx + 1).trim();
+          if (value.isNotEmpty) return value;
+        }
+      }
+    }
+    return null;
+  }
 
   List<_DetailLine> _parseDescription(String description) {
     final lines = description.split('\n').where((l) => l.trim().isNotEmpty);

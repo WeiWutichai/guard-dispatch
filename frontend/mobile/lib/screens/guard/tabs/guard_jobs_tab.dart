@@ -253,6 +253,23 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
   /// Parse the description field into structured detail lines.
   /// The booking screen builds it as "Label: Value\n..." so we split and
   /// assign icons per known prefix.
+  /// Extract "ประเภทงาน: xxx" / "Job Type: xxx" value from the description
+  /// the customer submitted during booking.
+  String? _extractJobType(String description) {
+    for (final line in description.split('\n')) {
+      final trimmed = line.trim();
+      final lower = trimmed.toLowerCase();
+      if (lower.startsWith('ประเภทงาน:') || lower.startsWith('job type:')) {
+        final idx = trimmed.indexOf(':');
+        if (idx >= 0 && idx < trimmed.length - 1) {
+          final value = trimmed.substring(idx + 1).trim();
+          if (value.isNotEmpty) return value;
+        }
+      }
+    }
+    return null;
+  }
+
   List<_DetailLine> _parseDescription(String description, bool isThai) {
     final lines = description.split('\n').where((l) => l.trim().isNotEmpty);
     final result = <_DetailLine>[];
@@ -303,6 +320,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
     final statusLabel = _getStatusLabel(assignmentStatus, isThai);
     final statusColor = _getStatusColor(assignmentStatus);
     final detailLines = _parseDescription(description, isThai);
+    final jobType = _extractJobType(description);
     final createdAt = job['assigned_at'] as String? ?? job['created_at'] as String? ?? '';
     final completedAt = job['completed_at'] as String? ?? '';
     final dateStr = completedAt.isNotEmpty ? completedAt : createdAt;
@@ -362,6 +380,38 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
             ],
           ),
           const SizedBox(height: 12),
+
+          // Job type badge — prominent so guard sees the category
+          // (งานหมู่บ้าน / งานโรงงาน / ...) before tapping accept.
+          if (jobType != null) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.work_rounded,
+                      size: 14, color: AppColors.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${isThai ? "ประเภทงาน" : "Job Type"}: $jobType',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
 
           // Address
           Row(
