@@ -1264,3 +1264,209 @@ pub struct ProgressReportResponse {
     pub media: Vec<ProgressReportMediaItem>,
     pub created_at: DateTime<Utc>,
 }
+
+// =============================================================================
+// C2 — In-app calls (audio, peer-to-peer WebRTC signalling only)
+// =============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "calls.call_status", rename_all = "snake_case")]
+pub enum CallStatus {
+    Initiated,
+    Ringing,
+    Accepted,
+    Connected,
+    Ended,
+    Rejected,
+    Missed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "calls.call_type", rename_all = "snake_case")]
+pub enum CallType {
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct InitiateCallDto {
+    pub callee_id: Uuid,
+    #[serde(default = "default_call_type")]
+    pub call_type: CallType,
+    /// Optional context — surfaces in admin view so ops knows why the
+    /// call happened (which job / chat).
+    #[serde(default)]
+    pub assignment_id: Option<Uuid>,
+    #[serde(default)]
+    pub conversation_id: Option<Uuid>,
+}
+
+fn default_call_type() -> CallType {
+    CallType::Audio
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EndCallDto {
+    /// "hangup_caller" / "hangup_callee" / "network_failure" / "timeout"
+    pub reason: String,
+}
+
+/// Returned by initiate/accept/etc. — the fields the mobile client needs
+/// to open the signaling WebSocket and start ICE.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CallResponse {
+    pub id: Uuid,
+    pub caller_id: Uuid,
+    pub callee_id: Uuid,
+    pub call_type: CallType,
+    pub status: CallStatus,
+    pub assignment_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+    pub started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_reason: Option<String>,
+    /// Public STUN server(s) the client should use. Hardcoded for now; swap
+    /// to config if staging needs TURN later.
+    pub ice_servers: Vec<IceServer>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct CallLogRow {
+    pub id: Uuid,
+    pub caller_id: Uuid,
+    pub callee_id: Uuid,
+    pub call_type: CallType,
+    pub status: CallStatus,
+    pub assignment_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+    pub started_at: DateTime<Utc>,
+    pub answered_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub duration_seconds: Option<i32>,
+    pub end_reason: Option<String>,
+}
+
+impl From<CallLogRow> for CallResponse {
+    fn from(r: CallLogRow) -> Self {
+        Self {
+            id: r.id,
+            caller_id: r.caller_id,
+            callee_id: r.callee_id,
+            call_type: r.call_type,
+            status: r.status,
+            assignment_id: r.assignment_id,
+            conversation_id: r.conversation_id,
+            started_at: r.started_at,
+            answered_at: r.answered_at,
+            ended_at: r.ended_at,
+            duration_seconds: r.duration_seconds,
+            end_reason: r.end_reason,
+            ice_servers: default_ice_servers(),
+        }
+    }
+}
+
+pub fn default_ice_servers() -> Vec<IceServer> {
+    vec![IceServer {
+        urls: vec![
+            "stun:stun.l.google.com:19302".to_string(),
+            "stun:stun1.l.google.com:19302".to_string(),
+        ],
+        username: None,
+        credential: None,
+    }]
+}
+
+// Admin dashboard row — includes participant names for the /calls table.
+#[derive(Debug, sqlx::FromRow)]
+pub struct AdminCallRow {
+    pub id: Uuid,
+    pub caller_id: Uuid,
+    pub callee_id: Uuid,
+    pub caller_name: Option<String>,
+    pub callee_name: Option<String>,
+    pub call_type: CallType,
+    pub status: CallStatus,
+    pub assignment_id: Option<Uuid>,
+    pub started_at: DateTime<Utc>,
+    pub answered_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub duration_seconds: Option<i32>,
+    pub end_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminCallItem {
+    pub id: Uuid,
+    pub caller_id: Uuid,
+    pub callee_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caller_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callee_name: Option<String>,
+    pub call_type: CallType,
+    pub status: CallStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignment_id: Option<Uuid>,
+    pub started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_reason: Option<String>,
+}
+
+impl From<AdminCallRow> for AdminCallItem {
+    fn from(r: AdminCallRow) -> Self {
+        Self {
+            id: r.id,
+            caller_id: r.caller_id,
+            callee_id: r.callee_id,
+            caller_name: r.caller_name,
+            callee_name: r.callee_name,
+            call_type: r.call_type,
+            status: r.status,
+            assignment_id: r.assignment_id,
+            started_at: r.started_at,
+            answered_at: r.answered_at,
+            ended_at: r.ended_at,
+            duration_seconds: r.duration_seconds,
+            end_reason: r.end_reason,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminCallsPage {
+    pub data: Vec<AdminCallItem>,
+    pub total: i64,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct AdminCallsQuery {
+    pub status: Option<String>,
+    pub search: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}

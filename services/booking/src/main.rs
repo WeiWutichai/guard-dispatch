@@ -33,6 +33,14 @@ use crate::state::AppState;
         handlers::update_assignment_status,
         handlers::accept_decline_assignment,
         handlers::cancel_unpaid_assignment,
+        handlers::initiate_call,
+        handlers::accept_call,
+        handlers::reject_call,
+        handlers::end_call,
+        handlers::mark_call_connected,
+        handlers::get_call,
+        handlers::list_admin_calls,
+        handlers::call_signaling_ws,
         handlers::review_completion,
         handlers::submit_review,
         handlers::get_assignments,
@@ -110,6 +118,14 @@ use crate::state::AppState;
         models::UpdateServiceRateDto,
         models::ProgressReportResponse,
         models::ProgressReportMediaItem,
+        models::CallType,
+        models::CallStatus,
+        models::InitiateCallDto,
+        models::EndCallDto,
+        models::CallResponse,
+        models::IceServer,
+        models::AdminCallItem,
+        models::AdminCallsPage,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
@@ -229,6 +245,15 @@ async fn main() -> anyhow::Result<()> {
         )
         // WebSocket — real-time assignment status updates
         .route("/ws/assignments", get(handlers::ws_assignment_status))
+        // C2 — in-app calls (peer-to-peer WebRTC signalling + audit log)
+        .route("/calls/initiate", post(handlers::initiate_call))
+        .route("/calls/{id}", get(handlers::get_call))
+        .route("/calls/{id}/accept", put(handlers::accept_call))
+        .route("/calls/{id}/reject", put(handlers::reject_call))
+        .route("/calls/{id}/end", put(handlers::end_call))
+        .route("/calls/{id}/connected", put(handlers::mark_call_connected))
+        .route("/ws/call", get(handlers::call_signaling_ws))
+        .route("/admin/calls", get(handlers::list_admin_calls))
         // Payments
         .route("/payments", post(handlers::create_payment))
         .route(

@@ -79,6 +79,7 @@ class MyApp extends StatelessWidget {
         child: MaterialApp(
           title: 'P-Guard Mobile',
           debugShowCheckedModeBanner: false,
+          navigatorKey: appNavigatorKey,
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: AppColors.primary,

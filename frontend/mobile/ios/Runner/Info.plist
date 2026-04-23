@@ -85,7 +85,9 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>ใช้เพื่ออัปโหลดเอกสารและรูปถ่ายในการสมัครงาน</string>
 	<key>NSCameraUsageDescription</key>
-	<string>ใช้เพื่อถ่ายรูปเอกสารในการสมัครงาน</string>
+	<string>ใช้เพื่อถ่ายรูปเอกสารในการสมัครงานและสายวิดีโอในแอป</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ใช้เพื่อพูดคุยในสายเรียกเข้าและเรียกออกในแอป</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>ใช้เพื่อบันทึกรูปถ่ายเอกสาร</string>
 </dict>

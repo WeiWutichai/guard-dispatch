@@ -791,6 +791,59 @@ export const activeOpsApi = {
     apiFetch<AdminActiveOpsResponse>("/booking/admin/active-operations"),
 };
 
+// In-app calls audit — GET /booking/admin/calls
+export type CallStatus =
+  | "initiated"
+  | "ringing"
+  | "accepted"
+  | "connected"
+  | "ended"
+  | "rejected"
+  | "missed"
+  | "failed";
+
+export type CallType = "audio" | "video";
+
+export interface AdminCallItem {
+  id: string;
+  caller_id: string;
+  callee_id: string;
+  caller_name: string | null;
+  callee_name: string | null;
+  call_type: CallType;
+  status: CallStatus;
+  assignment_id: string | null;
+  started_at: string;
+  answered_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  end_reason: string | null;
+}
+
+export interface AdminCallsPage {
+  data: AdminCallItem[];
+  total: number;
+}
+
+export const callsApi = {
+  list: (params: {
+    status?: CallStatus;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const q = new URLSearchParams();
+    if (params.status) q.set("status", params.status);
+    if (params.search) q.set("search", params.search);
+    if (params.limit) q.set("limit", String(params.limit));
+    if (params.offset) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return apiFetch<AdminCallsPage>(
+      `/booking/admin/calls${qs ? `?${qs}` : ""}`
+    );
+  },
+};
+
 // Chat moderation — GET /chat/admin/conversations
 export interface AdminConversationItem {
   id: string;
