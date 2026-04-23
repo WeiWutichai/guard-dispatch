@@ -11,6 +11,10 @@ pub struct AppState {
     /// Pre-established multiplexed Redis connection for chat PubSub.
     /// Clone is cheap — shares the underlying connection (per CLAUDE.md).
     pub redis_pubsub: redis::aio::MultiplexedConnection,
+    /// Separate Redis Client handle kept so WS handlers can open new
+    /// subscriber connections (`get_async_pubsub`). The multiplexed
+    /// connection above is single-purpose for PUBLISH.
+    pub redis_pubsub_client: redis::Client,
     pub jwt_config: JwtConfig,
     pub s3_client: aws_sdk_s3::Client,
     pub s3_bucket: String,

@@ -302,19 +302,58 @@ async fn send_fcm_push(
         fcm_auth.project_id()
     );
 
-    let mut message = serde_json::json!({
+    // Build a payload that reliably pops a banner in ALL three lifecycle
+    // states (foreground / background / terminated) on both platforms.
+    //
+    // Android: `priority: "high"` is mandatory to defeat Doze — without it
+    // background pushes are coalesced and may never appear.
+    // iOS (apns): `aps.sound` + `content-available: 1` so the OS shows the
+    // banner and wakes the app's background handler.
+    //
+    // `data` must be flat string:string — FCM rejects nested objects. We
+    // stringify any incoming map so booking/chat payloads (which often
+    // include UUIDs and role hints) make it through.
+    let mut data_map = serde_json::Map::new();
+    if let Some(serde_json::Value::Object(obj)) = data {
+        for (k, v) in obj {
+            let s = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            data_map.insert(k.clone(), serde_json::Value::String(s));
+        }
+    }
+
+    let message = serde_json::json!({
         "message": {
             "token": device_token,
             "notification": {
                 "title": title,
                 "body": body,
             },
+            "data": serde_json::Value::Object(data_map),
+            "android": {
+                "priority": "high",
+                "notification": {
+                    "sound": "default",
+                    "default_sound": true,
+                    "default_vibrate_timings": true,
+                    "channel_id": "default",
+                }
+            },
+            "apns": {
+                "headers": {
+                    "apns-priority": "10",
+                },
+                "payload": {
+                    "aps": {
+                        "sound": "default",
+                        "content-available": 1,
+                    }
+                }
+            }
         }
     });
-
-    if let Some(payload) = data {
-        message["message"]["data"] = payload.clone();
-    }
 
     let response = http_client
         .post(&url)
