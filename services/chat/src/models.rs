@@ -29,18 +29,19 @@ pub struct IncomingChatMessage {
     pub sender_role: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct OutgoingChatMessage {
     pub id: Uuid,
     pub conversation_id: Uuid,
     pub sender_id: Uuid,
     pub content: Option<String>,
     pub message_type: MessageType,
+    #[serde(default)]
     pub sender_role: Option<String>,
     pub created_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_mime_type: Option<String>,
 }
 

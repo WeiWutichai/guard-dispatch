@@ -11,6 +11,7 @@ import 'providers/tracking_provider.dart';
 import 'services/booking_service.dart';
 import 'services/chat_service.dart';
 import 'services/notification_service.dart';
+import 'services/push_notification_bootstrap.dart';
 import 'services/tracking_service.dart';
 import 'screens/phone_input_screen.dart';
 import 'screens/pin_lock_screen.dart';
@@ -24,6 +25,10 @@ void main() async {
 
   // Initialize Firebase (required for FCM push notifications)
   await Firebase.initializeApp();
+
+  // Wire FCM foreground banner + Android channel so pushes land on the
+  // notification tray in every app state (foreground / background / killed).
+  await initPushNotifications();
 
   // Initialize services before starting the app
   final pinService = await PinStorageService.init();
