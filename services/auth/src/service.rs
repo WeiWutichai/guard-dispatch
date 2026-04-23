@@ -810,6 +810,43 @@ pub async fn logout(
 // Request OTP
 // =============================================================================
 
+/// Create a math-captcha challenge the client must answer before requesting
+/// an OTP. Answer is stored in Redis under `otp_captcha:{id}` and consumed
+/// (GETDEL) on `request_otp`.
+pub async fn create_otp_challenge(
+    redis: &redis::aio::MultiplexedConnection,
+) -> Result<crate::models::OtpChallengeResponse, AppError> {
+    use rand::Rng;
+    const TTL_SECONDS: u64 = 180; // 3 minutes to solve
+
+    // Scoped so ThreadRng (not Send) is dropped before the await below.
+    let (a, b): (u32, u32) = {
+        let mut rng = rand::thread_rng();
+        (rng.gen_range(1..20), rng.gen_range(1..20))
+    };
+    // Only addition — simple enough for elderly users, still a bot barrier.
+    let answer = a + b;
+    let question = format!("{a} + {b} = ?");
+    let challenge_id = Uuid::new_v4().to_string();
+
+    let key = format!("otp_captcha:{challenge_id}");
+    let mut conn = redis.clone();
+    redis::cmd("SET")
+        .arg(&key)
+        .arg(answer.to_string())
+        .arg("EX")
+        .arg(TTL_SECONDS)
+        .query_async::<()>(&mut conn)
+        .await
+        .map_err(AppError::Redis)?;
+
+    Ok(crate::models::OtpChallengeResponse {
+        challenge_id,
+        question,
+        expires_in: TTL_SECONDS as i64,
+    })
+}
+
 pub async fn request_otp(
     db: &PgPool,
     redis: &redis::aio::MultiplexedConnection,
@@ -817,12 +854,62 @@ pub async fn request_otp(
     otp_config: &OtpConfig,
     http_client: &reqwest::Client,
     phone: &str,
+    challenge_id: &str,
+    answer: &str,
 ) -> Result<RequestOtpResponse, AppError> {
+    // Validate captcha FIRST — burns the challenge (GETDEL) before any other
+    // work so bots can't reuse one solved challenge to spray requests.
+    {
+        let expected: Option<String> = redis::cmd("GETDEL")
+            .arg(format!("otp_captcha:{challenge_id}"))
+            .query_async(&mut redis.clone())
+            .await
+            .map_err(AppError::Redis)?;
+        let matched = expected
+            .as_deref()
+            .map(|e| e.trim() == answer.trim())
+            .unwrap_or(false);
+        if !matched {
+            return Err(AppError::BadRequest(
+                "รหัสยืนยันไม่ถูกต้อง กรุณาลองอีกครั้ง".to_string(),
+            ));
+        }
+    }
+
     // Validate phone format
     let phone = otp::validate_thai_phone(phone)?;
 
-    // Atomic rate limit: SET NX EX — if key already exists, request is rate-limited.
-    // This prevents the race condition of separate EXISTS + SET calls.
+    // B2 — tiered lockout:
+    //   3 requests in the daily window → 10 min lock
+    //   10 requests in the daily window → admin-contact lock (24h)
+    // `otp_lock:{phone}` holds the active block. TTL distinguishes the two:
+    // anything ≤ 10 min is the burst lock, anything longer is the admin-contact
+    // tier. Clients see a specific message depending on which tier.
+    const BURST_THRESHOLD: i64 = 3;
+    const BURST_LOCK_SECS: u64 = 600;
+    const ADMIN_LOCK_SECS: u64 = 86_400;
+
+    let lock_key = format!("otp_lock:{phone}");
+    let mut conn = redis.clone();
+    let lock_ttl: i64 = redis::cmd("TTL")
+        .arg(&lock_key)
+        .query_async(&mut conn)
+        .await
+        .map_err(AppError::Redis)?;
+    if lock_ttl > 0 {
+        if lock_ttl > BURST_LOCK_SECS as i64 {
+            return Err(AppError::BadRequest(
+                "ขอ OTP เกินจำนวนที่กำหนด กรุณาติดต่อเจ้าหน้าที่".to_string(),
+            ));
+        }
+        let mins = (lock_ttl + 59) / 60;
+        return Err(AppError::BadRequest(format!(
+            "ขอ OTP บ่อยเกินไป กรุณาลองใหม่ในอีก {mins} นาที"
+        )));
+    }
+
+    // Atomic short cooldown between consecutive requests (prevents rapid fire
+    // before we even count the attempt).
     let rate_key = format!("otp_rate:{phone}");
     let mut conn = redis.clone();
     let was_set: Option<String> = redis::cmd("SET")
@@ -839,7 +926,7 @@ pub async fn request_otp(
         return Err(AppError::BadRequest("กรุณารอสักครู่ก่อนขอ OTP ใหม่".to_string()));
     }
 
-    // Daily per-phone OTP cap
+    // Daily per-phone OTP counter — also powers the tiered lockouts above.
     let daily_key = format!("otp_daily:{phone}");
     let mut conn = redis.clone();
     let daily_count: i64 = redis::cmd("INCR")
@@ -864,9 +951,34 @@ pub async fn request_otp(
             .map_err(AppError::Redis)?;
     }
 
-    if daily_count > otp_config.daily_otp_limit as i64 {
+    // Admin-contact tier first — once triggered, don't waste SMS quota.
+    if daily_count >= otp_config.daily_otp_limit as i64 {
+        redis::cmd("SET")
+            .arg(&lock_key)
+            .arg("1")
+            .arg("EX")
+            .arg(ADMIN_LOCK_SECS)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(AppError::Redis)?;
         return Err(AppError::BadRequest(
-            "เกินจำนวนการขอ OTP ต่อวัน กรุณาลองใหม่พรุ่งนี้".to_string(),
+            "ขอ OTP เกินจำนวนที่กำหนด กรุณาติดต่อเจ้าหน้าที่".to_string(),
+        ));
+    }
+
+    // Burst tier — lock exactly when we cross threshold so the Nth request
+    // that tripped the limit is rejected rather than silently sent.
+    if daily_count >= BURST_THRESHOLD {
+        redis::cmd("SET")
+            .arg(&lock_key)
+            .arg("1")
+            .arg("EX")
+            .arg(BURST_LOCK_SECS)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(AppError::Redis)?;
+        return Err(AppError::BadRequest(
+            "ขอ OTP บ่อยเกินไป กรุณาลองใหม่ในอีก 10 นาที".to_string(),
         ));
     }
 
@@ -980,6 +1092,17 @@ pub async fn verify_otp(
         .bind(otp_row.id)
         .execute(db)
         .await?;
+
+    // Clear B2 lockout counters — the user proved ownership of this phone.
+    // Ignore errors (lockout state will self-expire either way).
+    {
+        let mut conn = redis.clone();
+        let _: Result<(), redis::RedisError> = redis::cmd("DEL")
+            .arg(format!("otp_daily:{phone}"))
+            .arg(format!("otp_lock:{phone}"))
+            .query_async(&mut conn)
+            .await;
+    }
 
     // Issue a temporary phone-verified JWT with jti for single-use enforcement.
     // Uses a separate TTL (phone_verify_ttl_minutes) to give users time to fill the registration form.

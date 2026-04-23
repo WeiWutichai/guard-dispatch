@@ -423,15 +423,33 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
               ],
             ),
           ),
-        // Error message
+        // Error message — route the guard to Settings for permanent denials
+        // or when they granted only "while in use" (B4 requires always).
         if (tracking.error != null && tracking.error!.contains('permission'))
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              strings.locationPermissionDenied,
-              style: GoogleFonts.inter(
-                fontSize: 12,
-                color: AppColors.danger,
+            child: GestureDetector(
+              onTap: () => Geolocator.openAppSettings(),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded,
+                      size: 14, color: AppColors.danger),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      tracking.error == 'location_permission_needs_always'
+                          ? (LanguageProvider.of(context).isThai
+                              ? 'ต้องอนุญาต "ตลอดเวลา" — แตะเพื่อเปิดตั้งค่า'
+                              : 'Must allow "Always" — tap to open settings')
+                          : strings.locationPermissionDenied,
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: AppColors.danger,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

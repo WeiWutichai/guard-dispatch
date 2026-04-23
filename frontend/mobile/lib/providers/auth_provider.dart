@@ -329,12 +329,27 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Fetch a math-captcha challenge the user must solve before `requestOtp`.
+  /// Returns `{challenge_id, question, expires_in}`.
+  Future<Map<String, dynamic>> getOtpChallenge() async {
+    final response = await _apiClient.dio.get('/auth/otp/challenge');
+    return (response.data['data'] as Map).cast<String, dynamic>();
+  }
+
   /// Request OTP from the backend for phone verification.
   ///
   /// Calls POST /auth/otp/request with the phone number.
   /// Throws [DioException] on network error or server-side rate limiting.
-  Future<void> requestOtp(String phone) async {
-    await _apiClient.dio.post('/auth/otp/request', data: {'phone': phone});
+  Future<void> requestOtp(
+    String phone, {
+    required String challengeId,
+    required String answer,
+  }) async {
+    await _apiClient.dio.post('/auth/otp/request', data: {
+      'phone': phone,
+      'challenge_id': challengeId,
+      'answer': answer,
+    });
   }
 
   /// Verify OTP code against the backend.

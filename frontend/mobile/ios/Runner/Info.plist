@@ -70,6 +70,12 @@
 	<string>ใช้เพื่อส่งตำแหน่งของคุณขณะปฏิบัติงาน</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>ใช้เพื่อส่งตำแหน่งของคุณขณะปฏิบัติงาน แม้แอปจะทำงานอยู่เบื้องหลัง</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>ใช้เพื่อส่งตำแหน่งของคุณขณะปฏิบัติงาน แม้แอปจะทำงานอยู่เบื้องหลัง</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>tel</string>

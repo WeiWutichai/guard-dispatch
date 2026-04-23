@@ -124,7 +124,7 @@ class _AuthInterceptor extends Interceptor {
     // Unauthenticated callers (during 3-step registration) have no stored
     // access token, so the `if (token != null)` check below skips the
     // header for them and they fall through to the body's phone_verified_token.
-    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/login/mobile', '/auth/check-status', '/auth/register', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/guard', '/auth/profile/customer', '/auth/refresh/mobile'];
+    final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/login/mobile', '/auth/check-status', '/auth/register', '/auth/otp/challenge', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/guard', '/auth/profile/customer', '/auth/refresh/mobile'];
     final isPublic = publicPaths.any((p) => options.path.contains(p));
 
     if (!isPublic) {
