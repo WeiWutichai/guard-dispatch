@@ -35,6 +35,7 @@ bytes           = { workspace = true }
 image           = { workspace = true }
 imageproc       = { workspace = true }
 ab_glyph        = { workspace = true }
+rand            = { workspace = true }
 shared          = { workspace = true }
 
 [dev-dependencies]

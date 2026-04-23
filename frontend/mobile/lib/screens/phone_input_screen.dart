@@ -83,7 +83,19 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
 
     try {
       final authProvider = context.read<AuthProvider>();
-      await authProvider.requestOtp(phone);
+
+      // B3 — solve math captcha before the backend will issue an OTP.
+      final captchaAnswer = await _askCaptcha(authProvider);
+      if (captchaAnswer == null) {
+        // User cancelled the challenge.
+        return;
+      }
+
+      await authProvider.requestOtp(
+        phone,
+        challengeId: captchaAnswer.challengeId,
+        answer: captchaAnswer.answer,
+      );
 
       // Persist phone early so it's always available after this point
       final prefs = await SharedPreferences.getInstance();
@@ -112,6 +124,89 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
       _otpInFlight = false;
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// Fetch a captcha from the backend and ask the user to solve it.
+  /// Returns null if the user cancels; on submit returns the challenge id
+  /// and the user's answer.
+  Future<_CaptchaAnswer?> _askCaptcha(AuthProvider auth) async {
+    final isThai = LanguageProvider.of(context).isThai;
+    Map<String, dynamic> challenge;
+    try {
+      challenge = await auth.getOtpChallenge();
+    } catch (_) {
+      if (!mounted) return null;
+      setState(() => _errorMessage =
+          isThai ? 'โหลดรหัสยืนยันไม่สำเร็จ' : 'Failed to load verification');
+      return null;
+    }
+
+    final challengeId = challenge['challenge_id'] as String? ?? '';
+    final question = challenge['question'] as String? ?? '';
+    if (challengeId.isEmpty || !mounted) return null;
+
+    final answerCtrl = TextEditingController();
+    final answer = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Text(
+          isThai ? 'ยืนยันว่าไม่ใช่บอท' : 'Verify you are not a robot',
+          style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              isThai ? 'กรุณาตอบคำถาม:' : 'Please solve:',
+              style: GoogleFonts.inter(fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              question,
+              style: GoogleFonts.inter(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: AppColors.primary,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: answerCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                hintText: isThai ? 'ใส่คำตอบ' : 'Your answer',
+              ),
+              onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: Text(isThai ? 'ยกเลิก' : 'Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, answerCtrl.text.trim()),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(isThai ? 'ยืนยัน' : 'Submit'),
+          ),
+        ],
+      ),
+    );
+    if (answer == null || answer.isEmpty) return null;
+    return _CaptchaAnswer(challengeId: challengeId, answer: answer);
   }
 
   @override
@@ -437,4 +532,10 @@ class _PhoneInputScreenState extends State<PhoneInputScreen> {
       ),
     );
   }
+}
+
+class _CaptchaAnswer {
+  final String challengeId;
+  final String answer;
+  _CaptchaAnswer({required this.challengeId, required this.answer});
 }

@@ -200,11 +200,27 @@ pub struct SessionRow {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RequestOtpRequest {
     pub phone: String,
+    /// Math-captcha challenge id returned from `GET /auth/otp/challenge`.
+    pub challenge_id: String,
+    /// Numeric answer to the challenge question. Strings tolerated so clients
+    /// can just forward user input without parsing.
+    pub answer: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RequestOtpResponse {
     pub message: String,
+    pub expires_in: i64,
+}
+
+/// Math-captcha challenge handed to the mobile client before it can request
+/// an OTP. Prevents automated spam of `POST /auth/otp/request`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OtpChallengeResponse {
+    pub challenge_id: String,
+    /// Human-readable question, e.g. "5 + 3 = ?"
+    pub question: String,
+    /// Seconds until the challenge expires.
     pub expires_in: i64,
 }
 
