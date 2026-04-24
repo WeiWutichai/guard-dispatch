@@ -12,8 +12,9 @@ import {
   Receipt,
   Banknote,
   ArrowRight,
+  Download,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, downloadCsv, exportTimestamp, toCsv } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
 import {
   walletApi,
@@ -149,19 +150,55 @@ export default function WalletPage() {
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <header className="mb-6">
-        <div className="flex items-center gap-3 mb-1">
-          <div className="p-2 bg-emerald-50 rounded-lg">
-            <WalletIcon className="h-5 w-5 text-emerald-600" />
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <div className="p-2 bg-emerald-50 rounded-lg">
+                <WalletIcon className="h-5 w-5 text-emerald-600" />
+              </div>
+              <h1 className="text-2xl font-bold text-slate-900">
+                {isThai ? "กระเป๋าเงิน" : "Wallet"}
+              </h1>
+            </div>
+            <p className="text-sm text-slate-500 ml-11">
+              {isThai
+                ? "จัดการรายได้ ยอดคืนเงิน และการชำระเงินทั้งหมดในระบบ"
+                : "Manage revenue, refunds, and all payments in the system"}
+            </p>
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            {isThai ? "กระเป๋าเงิน" : "Wallet"}
-          </h1>
+          {(activeTab === "refunds" || activeTab === "payments") && (
+            <button
+              onClick={() => {
+                const rows = activeTab === "refunds" ? refunds : payments;
+                const csv = toCsv(rows as unknown as Record<string, unknown>[], [
+                  ["Payment ID", (p) => p.id as string],
+                  ["Request ID", (p) => (p.request_id as string | null) ?? ""],
+                  ["Customer", (p) => (p.customer_name as string | null) ?? ""],
+                  ["Amount", (p) => p.amount as number],
+                  ["Final", (p) => (p.final_amount as number | null) ?? ""],
+                  ["Refund", (p) => (p.refund_amount as number | null) ?? ""],
+                  ["Tip", (p) => (p.tip_amount as number | null) ?? 0],
+                  ["Status", (p) => (p.status as string | null) ?? ""],
+                  ["Refund Status", (p) => (p.refund_status as string | null) ?? ""],
+                  ["Method", (p) => (p.payment_method as string | null) ?? ""],
+                  ["Paid At", (p) => (p.paid_at as string | null) ?? ""],
+                  ["Created", (p) => (p.created_at as string | null) ?? ""],
+                ]);
+                downloadCsv(
+                  `${activeTab}-${exportTimestamp()}.csv`,
+                  csv
+                );
+              }}
+              disabled={
+                (activeTab === "refunds" ? refunds : payments).length === 0
+              }
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download className="h-4 w-4" />
+              Export CSV
+            </button>
+          )}
         </div>
-        <p className="text-sm text-slate-500 ml-11">
-          {isThai
-            ? "จัดการรายได้ ยอดคืนเงิน และการชำระเงินทั้งหมดในระบบ"
-            : "Manage revenue, refunds, and all payments in the system"}
-        </p>
       </header>
 
       <div className="bg-white rounded-xl border border-slate-200 mb-6">
