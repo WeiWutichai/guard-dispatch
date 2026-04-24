@@ -40,3 +40,10 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Portrait photos uploaded from phones carry EXIF rotation metadata;
+   honour it so guard documents render the same orientation admins see
+   in the mobile upload preview. */
+img {
+  image-orientation: from-image;
+}

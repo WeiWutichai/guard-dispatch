@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
@@ -523,11 +524,46 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       }
     } catch (e) {
       if (mounted) {
+        final isThai = LanguageProvider.of(context).isThai;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: AppColors.danger, behavior: SnackBarBehavior.floating),
+          SnackBar(
+            content: Text(_formatApiError(e, isThai)),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     }
+  }
+
+  /// Turn the raw Dio/exception into a message the guard can act on.
+  /// Surfaces the server's `error.message` when the response is JSON, falls back
+  /// to the HTTP status code, and only reveals a generic phrase for network-level
+  /// failures. Helps diagnose silent 4xx/5xx from `PUT /auth/guards/me/expiry`.
+  String _formatApiError(Object e, bool isThai) {
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map) {
+        final err = data['error'];
+        if (err is Map && err['message'] is String) {
+          return err['message'] as String;
+        }
+        if (data['message'] is String) {
+          return data['message'] as String;
+        }
+      }
+      final status = e.response?.statusCode;
+      if (status != null) {
+        return isThai
+            ? 'บันทึกไม่สำเร็จ (HTTP $status)'
+            : 'Save failed (HTTP $status)';
+      }
+      return isThai
+          ? 'เครือข่ายขัดข้อง โปรดลองอีกครั้ง'
+          : 'Network error, please try again';
+    }
+    return isThai ? 'บันทึกไม่สำเร็จ: $e' : 'Save failed: $e';
   }
 
   void _showDocumentPreview(BuildContext context, String title, String url) {

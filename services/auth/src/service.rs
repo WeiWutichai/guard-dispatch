@@ -2214,10 +2214,33 @@ pub async fn admin_update_guard_profile(
     user_id: Uuid,
     req: crate::models::AdminUpdateGuardProfileRequest,
 ) -> Result<(), AppError> {
-    fn parse_date(s: &Option<String>) -> Option<chrono::NaiveDate> {
-        s.as_ref()
-            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+    // Parse an optional `YYYY-MM-DD` date. Returns BadRequest rather than silently
+    // dropping the value — without this, an invalid payload would COALESCE to NULL
+    // and the UPDATE would look successful while changing nothing. (security-reviewer)
+    fn parse_date(
+        s: &Option<String>,
+        field: &str,
+    ) -> Result<Option<chrono::NaiveDate>, AppError> {
+        match s.as_ref() {
+            None => Ok(None),
+            Some(d) => chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                .map(Some)
+                .map_err(|_| {
+                    AppError::BadRequest(format!(
+                        "Invalid {} format, expected YYYY-MM-DD",
+                        field
+                    ))
+                }),
+        }
     }
+
+    let date_of_birth = parse_date(&req.date_of_birth, "date_of_birth")?;
+    let id_card_expiry = parse_date(&req.id_card_expiry, "id_card_expiry")?;
+    let security_license_expiry =
+        parse_date(&req.security_license_expiry, "security_license_expiry")?;
+    let training_cert_expiry = parse_date(&req.training_cert_expiry, "training_cert_expiry")?;
+    let criminal_check_expiry = parse_date(&req.criminal_check_expiry, "criminal_check_expiry")?;
+    let driver_license_expiry = parse_date(&req.driver_license_expiry, "driver_license_expiry")?;
 
     sqlx::query(
         r#"
@@ -2239,17 +2262,17 @@ pub async fn admin_update_guard_profile(
     )
     .bind(user_id)
     .bind(&req.gender)
-    .bind(parse_date(&req.date_of_birth))
+    .bind(date_of_birth)
     .bind(req.years_of_experience)
     .bind(&req.previous_workplace)
     .bind(&req.bank_name)
     .bind(&req.account_number)
     .bind(&req.account_name)
-    .bind(parse_date(&req.id_card_expiry))
-    .bind(parse_date(&req.security_license_expiry))
-    .bind(parse_date(&req.training_cert_expiry))
-    .bind(parse_date(&req.criminal_check_expiry))
-    .bind(parse_date(&req.driver_license_expiry))
+    .bind(id_card_expiry)
+    .bind(security_license_expiry)
+    .bind(training_cert_expiry)
+    .bind(criminal_check_expiry)
+    .bind(driver_license_expiry)
     .execute(db)
     .await?;
 

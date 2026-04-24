@@ -6,6 +6,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import { useRouter, usePathname } from "next/navigation";
@@ -24,6 +25,11 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+// 15 minutes of inactivity → auto logout. Also enforced on page load
+// so closing the browser for >15 minutes logs the user out on return.
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+const ACTIVITY_STORAGE_KEY = "admin_last_activity_ts";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -75,9 +81,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Even if API call fails, cookies are cleared by backend
     }
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(ACTIVITY_STORAGE_KEY);
+    }
     setUser(null);
     router.push("/login");
   }, [router]);
+
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Idle logout: 15 min no activity → logout. Activity timestamp stored
+  // in localStorage so a page reload / browser close also enforces the rule.
+  useEffect(() => {
+    if (!isAuthenticated || typeof window === "undefined") return;
+
+    const scheduleIdleLogout = () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        void logout();
+      }, IDLE_TIMEOUT_MS);
+    };
+
+    const onActivity = () => {
+      localStorage.setItem(ACTIVITY_STORAGE_KEY, String(Date.now()));
+      scheduleIdleLogout();
+    };
+
+    const storedTs = Number(localStorage.getItem(ACTIVITY_STORAGE_KEY) || 0);
+    if (storedTs > 0 && Date.now() - storedTs > IDLE_TIMEOUT_MS) {
+      void logout();
+      return;
+    }
+
+    onActivity();
+
+    const events: (keyof WindowEventMap)[] = [
+      "mousedown",
+      "keydown",
+      "scroll",
+      "touchstart",
+    ];
+    for (const ev of events) window.addEventListener(ev, onActivity, { passive: true });
+
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      for (const ev of events) window.removeEventListener(ev, onActivity);
+    };
+  }, [isAuthenticated, logout]);
 
   const refreshUser = useCallback(async () => {
     try {
