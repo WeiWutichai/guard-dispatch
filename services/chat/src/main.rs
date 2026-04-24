@@ -114,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         redis_cache,
         redis_pubsub,
+        redis_pubsub_client,
         jwt_config,
         s3_client,
         s3_bucket: s3_config.bucket.clone(),

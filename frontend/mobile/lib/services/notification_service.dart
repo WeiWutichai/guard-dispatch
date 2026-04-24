@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import '../services/api_client.dart';
@@ -36,7 +37,7 @@ class NotificationService {
       // POST /notification/tokens
       await _apiClient.dio.post(
         '/notification/tokens',
-        data: {'token': token, 'device_type': 'android'},
+        data: {'token': token, 'device_type': Platform.isIOS ? 'ios' : 'android'},
       );
 
       if (kDebugMode) debugPrint('[FCM] Token registered with backend');
@@ -46,7 +47,7 @@ class NotificationService {
         try {
           await _apiClient.dio.post(
             '/notification/tokens',
-            data: {'token': newToken, 'device_type': 'android'},
+            data: {'token': newToken, 'device_type': Platform.isIOS ? 'ios' : 'android'},
           );
           if (kDebugMode) debugPrint('[FCM] Refreshed token registered');
         } catch (e) {

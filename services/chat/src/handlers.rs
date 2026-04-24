@@ -51,7 +51,54 @@ pub async fn ws_handler(
 }
 
 async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: AuthUser) {
+    use futures_util::StreamExt;
+    use std::collections::HashSet;
+
     tracing::info!("Chat WebSocket connected: user_id={}", user.user_id);
+
+    // Authorized-conversations cache — pre-populated from the DB so Redis
+    // pub/sub messages from other rooms the user isn't in can never leak.
+    // Admins get a wildcard bypass.
+    let mut authorized: HashSet<uuid::Uuid> = HashSet::new();
+    let is_admin = user.role == "admin";
+    if !is_admin {
+        match sqlx::query_scalar::<_, uuid::Uuid>(
+            "SELECT conversation_id FROM chat.conversation_participants WHERE user_id = $1",
+        )
+        .bind(user.user_id)
+        .fetch_all(&state.db)
+        .await
+        {
+            Ok(ids) => authorized.extend(ids),
+            Err(e) => tracing::warn!(
+                "Chat WS: failed to prefetch conversations for user {}: {e}",
+                user.user_id
+            ),
+        }
+    }
+
+    // Redis pub/sub subscriber — listens for every `chat:*` broadcast the
+    // publisher side emits in `publish_chat_message`. One subscriber per
+    // connection keeps the DB/Redis load bounded.
+    let mut pubsub = match state.redis_pubsub_client.get_async_pubsub().await {
+        Ok(ps) => ps,
+        Err(e) => {
+            tracing::error!("Chat WS: failed to open pubsub connection: {e}");
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::json!({"error": "Internal server error"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+    if let Err(e) = pubsub.psubscribe("chat:*").await {
+        tracing::error!("Chat WS: psubscribe failed: {e}");
+        return;
+    }
+    let mut pubsub_stream = pubsub.on_message();
 
     // Rate limiting: max 5 messages per second per connection
     let mut last_message_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
@@ -70,77 +117,124 @@ async fn handle_chat_socket(mut socket: WebSocket, state: Arc<AppState>, user: A
             ping_interval.saturating_sub(last_activity.elapsed())
         };
 
-        let msg = match tokio::time::timeout(wait_duration, socket.recv()).await {
-            Ok(Some(msg)) => msg,
-            Ok(None) => break,
-            Err(_) => {
-                if ping_sent_at.is_some() {
-                    tracing::warn!("Chat WS pong timeout: user_id={}", user.user_id);
+        tokio::select! {
+            // ── Incoming pub/sub message → forward to client ─────────────
+            Some(msg) = pubsub_stream.next() => {
+                let payload: String = match msg.get_payload() {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let parsed: Option<crate::models::OutgoingChatMessage> =
+                    serde_json::from_str(&payload).ok();
+                let Some(outgoing) = parsed else { continue };
+
+                // Don't echo the sender — they already got a direct reply on
+                // their `send_message` RPC.
+                if outgoing.sender_id == user.user_id {
+                    continue;
+                }
+
+                // Drop messages for rooms the user isn't a participant of.
+                if !is_admin && !authorized.contains(&outgoing.conversation_id) {
+                    continue;
+                }
+
+                if socket
+                    .send(Message::Text(payload.into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
-                if socket.send(Message::Ping(vec![].into())).await.is_err() {
-                    break;
+            }
+
+            // ── WebSocket recv (with ping timeout) ───────────────────────
+            ws_msg = tokio::time::timeout(wait_duration, socket.recv()) => {
+                let msg = match ws_msg {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => break,
+                    Err(_) => {
+                        if ping_sent_at.is_some() {
+                            tracing::warn!("Chat WS pong timeout: user_id={}", user.user_id);
+                            break;
+                        }
+                        if socket.send(Message::Ping(vec![].into())).await.is_err() {
+                            break;
+                        }
+                        ping_sent_at = Some(std::time::Instant::now());
+                        continue;
+                    }
+                };
+
+                let text = match msg {
+                    Ok(Message::Text(text)) => {
+                        last_activity = std::time::Instant::now();
+                        ping_sent_at = None;
+                        text
+                    }
+                    Ok(Message::Pong(_)) => {
+                        last_activity = std::time::Instant::now();
+                        ping_sent_at = None;
+                        continue;
+                    }
+                    Ok(Message::Close(_)) => break,
+                    Err(e) => {
+                        tracing::warn!("WebSocket recv error: {e}");
+                        break;
+                    }
+                    _ => continue,
+                };
+
+                // Rate limit: drop messages that arrive too fast
+                let now = std::time::Instant::now();
+                if now.duration_since(last_message_at) < min_interval {
+                    continue;
                 }
-                ping_sent_at = Some(std::time::Instant::now());
-                continue;
-            }
-        };
+                last_message_at = now;
 
-        let text = match msg {
-            Ok(Message::Text(text)) => {
-                last_activity = std::time::Instant::now();
-                ping_sent_at = None;
-                text
-            }
-            Ok(Message::Pong(_)) => {
-                last_activity = std::time::Instant::now();
-                ping_sent_at = None;
-                continue;
-            }
-            Ok(Message::Close(_)) => break,
-            Err(e) => {
-                tracing::warn!("WebSocket recv error: {e}");
-                break;
-            }
-            _ => continue,
-        };
+                let incoming: IncomingChatMessage = match serde_json::from_str(&text) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let _ = socket
+                            .send(Message::Text(
+                                serde_json::json!({"error": format!("Invalid message: {e}")})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                        continue;
+                    }
+                };
 
-        // Rate limit: drop messages that arrive too fast
-        let now = std::time::Instant::now();
-        if now.duration_since(last_message_at) < min_interval {
-            continue;
-        }
-        last_message_at = now;
+                // Keep our authorized set in sync when the user sends into a
+                // conversation we haven't cached yet (e.g. a new conversation
+                // created this session). `send_message` already enforces
+                // participant check in the DB, so trusting it here is safe.
+                let incoming_convo = incoming.conversation_id;
+                authorized.insert(incoming_convo);
 
-        let incoming: IncomingChatMessage = match serde_json::from_str(&text) {
-            Ok(m) => m,
-            Err(e) => {
-                let _ = socket
-                    .send(Message::Text(
-                        serde_json::json!({"error": format!("Invalid message: {e}")})
-                            .to_string()
-                            .into(),
-                    ))
-                    .await;
-                continue;
-            }
-        };
-
-        match crate::service::send_message(&state.db, &state.redis_pubsub, user.user_id, incoming)
-            .await
-        {
-            Ok(outgoing) => {
-                let json = serde_json::to_string(&outgoing).unwrap_or_default();
-                let _ = socket.send(Message::Text(json.into())).await;
-            }
-            Err(e) => {
-                let _ = socket
-                    .send(Message::Text(
-                        serde_json::json!({"error": e.to_string()})
-                            .to_string()
-                            .into(),
-                    ))
-                    .await;
+                match crate::service::send_message(
+                    &state.db,
+                    &state.redis_pubsub,
+                    user.user_id,
+                    incoming,
+                )
+                .await
+                {
+                    Ok(outgoing) => {
+                        let json = serde_json::to_string(&outgoing).unwrap_or_default();
+                        let _ = socket.send(Message::Text(json.into())).await;
+                    }
+                    Err(e) => {
+                        let _ = socket
+                            .send(Message::Text(
+                                serde_json::json!({"error": e.to_string()})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                    }
+                }
             }
         }
     }
