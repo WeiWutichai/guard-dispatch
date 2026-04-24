@@ -18,8 +18,9 @@ import {
   FileText,
   Loader2,
   RefreshCw,
+  Download,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, downloadCsv, exportTimestamp, toCsv } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
 import { authApi, type UserResponse, type GuardProfile } from "@/lib/api";
 
@@ -127,12 +128,35 @@ export default function GuardsPage() {
     { label: t.guards.modal.passbookPhoto, url: gp.passbook_photo_url },
   ];
 
+  const handleExportCsv = () => {
+    const csv = toCsv(guards as unknown as Record<string, unknown>[], [
+      ["ID", (g) => g.id as string],
+      ["Name", (g) => (g.full_name as string | null) ?? ""],
+      ["Phone", (g) => (g.phone as string | null) ?? ""],
+      ["Email", (g) => (g.email as string | null) ?? ""],
+      ["Approval", (g) => (g.approval_status as string | null) ?? ""],
+      ["Active", (g) => (g.is_active ? "yes" : "no")],
+      ["Created", (g) => (g.created_at as string | null) ?? ""],
+    ]);
+    downloadCsv(`guards-${exportTimestamp()}.csv`, csv);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">{t.guards.title}</h1>
-        <p className="text-slate-500 mt-1">{t.guards.subtitle}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">{t.guards.title}</h1>
+          <p className="text-slate-500 mt-1">{t.guards.subtitle}</p>
+        </div>
+        <button
+          onClick={handleExportCsv}
+          disabled={guards.length === 0}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Download className="h-4 w-4" />
+          Export CSV
+        </button>
       </div>
 
       {/* Stats Cards */}
