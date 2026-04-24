@@ -40,6 +40,7 @@ use crate::state::AppState;
         handlers::mark_call_connected,
         handlers::get_call,
         handlers::list_admin_calls,
+        handlers::admin_report_summary,
         handlers::call_signaling_ws,
         handlers::review_completion,
         handlers::submit_review,
@@ -126,6 +127,8 @@ use crate::state::AppState;
         models::IceServer,
         models::AdminCallItem,
         models::AdminCallsPage,
+        models::AdminReportSummary,
+        models::ReportDailyPoint,
         shared::error::ErrorBody,
         shared::error::ErrorDetail,
     )),
@@ -207,6 +210,28 @@ async fn main() -> anyhow::Result<()> {
         s3_public_url,
     });
 
+    // Background task: flip stale `ringing` calls to `missed` after 45s so
+    // the caller's UI gets a deterministic hangup even if the callee never
+    // opens the push. Runs every 10 seconds.
+    {
+        let db = state.db.clone();
+        let redis = state.redis_conn.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                match service::expire_stale_ringing_calls(&db, &redis).await {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("Missed-call sweep: flipped {n} stale calls to missed");
+                    }
+                    Err(e) => tracing::error!("Missed-call sweep failed: {e}"),
+                    _ => {}
+                }
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/health", get(health_check))
         .route(
@@ -254,6 +279,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/calls/{id}/connected", put(handlers::mark_call_connected))
         .route("/ws/call", get(handlers::call_signaling_ws))
         .route("/admin/calls", get(handlers::list_admin_calls))
+        .route(
+            "/admin/reports/summary",
+            get(handlers::admin_report_summary),
+        )
         // Payments
         .route("/payments", post(handlers::create_payment))
         .route(

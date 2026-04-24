@@ -825,6 +825,32 @@ export interface AdminCallsPage {
   total: number;
 }
 
+// Admin reports — GET /booking/admin/reports/summary
+export interface ReportDailyPoint {
+  day: string; // ISO timestamp
+  completed: number;
+  cancelled: number;
+}
+
+export interface AdminReportSummary {
+  period: string;
+  total_revenue: number;
+  revenue_change_pct: number;
+  tasks_completed: number;
+  tasks_completed_change_pct: number;
+  tasks_cancelled: number;
+  tasks_cancelled_change_pct: number;
+  active_guards: number;
+  weekly: ReportDailyPoint[];
+}
+
+export const reportsApi = {
+  summary: (period: "week" | "month" | "quarter" | "year" = "month") =>
+    apiFetch<AdminReportSummary>(
+      `/booking/admin/reports/summary?period=${period}`
+    ),
+};
+
 export const callsApi = {
   list: (params: {
     status?: CallStatus;

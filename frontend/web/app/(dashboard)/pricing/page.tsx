@@ -6,11 +6,8 @@ import {
   Plus,
   Trash2,
   Edit3,
-  Percent,
   MapPin,
-  Tag,
   History,
-  Settings,
   X,
   Save,
   Calculator,
@@ -154,13 +151,13 @@ export default function PricingPage() {
     status: "active",
   });
 
+  // Only "services" is wired to the backend today. Commission, area
+  // pricing, flexibility bounds, promotions, and history are all UI-only
+  // mocks stored in local component state — they don't persist, so we
+  // hide them from operators rather than ship a misleading surface.
+  // Re-enable each entry here when its backend lands (see code-review-deep.md M1).
   const tabs: { id: PricingTab; label: string; labelEn: string; icon: typeof DollarSign }[] = [
     { id: "services", label: "อัตราค่าบริการ", labelEn: "Service Rates", icon: DollarSign },
-    { id: "commission", label: "ค่าคอมมิชชัน", labelEn: "Commission", icon: Percent },
-    { id: "areas", label: "ราคาตามพื้นที่", labelEn: "Area Pricing", icon: MapPin },
-    { id: "flexibility", label: "ขอบเขตราคา", labelEn: "Price Range", icon: Settings },
-    { id: "promotions", label: "โปรโมชัน", labelEn: "Promotions", icon: Tag },
-    { id: "history", label: "ประวัติการปรับราคา", labelEn: "Price History", icon: History },
   ];
 
   const handleAddService = async () => {

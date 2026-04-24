@@ -4968,6 +4968,218 @@ pub async fn list_admin_calls(
     })
 }
 
+/// Admin `/reports` summary — four headline metrics with period-over-period
+/// deltas. Keeps the queries trivial so it can be fetched on every page
+/// view without a cache: PostgreSQL can chew through these in single-digit
+/// milliseconds on our data volume.
+pub async fn admin_report_summary(
+    db: &PgPool,
+    period: &str,
+) -> Result<crate::models::AdminReportSummary, AppError> {
+    let (window, previous_start, previous_end) = match period {
+        "week" => ("7 days", "14 days", "7 days"),
+        "quarter" => ("90 days", "180 days", "90 days"),
+        "year" => ("365 days", "730 days", "365 days"),
+        _ => ("30 days", "60 days", "30 days"), // default: month
+    };
+
+    #[derive(sqlx::FromRow)]
+    struct RevenueRow {
+        total: Option<rust_decimal::Decimal>,
+    }
+    #[derive(sqlx::FromRow)]
+    struct CountRow {
+        count: Option<i64>,
+    }
+
+    let revenue_sql = format!(
+        "SELECT COALESCE(SUM(COALESCE(final_amount, amount)), 0) AS total
+         FROM booking.payments
+         WHERE status = 'completed' AND paid_at >= NOW() - INTERVAL '{window}'"
+    );
+    let revenue_prev_sql = format!(
+        "SELECT COALESCE(SUM(COALESCE(final_amount, amount)), 0) AS total
+         FROM booking.payments
+         WHERE status = 'completed'
+           AND paid_at >= NOW() - INTERVAL '{previous_start}'
+           AND paid_at <  NOW() - INTERVAL '{previous_end}'"
+    );
+    let completed_sql = format!(
+        "SELECT COUNT(*) AS count
+         FROM booking.assignments
+         WHERE status = 'completed' AND completed_at >= NOW() - INTERVAL '{window}'"
+    );
+    let completed_prev_sql = format!(
+        "SELECT COUNT(*) AS count
+         FROM booking.assignments
+         WHERE status = 'completed'
+           AND completed_at >= NOW() - INTERVAL '{previous_start}'
+           AND completed_at <  NOW() - INTERVAL '{previous_end}'"
+    );
+    let cancelled_sql = format!(
+        "SELECT COUNT(*) AS count
+         FROM booking.assignments
+         WHERE status = 'cancelled' AND assigned_at >= NOW() - INTERVAL '{window}'"
+    );
+    let cancelled_prev_sql = format!(
+        "SELECT COUNT(*) AS count
+         FROM booking.assignments
+         WHERE status = 'cancelled'
+           AND assigned_at >= NOW() - INTERVAL '{previous_start}'
+           AND assigned_at <  NOW() - INTERVAL '{previous_end}'"
+    );
+
+    let (
+        revenue,
+        revenue_prev,
+        completed,
+        completed_prev,
+        cancelled,
+        cancelled_prev,
+        active_guards,
+    ) = tokio::join!(
+        sqlx::query_as::<_, RevenueRow>(&revenue_sql).fetch_one(db),
+        sqlx::query_as::<_, RevenueRow>(&revenue_prev_sql).fetch_one(db),
+        sqlx::query_as::<_, CountRow>(&completed_sql).fetch_one(db),
+        sqlx::query_as::<_, CountRow>(&completed_prev_sql).fetch_one(db),
+        sqlx::query_as::<_, CountRow>(&cancelled_sql).fetch_one(db),
+        sqlx::query_as::<_, CountRow>(&cancelled_prev_sql).fetch_one(db),
+        sqlx::query_as::<_, CountRow>(
+            "SELECT COUNT(*) AS count FROM auth.users
+             WHERE role = 'guard' AND approval_status = 'approved' AND is_active = true",
+        )
+        .fetch_one(db),
+    );
+
+    let revenue = revenue?.total.unwrap_or_default();
+    let revenue_prev = revenue_prev?.total.unwrap_or_default();
+    let completed = completed?.count.unwrap_or(0);
+    let completed_prev = completed_prev?.count.unwrap_or(0);
+    let cancelled = cancelled?.count.unwrap_or(0);
+    let cancelled_prev = cancelled_prev?.count.unwrap_or(0);
+    let active_guards = active_guards?.count.unwrap_or(0);
+
+    // Weekly series — last 7 days completed + cancelled counts by day.
+    let series_rows: Vec<(chrono::DateTime<Utc>, i64, i64)> = sqlx::query_as(
+        r#"
+        WITH days AS (
+            SELECT date_trunc('day', NOW() - (i || ' days')::INTERVAL) AS day
+            FROM generate_series(0, 6) AS i
+        )
+        SELECT
+            d.day AS "day!",
+            (SELECT COUNT(*) FROM booking.assignments a
+             WHERE a.status = 'completed'
+               AND a.completed_at >= d.day AND a.completed_at < d.day + INTERVAL '1 day') AS "completed!",
+            (SELECT COUNT(*) FROM booking.assignments a
+             WHERE a.status = 'cancelled'
+               AND a.assigned_at >= d.day AND a.assigned_at < d.day + INTERVAL '1 day') AS "cancelled!"
+        FROM days d
+        ORDER BY d.day ASC
+        "#,
+    )
+    .fetch_all(db)
+    .await?;
+
+    let series: Vec<crate::models::ReportDailyPoint> = series_rows
+        .into_iter()
+        .map(|(day, c, x)| crate::models::ReportDailyPoint {
+            day,
+            completed: c,
+            cancelled: x,
+        })
+        .collect();
+
+    fn pct_change(curr: f64, prev: f64) -> f64 {
+        if prev.abs() < f64::EPSILON {
+            if curr.abs() < f64::EPSILON {
+                0.0
+            } else {
+                100.0
+            }
+        } else {
+            ((curr - prev) / prev) * 100.0
+        }
+    }
+
+    let revenue_f = revenue.try_into().unwrap_or(0.0_f64);
+    let revenue_prev_f = revenue_prev.try_into().unwrap_or(0.0_f64);
+
+    Ok(crate::models::AdminReportSummary {
+        period: period.to_string(),
+        total_revenue: revenue_f,
+        revenue_change_pct: pct_change(revenue_f, revenue_prev_f),
+        tasks_completed: completed,
+        tasks_completed_change_pct: pct_change(completed as f64, completed_prev as f64),
+        tasks_cancelled: cancelled,
+        tasks_cancelled_change_pct: pct_change(cancelled as f64, cancelled_prev as f64),
+        active_guards,
+        weekly: series,
+    })
+}
+
+/// Sweep calls that have been ringing longer than 45 seconds without the
+/// callee answering. Flips them to `missed`, publishes a status event so
+/// the caller's signalling WS flips the UI, and fires a "missed call"
+/// notification. Run on a 10-second interval from `main.rs`.
+pub async fn expire_stale_ringing_calls(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+) -> Result<u64, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct ExpiredRow {
+        id: Uuid,
+        caller_id: Uuid,
+    }
+
+    let expired: Vec<ExpiredRow> = sqlx::query_as::<_, ExpiredRow>(
+        r#"
+        UPDATE calls.call_logs
+        SET status = 'missed'::calls.call_status,
+            ended_at = NOW(),
+            end_reason = 'timeout',
+            updated_at = NOW()
+        WHERE status IN ('initiated', 'ringing')
+          AND started_at < NOW() - INTERVAL '45 seconds'
+        RETURNING id, caller_id
+        "#,
+    )
+    .fetch_all(db)
+    .await?;
+
+    let count = expired.len() as u64;
+
+    // Publish per-call status event + push a "สายไม่ได้รับ" notification
+    // to each caller. Fire-and-forget so the sweep loop stays fast.
+    for row in expired {
+        let channel = format!("call_sig:{}", row.id);
+        let payload = serde_json::json!({
+            "type": "status",
+            "status": "missed",
+        })
+        .to_string();
+        let mut conn = redis.clone();
+        tokio::spawn(async move {
+            let _: Result<(), redis::RedisError> = conn.publish(channel, payload).await;
+        });
+
+        spawn_notification(
+            db.clone(),
+            row.caller_id,
+            "ไม่มีคนรับสาย".to_string(),
+            "ปลายสายไม่ได้รับภายในเวลาที่กำหนด".to_string(),
+            "system",
+            Some(serde_json::json!({
+                "kind": "call_missed",
+                "call_id": row.id.to_string(),
+                "target_role": "any",
+            })),
+        );
+    }
+
+    Ok(count)
+}
+
 /// Mark an active call `connected` once both ends report ICE success. Used by
 /// the mobile clients right after `onConnectionState=connected`.
 pub async fn mark_call_connected(

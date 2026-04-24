@@ -14,15 +14,16 @@ use shared::models::ApiResponse;
 
 use crate::models::{
     AcceptDeclineDto, ActiveJobResponse, AddTipDto, AdminCallsPage, AdminCallsQuery,
-    AdminPaymentItem, AdminPaymentsPage, AdminPaymentsQuery, AdminRefundsQuery, AdminReviewsQuery,
-    AssignGuardDto, AssignmentResponse, AvailableGuardResponse, AvailableGuardsQuery, CallResponse,
-    CostSummaryResponse, CreatePaymentDto, CreateRequestDto, CreateReviewDto, CreateServiceRateDto,
-    EndCallDto, GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery,
-    GuardRatingsSummary, GuardRequestResponse, InitiateCallDto, ListReceiptsQuery,
-    ListRequestsQuery, PaginatedAdminReviews, PaymentResponse, ProcessRefundRequest,
-    ProgressReportResponse, ReceiptsPage, ReviewCompletionDto, ServiceRate, StartJobDto,
-    SubmitReviewResponse, ToggleReviewVisibilityDto, UpdateAssignmentStatusDto,
-    UpdateServiceRateDto, WalletSummary, WorkHistoryResponse,
+    AdminPaymentItem, AdminPaymentsPage, AdminPaymentsQuery, AdminRefundsQuery,
+    AdminReportSummary, AdminReportsQuery, AdminReviewsQuery, AssignGuardDto, AssignmentResponse,
+    AvailableGuardResponse, AvailableGuardsQuery, CallResponse, CostSummaryResponse,
+    CreatePaymentDto, CreateRequestDto, CreateReviewDto, CreateServiceRateDto, EndCallDto,
+    GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary,
+    GuardRequestResponse, InitiateCallDto, ListReceiptsQuery, ListRequestsQuery,
+    PaginatedAdminReviews, PaymentResponse, ProcessRefundRequest, ProgressReportResponse,
+    ReceiptsPage, ReviewCompletionDto, ServiceRate, StartJobDto, SubmitReviewResponse,
+    ToggleReviewVisibilityDto, UpdateAssignmentStatusDto, UpdateServiceRateDto, WalletSummary,
+    WorkHistoryResponse,
 };
 use crate::state::AppState;
 
@@ -1481,6 +1482,28 @@ pub async fn get_call(
 ) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
     let resp = crate::service::get_call(&state.db, id, user.user_id, &user.role).await?;
     Ok(Json(ApiResponse::success(resp)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/reports/summary",
+    tag = "Admin",
+    security(("bearer" = [])),
+    params(AdminReportsQuery),
+    responses(
+        (status = 200, description = "Report summary metrics", body = AdminReportSummary),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+    ),
+)]
+pub async fn admin_report_summary(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Query(query): Query<AdminReportsQuery>,
+) -> Result<Json<ApiResponse<AdminReportSummary>>, AppError> {
+    require_admin(&user)?;
+    let period = query.period.as_deref().unwrap_or("month");
+    let summary = crate::service::admin_report_summary(&state.db, period).await?;
+    Ok(Json(ApiResponse::success(summary)))
 }
 
 #[utoipa::path(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Settings,
   User,
@@ -17,8 +17,12 @@ import {
   Sun,
   Check,
   ChevronRight,
+  Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/components/AuthProvider";
+import { authApi } from "@/lib/api";
 
 type SettingsTab = "profile" | "notifications" | "security" | "appearance" | "company";
 
@@ -31,6 +35,7 @@ const tabs: { id: SettingsTab; label: string; icon: typeof User }[] = [
 ];
 
 export default function SettingsPage() {
+  const { user, refreshUser } = useAuth();
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
   const [theme, setTheme] = useState<"light" | "dark" | "system">("light");
   const [notifications, setNotifications] = useState({
@@ -41,6 +46,60 @@ export default function SettingsPage() {
     reports: true,
     marketing: false,
   });
+
+  // Profile form state — populated from the authenticated user on mount.
+  const [profileForm, setProfileForm] = useState({ full_name: "", phone: "" });
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileSuccess, setProfileSuccess] = useState(false);
+
+  useEffect(() => {
+    if (user) {
+      setProfileForm({
+        full_name: user.full_name ?? "",
+        phone: user.phone ?? "",
+      });
+    }
+  }, [user]);
+
+  const resetProfile = () => {
+    if (user) {
+      setProfileForm({
+        full_name: user.full_name ?? "",
+        phone: user.phone ?? "",
+      });
+      setProfileError(null);
+      setProfileSuccess(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    setProfileSaving(true);
+    setProfileError(null);
+    setProfileSuccess(false);
+    try {
+      await authApi.updateProfile({
+        full_name: profileForm.full_name.trim() || undefined,
+        phone: profileForm.phone.trim() || undefined,
+      });
+      await refreshUser();
+      setProfileSuccess(true);
+      setTimeout(() => setProfileSuccess(false), 2500);
+    } catch (e) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : "บันทึกไม่สำเร็จ กรุณาลองใหม่";
+      setProfileError(msg);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const profileDirty =
+    user !== null &&
+    (profileForm.full_name !== (user?.full_name ?? "") ||
+      profileForm.phone !== (user?.phone ?? ""));
 
   return (
     <div className="space-y-6">
@@ -99,21 +158,19 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              {/* Form */}
+              {/* Form — wired to PUT /auth/me. Email is intentionally
+                  read-only since changing it requires a separate
+                  verification flow the backend doesn't expose yet. */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">First Name</label>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Full Name</label>
                   <input
                     type="text"
-                    defaultValue="Admin"
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Last Name</label>
-                  <input
-                    type="text"
-                    defaultValue="User"
+                    value={profileForm.full_name}
+                    onChange={(e) =>
+                      setProfileForm((p) => ({ ...p, full_name: e.target.value }))
+                    }
+                    placeholder="e.g. กาญจน์ รักษา"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
                   />
                 </div>
@@ -123,8 +180,9 @@ export default function SettingsPage() {
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                     <input
                       type="email"
-                      defaultValue="admin@p-guard.com"
-                      className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
+                      value={user?.email ?? ""}
+                      disabled
+                      className="w-full pl-10 pr-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 cursor-not-allowed"
                     />
                   </div>
                 </div>
@@ -134,7 +192,11 @@ export default function SettingsPage() {
                     <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                     <input
                       type="tel"
-                      defaultValue="+66 81 234 5678"
+                      value={profileForm.phone}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, phone: e.target.value }))
+                      }
+                      placeholder="0812345678"
                       className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all"
                     />
                   </div>
@@ -143,18 +205,40 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium text-slate-700 mb-2">Role</label>
                   <input
                     type="text"
-                    defaultValue="System Administrator"
+                    value={user?.role ?? ""}
                     disabled
                     className="w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 cursor-not-allowed"
                   />
                 </div>
               </div>
 
+              {profileError && (
+                <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <span>{profileError}</span>
+                </div>
+              )}
+              {profileSuccess && (
+                <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm px-4 py-3">
+                  <Check className="h-4 w-4" />
+                  <span>บันทึกโปรไฟล์แล้ว</span>
+                </div>
+              )}
+
               <div className="pt-4 border-t border-slate-200 flex justify-end gap-3">
-                <button className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">
+                <button
+                  onClick={resetProfile}
+                  disabled={!profileDirty || profileSaving}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   Cancel
                 </button>
-                <button className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-emerald-600 transition-colors">
+                <button
+                  onClick={saveProfile}
+                  disabled={!profileDirty || profileSaving}
+                  className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-emerald-600 transition-colors inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {profileSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                   Save Changes
                 </button>
               </div>
