@@ -1470,3 +1470,34 @@ pub struct AdminCallsQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
+
+// =============================================================================
+// Reports (admin dashboard)
+// =============================================================================
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct AdminReportsQuery {
+    /// "week" | "month" | "quarter" | "year". Defaults to "month".
+    pub period: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReportDailyPoint {
+    pub day: DateTime<Utc>,
+    pub completed: i64,
+    pub cancelled: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminReportSummary {
+    pub period: String,
+    pub total_revenue: f64,
+    pub revenue_change_pct: f64,
+    pub tasks_completed: i64,
+    pub tasks_completed_change_pct: f64,
+    pub tasks_cancelled: i64,
+    pub tasks_cancelled_change_pct: f64,
+    pub active_guards: i64,
+    /// Last 7 days — day-by-day task counts for the admin dashboard chart.
+    pub weekly: Vec<ReportDailyPoint>,
+}

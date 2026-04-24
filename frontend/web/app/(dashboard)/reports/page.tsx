@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   FileText,
   Download,
@@ -18,8 +18,10 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Filter,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { reportsApi, type AdminReportSummary } from "@/lib/api";
 
 type ReportPeriod = "week" | "month" | "quarter" | "year";
 type ReportType = "overview" | "personnel" | "incidents" | "appeals";
@@ -32,23 +34,6 @@ interface MetricCard {
   color: string;
   bg: string;
 }
-
-const metrics: MetricCard[] = [
-  { title: "Total Revenue", value: "฿1,680,000", change: 12.5, icon: DollarSign, color: "text-emerald-600", bg: "bg-emerald-50" },
-  { title: "Active Guards", value: "124", change: 8.2, icon: Users, color: "text-blue-600", bg: "bg-blue-50" },
-  { title: "Tasks Completed", value: "2,847", change: 15.3, icon: CheckCircle2, color: "text-purple-600", bg: "bg-purple-50" },
-  { title: "Incident Reports", value: "23", change: -18.5, icon: AlertTriangle, color: "text-amber-600", bg: "bg-amber-50" },
-];
-
-const weeklyData = [
-  { day: "Mon", tasks: 45, incidents: 2 },
-  { day: "Tue", tasks: 52, incidents: 1 },
-  { day: "Wed", tasks: 48, incidents: 3 },
-  { day: "Thu", tasks: 61, incidents: 0 },
-  { day: "Fri", tasks: 55, incidents: 2 },
-  { day: "Sat", tasks: 38, incidents: 1 },
-  { day: "Sun", tasks: 32, incidents: 0 },
-];
 
 const sitePerformance = [
   { name: "Central Plaza", tasks: 156, completion: 94, revenue: "฿280,000" },
@@ -69,7 +54,85 @@ export default function ReportsPage() {
   const [period, setPeriod] = useState<ReportPeriod>("month");
   const [reportType, setReportType] = useState<ReportType>("overview");
 
-  const maxTasks = Math.max(...weeklyData.map((d) => d.tasks));
+  // Real summary + weekly series from the backend.
+  const [summary, setSummary] = useState<AdminReportSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    reportsApi
+      .summary(period)
+      .then((s) => {
+        if (!cancelled) setSummary(s);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period]);
+
+  const metrics: MetricCard[] = useMemo(() => {
+    if (!summary) return [];
+    const fmtBaht = (n: number) =>
+      `฿${Math.round(n).toLocaleString("en-US")}`;
+    return [
+      {
+        title: "Total Revenue",
+        value: fmtBaht(summary.total_revenue),
+        change: Math.round(summary.revenue_change_pct * 10) / 10,
+        icon: DollarSign,
+        color: "text-emerald-600",
+        bg: "bg-emerald-50",
+      },
+      {
+        title: "Active Guards",
+        value: summary.active_guards.toLocaleString("en-US"),
+        change: 0, // point-in-time value — no delta
+        icon: Users,
+        color: "text-blue-600",
+        bg: "bg-blue-50",
+      },
+      {
+        title: "Tasks Completed",
+        value: summary.tasks_completed.toLocaleString("en-US"),
+        change: Math.round(summary.tasks_completed_change_pct * 10) / 10,
+        icon: CheckCircle2,
+        color: "text-purple-600",
+        bg: "bg-purple-50",
+      },
+      {
+        title: "Tasks Cancelled",
+        value: summary.tasks_cancelled.toLocaleString("en-US"),
+        change: Math.round(summary.tasks_cancelled_change_pct * 10) / 10,
+        icon: AlertTriangle,
+        color: "text-amber-600",
+        bg: "bg-amber-50",
+      },
+    ];
+  }, [summary]);
+
+  const weeklyData = useMemo(() => {
+    if (!summary) return [];
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    return summary.weekly.map((p) => {
+      const dt = new Date(p.day);
+      return {
+        day: dayNames[dt.getDay()],
+        tasks: p.completed,
+        incidents: p.cancelled,
+      };
+    });
+  }, [summary]);
+
+  const maxTasks = Math.max(1, ...weeklyData.map((d) => d.tasks));
 
   return (
     <div className="space-y-6">
@@ -126,30 +189,42 @@ export default function ReportsPage() {
       </div>
 
       {/* Metrics Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {metrics.map((metric) => (
-          <div key={metric.title} className="bg-white p-5 rounded-xl border border-slate-200">
-            <div className="flex items-start justify-between">
-              <div className={cn("p-2 rounded-lg", metric.bg)}>
-                <metric.icon className={cn("h-5 w-5", metric.color)} />
-              </div>
-              <div className={cn(
-                "flex items-center text-xs font-medium px-2 py-1 rounded-full",
-                metric.change >= 0 ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
-              )}>
-                {metric.change >= 0 ? (
-                  <ArrowUpRight className="h-3 w-3 mr-0.5" />
-                ) : (
-                  <ArrowDownRight className="h-3 w-3 mr-0.5" />
+      {error ? (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+          โหลดรายงานไม่สำเร็จ: {error}
+        </div>
+      ) : loading ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
+          <Loader2 className="h-6 w-6 animate-spin text-primary mx-auto" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {metrics.map((metric) => (
+            <div key={metric.title} className="bg-white p-5 rounded-xl border border-slate-200">
+              <div className="flex items-start justify-between">
+                <div className={cn("p-2 rounded-lg", metric.bg)}>
+                  <metric.icon className={cn("h-5 w-5", metric.color)} />
+                </div>
+                {metric.change !== 0 && (
+                  <div className={cn(
+                    "flex items-center text-xs font-medium px-2 py-1 rounded-full",
+                    metric.change >= 0 ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+                  )}>
+                    {metric.change >= 0 ? (
+                      <ArrowUpRight className="h-3 w-3 mr-0.5" />
+                    ) : (
+                      <ArrowDownRight className="h-3 w-3 mr-0.5" />
+                    )}
+                    {Math.abs(metric.change)}%
+                  </div>
                 )}
-                {Math.abs(metric.change)}%
               </div>
+              <p className="text-2xl font-bold text-slate-900 mt-3">{metric.value}</p>
+              <p className="text-sm text-slate-500 mt-1">{metric.title}</p>
             </div>
-            <p className="text-2xl font-bold text-slate-900 mt-3">{metric.value}</p>
-            <p className="text-sm text-slate-500 mt-1">{metric.title}</p>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Weekly Performance Chart */}
@@ -157,16 +232,16 @@ export default function ReportsPage() {
           <div className="p-5 border-b border-slate-200 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Weekly Performance</h2>
-              <p className="text-sm text-slate-500 mt-0.5">Tasks completed vs incidents reported</p>
+              <p className="text-sm text-slate-500 mt-0.5">Tasks completed vs cancelled — last 7 days</p>
             </div>
             <div className="flex items-center gap-4 text-sm">
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full bg-emerald-500" />
-                <span className="text-slate-600">Tasks</span>
+                <span className="text-slate-600">Completed</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full bg-red-400" />
-                <span className="text-slate-600">Incidents</span>
+                <span className="text-slate-600">Cancelled</span>
               </div>
             </div>
           </div>
@@ -192,11 +267,18 @@ export default function ReportsPage() {
           </div>
         </div>
 
-        {/* Monthly Appeal Summary */}
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        {/* Monthly Appeal Summary — still mocked, feature gated */}
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden opacity-75">
           <div className="p-5 border-b border-slate-200">
-            <h2 className="text-lg font-semibold text-slate-900">Appeal Summary</h2>
-            <p className="text-sm text-slate-500 mt-0.5">Monthly disciplinary appeals</p>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Appeal Summary</h2>
+                <p className="text-sm text-slate-500 mt-0.5">Monthly disciplinary appeals</p>
+              </div>
+              <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                ตัวอย่าง
+              </span>
+            </div>
           </div>
           <div className="p-4 space-y-3">
             {appealsSummary.map((appeal) => (
@@ -225,12 +307,17 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* Site Performance Table */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      {/* Site Performance Table — still mocked */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden opacity-75">
         <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Site Performance</h2>
-            <p className="text-sm text-slate-500 mt-0.5">Performance breakdown by location</p>
+          <div className="flex items-center gap-2">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Site Performance</h2>
+              <p className="text-sm text-slate-500 mt-0.5">Performance breakdown by location</p>
+            </div>
+            <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+              ตัวอย่าง
+            </span>
           </div>
           <button className="text-sm text-primary font-medium hover:underline">
             View All Sites
