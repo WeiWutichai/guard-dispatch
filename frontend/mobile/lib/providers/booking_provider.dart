@@ -442,6 +442,21 @@ class BookingProvider extends ChangeNotifier {
     }
   }
 
+  /// Guard aborts a job the customer never paid for so they can take
+  /// other work. Backend enforces `awaiting_payment` only.
+  Future<void> cancelUnpaidAssignment(String assignmentId) async {
+    _error = null;
+    try {
+      await _service.cancelUnpaidAssignment(assignmentId);
+      await fetchJobs();
+      await fetchActiveJob();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   // =========================================================================
   // Payment (Customer)
   // =========================================================================

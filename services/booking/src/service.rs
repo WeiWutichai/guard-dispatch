@@ -1897,6 +1897,117 @@ pub async fn accept_or_decline_assignment(
 }
 
 // =============================================================================
+// Guard cancel unpaid assignment
+// Allows a guard to abandon a job the customer never paid for so they can move
+// on to other work. Only valid while status = `awaiting_payment`; once the
+// customer has paid, the assignment advances past this state and guards must
+// use the regular status flow (update_assignment_status → cancelled) subject
+// to its own rules.
+// =============================================================================
+
+pub async fn guard_cancel_unpaid(
+    db: &PgPool,
+    assignment_id: Uuid,
+    guard_id: Uuid,
+    redis_conn: &redis::aio::MultiplexedConnection,
+) -> Result<AssignmentResponse, AppError> {
+    let mut tx = db.begin().await?;
+
+    let existing = sqlx::query_as::<_, AssignmentRow>(
+        r#"
+        SELECT id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
+        FROM booking.assignments
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Assignment not found".to_string()))?;
+
+    if existing.guard_id != guard_id {
+        return Err(AppError::Forbidden(
+            "You can only cancel your own assignments".to_string(),
+        ));
+    }
+
+    if existing.status != AssignmentStatus::AwaitingPayment {
+        return Err(AppError::BadRequest(
+            "Can only cancel while awaiting payment. Once the customer has paid, use the regular status flow.".to_string(),
+        ));
+    }
+
+    let row = sqlx::query_as::<_, AssignmentRow>(
+        r#"
+        UPDATE booking.assignments
+        SET status = 'cancelled'::assignment_status
+        WHERE id = $1
+        RETURNING id, request_id, guard_id, NULL::TEXT AS guard_name, status, assigned_at, arrived_at, completed_at, started_at, completion_requested_at,
+               en_route_at, en_route_lat, en_route_lng, arrived_lat, arrived_lng, en_route_place, arrived_place,
+               started_lat, started_lng, started_place, completion_lat, completion_lng, completion_place,
+               NULL::float8 AS review_overall_rating, NULL::float8 AS review_punctuality, NULL::float8 AS review_professionalism, NULL::float8 AS review_communication, NULL::float8 AS review_appearance, NULL::TEXT AS review_text
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Reset request to pending so the customer can pick another guard.
+    // We deliberately do NOT cancel the request — the customer may still want
+    // service from someone else.
+    sqlx::query(
+        "UPDATE booking.guard_requests SET status = 'pending'::request_status, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(existing.request_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    // Notify customer — fire-and-forget.
+    let db_clone = db.clone();
+    let req_id = existing.request_id;
+    let a_id = existing.id;
+    tokio::spawn(async move {
+        let cid: Option<Uuid> =
+            sqlx::query_scalar("SELECT customer_id FROM booking.guard_requests WHERE id = $1")
+                .bind(req_id)
+                .fetch_optional(&db_clone)
+                .await
+                .ok()
+                .flatten();
+        if let Some(customer_id) = cid {
+            spawn_notification(
+                db_clone,
+                customer_id,
+                "เจ้าหน้าที่ยกเลิกการให้บริการ".to_string(),
+                "เจ้าหน้าที่ยกเลิกงานเนื่องจากยังไม่ได้ชำระเงิน กรุณาเลือกเจ้าหน้าที่ใหม่".to_string(),
+                "booking_cancelled",
+                Some(serde_json::json!({
+                    "request_id": req_id.to_string(),
+                    "assignment_id": a_id.to_string(),
+                    "reason": "guard_cancelled_unpaid",
+                    "target_role": "customer",
+                })),
+            );
+        }
+    });
+
+    publish_assignment_event(
+        redis_conn,
+        existing.request_id,
+        assignment_id,
+        "cancelled",
+    );
+
+    Ok(AssignmentResponse::from(row))
+}
+
+// =============================================================================
 // Create Payment (simulated — records payment, updates request status)
 // =============================================================================
 

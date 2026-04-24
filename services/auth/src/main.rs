@@ -37,6 +37,7 @@ use crate::state::AppState;
         handlers::get_profile,
         handlers::update_profile,
         handlers::logout,
+        handlers::otp_challenge,
         handlers::request_otp,
         handlers::verify_otp,
         handlers::register_with_otp,
@@ -67,6 +68,7 @@ use crate::state::AppState;
         models::UserResponse,
         models::RequestOtpRequest,
         models::RequestOtpResponse,
+        models::OtpChallengeResponse,
         models::VerifyOtpRequest,
         models::VerifyOtpResponse,
         models::RegisterWithOtpRequest,
@@ -226,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/login/phone", post(handlers::phone_login))
         .route("/login/mobile", post(handlers::mobile_phone_login))
         .route("/check-status", post(handlers::check_status))
+        .route("/otp/challenge", get(handlers::otp_challenge))
         .route("/otp/request", post(handlers::request_otp))
         .route("/otp/verify", post(handlers::verify_otp))
         .route("/register/otp", post(handlers::register_with_otp))

@@ -1617,8 +1617,94 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
             ),
           ),
         ),
+        const SizedBox(height: 10),
+        // Escape hatch for guards whose customer never pays — cancels this
+        // assignment and frees the guard to take other work. Only available
+        // while status = awaiting_payment (backend rejects after payment).
+        SizedBox(
+          width: double.infinity,
+          height: 48,
+          child: OutlinedButton.icon(
+            onPressed: () => _confirmCancelUnpaid(isThai),
+            icon: const Icon(Icons.cancel_outlined, size: 18),
+            label: Text(
+              isThai ? 'ยกเลิกงาน (ลูกค้าไม่ชำระ)' : 'Cancel job (unpaid)',
+              style: GoogleFonts.inter(
+                  fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.danger,
+              side: const BorderSide(color: AppColors.danger),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
       ],
     );
+  }
+
+  Future<void> _confirmCancelUnpaid(bool isThai) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          isThai ? 'ยืนยันยกเลิกงาน' : 'Cancel job?',
+          style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          isThai
+              ? 'งานจะถูกยกเลิกและลูกค้าจะต้องเลือกเจ้าหน้าที่ใหม่ หากลูกค้าได้ชำระเงินไปแล้วจะยกเลิกไม่ได้'
+              : 'This job will be cancelled and the customer will need to pick another guard. If the customer has already paid you can no longer cancel from here.',
+          style: GoogleFonts.inter(fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(isThai ? 'ไม่' : 'No'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(isThai ? 'ยกเลิกงาน' : 'Cancel job'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final assignmentId = _job['assignment_id'] as String?;
+    if (assignmentId == null || assignmentId.isEmpty) return;
+
+    final nav = Navigator.of(context);
+    try {
+      await context
+          .read<BookingProvider>()
+          .cancelUnpaidAssignment(assignmentId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'ยกเลิกงานเรียบร้อย' : 'Job cancelled'),
+          backgroundColor: AppColors.primary,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      nav.pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'ยกเลิกงานไม่สำเร็จ: $e' : 'Cancel failed: $e'),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Widget _buildStatusActionButton(BuildContext context, bool isThai) {

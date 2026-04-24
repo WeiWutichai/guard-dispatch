@@ -32,6 +32,7 @@ use crate::state::AppState;
         handlers::assign_guard,
         handlers::update_assignment_status,
         handlers::accept_decline_assignment,
+        handlers::cancel_unpaid_assignment,
         handlers::review_completion,
         handlers::submit_review,
         handlers::get_assignments,
@@ -211,6 +212,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/assignments/{id}/accept",
             put(handlers::accept_decline_assignment),
+        )
+        .route(
+            "/assignments/{id}/cancel-unpaid",
+            put(handlers::cancel_unpaid_assignment),
         )
         .route("/assignments/{id}/start", put(handlers::start_job))
         .route(

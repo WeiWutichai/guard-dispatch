@@ -2,6 +2,11 @@
     <!-- geolocator: GPS location for guard tracking -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- B4: allow location while the app is backgrounded so an on-duty guard
+         keeps streaming GPS when their screen locks or they switch apps. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- local_auth: biometric authentication (fingerprint/face) -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />

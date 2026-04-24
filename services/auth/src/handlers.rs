@@ -477,8 +477,26 @@ pub async fn request_otp(
         &state.otp_config,
         &state.http_client,
         &req.phone,
+        &req.challenge_id,
+        &req.answer,
     )
     .await?;
+    Ok(Json(ApiResponse::success(response)))
+}
+
+/// Issue a math-captcha challenge that the client must solve before `POST /otp/request`.
+#[utoipa::path(
+    get,
+    path = "/otp/challenge",
+    tag = "OTP",
+    responses(
+        (status = 200, description = "Challenge issued", body = crate::models::OtpChallengeResponse),
+    ),
+)]
+pub async fn otp_challenge(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<crate::models::OtpChallengeResponse>>, AppError> {
+    let response = crate::service::create_otp_challenge(&state.redis).await?;
     Ok(Json(ApiResponse::success(response)))
 }
 

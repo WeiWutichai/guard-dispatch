@@ -560,6 +560,36 @@ pub async fn accept_decline_assignment(
     Ok(Json(ApiResponse::success(assignment)))
 }
 
+/// Guard cancels an assignment that is still awaiting payment.
+/// Resets the request so the customer can pick another guard (or cancel themselves).
+#[utoipa::path(
+    put,
+    path = "/assignments/{id}/cancel-unpaid",
+    tag = "Assignments",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Assignment ID")),
+    responses(
+        (status = 200, description = "Assignment cancelled", body = AssignmentResponse),
+        (status = 400, description = "Not awaiting payment", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Assignment not found", body = ErrorBody),
+    ),
+)]
+pub async fn cancel_unpaid_assignment(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<ApiResponse<AssignmentResponse>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden("Guard only endpoint".to_string()));
+    }
+    let assignment =
+        crate::service::guard_cancel_unpaid(&state.db, id, user.user_id, &state.redis_conn)
+            .await?;
+    Ok(Json(ApiResponse::success(assignment)))
+}
+
 // =============================================================================
 // Create Payment (simulated)
 // =============================================================================

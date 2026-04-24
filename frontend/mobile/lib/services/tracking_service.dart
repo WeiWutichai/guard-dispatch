@@ -114,16 +114,27 @@ class TrackingService {
       permission = await Geolocator.requestPermission();
     }
 
-    // Whitelist only explicit granted states. Everything else (denied,
-    // deniedForever, restricted, unableToDetermine) must be rejected so
-    // the caller doesn't proceed to start GPS streaming without permission.
-    if (permission == LocationPermission.always ||
-        permission == LocationPermission.whileInUse) {
+    // B4 — require `always` so the guard keeps streaming GPS when the screen
+    // locks or another app takes focus. If the OS only grants `whileInUse`
+    // we try to escalate once; if the user still declines we surface a
+    // distinct error code so the UI can route them to system settings.
+    if (permission == LocationPermission.whileInUse) {
+      permission = await Geolocator.requestPermission();
+      // Some devices (notably Android 11+) require a return trip to Settings
+      // to upgrade "While using" → "Always". Geolocator reports the current
+      // state after the request; if it's still not `always`, bail out.
+    }
+
+    if (permission == LocationPermission.always) {
       return true;
     }
 
     if (permission == LocationPermission.deniedForever) {
       onError?.call('location_permission_denied_forever');
+    } else if (permission == LocationPermission.whileInUse) {
+      // Got "while in use" but not "always" — treat as rejection so the
+      // dashboard can prompt for upgrade to Always.
+      onError?.call('location_permission_needs_always');
     } else {
       onError?.call('location_permission_denied');
     }

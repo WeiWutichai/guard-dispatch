@@ -298,6 +298,17 @@ class BookingService {
     return response.data['data'] as Map<String, dynamic>;
   }
 
+  /// PUT /booking/assignments/{id}/cancel-unpaid — guard bails on a job
+  /// the customer never paid for. Only valid while `awaiting_payment`.
+  Future<Map<String, dynamic>> cancelUnpaidAssignment(
+    String assignmentId,
+  ) async {
+    final response = await _apiClient.dio.put(
+      '/booking/assignments/$assignmentId/cancel-unpaid',
+    );
+    return response.data['data'] as Map<String, dynamic>;
+  }
+
   // =========================================================================
   // Payments (simulated)
   // =========================================================================
