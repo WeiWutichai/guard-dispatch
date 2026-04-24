@@ -7,8 +7,9 @@ import {
   Loader2,
   AlertCircle,
   X,
+  Download,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, downloadCsv, exportTimestamp, toCsv } from "@/lib/utils";
 import { useLanguage } from "@/components/LanguageProvider";
 import { auditApi, type AuditLogItem } from "@/lib/api";
 
@@ -119,22 +120,45 @@ export default function ActivityPage() {
     [isThai]
   );
 
+  const handleExportCsv = () => {
+    const csv = toCsv(logs as unknown as Record<string, unknown>[], [
+      ["Time", (r) => (r.created_at as string | null) ?? ""],
+      ["User", (r) => (r.user_name as string | null) ?? ""],
+      ["Role", (r) => (r.user_role as string | null) ?? ""],
+      ["Action", (r) => (r.action as string | null) ?? ""],
+      ["Entity", (r) => (r.entity_type as string | null) ?? ""],
+      ["Entity ID", (r) => (r.entity_id as string | null) ?? ""],
+      ["IP", (r) => (r.ip_address as string | null) ?? ""],
+    ]);
+    downloadCsv(`activity-${exportTimestamp()}.csv`, csv);
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <header className="mb-6">
-        <div className="flex items-center gap-3 mb-1">
-          <div className="p-2 bg-emerald-50 rounded-lg">
-            <Activity className="h-5 w-5 text-emerald-600" />
+      <header className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <div className="p-2 bg-emerald-50 rounded-lg">
+              <Activity className="h-5 w-5 text-emerald-600" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900">
+              {isThai ? "บันทึกกิจกรรม" : "Activity Log"}
+            </h1>
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            {isThai ? "บันทึกกิจกรรม" : "Activity Log"}
-          </h1>
+          <p className="text-sm text-slate-500 ml-11">
+            {isThai
+              ? "บันทึกทุก request ที่เข้าระบบ — user, endpoint, IP, เวลา"
+              : "Every request that hits the backend — user, endpoint, IP, timestamp"}
+          </p>
         </div>
-        <p className="text-sm text-slate-500 ml-11">
-          {isThai
-            ? "บันทึกทุก request ที่เข้าระบบ — user, endpoint, IP, เวลา"
-            : "Every request that hits the backend — user, endpoint, IP, timestamp"}
-        </p>
+        <button
+          onClick={handleExportCsv}
+          disabled={logs.length === 0}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Download className="h-4 w-4" />
+          Export CSV
+        </button>
       </header>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4 space-y-3">

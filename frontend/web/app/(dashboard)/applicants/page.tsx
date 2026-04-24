@@ -96,6 +96,13 @@ export default function ApplicantsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Bulk-action state. Tracks which applicant ids are checked so the
+  // operator can approve/reject many at once. Cleared whenever the
+  // filter/tab changes so we never act on stale selections.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkInFlight, setBulkInFlight] = useState(false);
+
   // Fetch applicants from API
   const fetchApplicants = useCallback(async () => {
     setIsLoading(true);
@@ -129,6 +136,64 @@ export default function ApplicantsPage() {
     const debounce = setTimeout(fetchApplicants, 300);
     return () => clearTimeout(debounce);
   }, [fetchApplicants]);
+
+  // Reset the bulk selection whenever the filter or tab changes so the
+  // operator never accidentally approves rows they can no longer see.
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setBulkError(null);
+  }, [activeTab, statusFilter, searchQuery]);
+
+  // Only pending rows are eligible for bulk approve / reject.
+  const pendingVisibleIds = applicants
+    .filter((a) => a.approval_status === "pending")
+    .map((a) => a.id);
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      const allSelected =
+        pendingVisibleIds.length > 0 &&
+        pendingVisibleIds.every((id) => prev.has(id));
+      return allSelected ? new Set() : new Set(pendingVisibleIds);
+    });
+  };
+
+  const runBulk = async (action: "approved" | "rejected") => {
+    if (selectedIds.size === 0) return;
+    setBulkInFlight(true);
+    setBulkError(null);
+    const api =
+      activeTab === "customer"
+        ? authApi.updateCustomerApproval
+        : authApi.updateApprovalStatus;
+    const ids = Array.from(selectedIds);
+    const results = await Promise.allSettled(
+      ids.map((id) => api(id, action))
+    );
+    const failed = results
+      .map((r, i) => (r.status === "rejected" ? ids[i] : null))
+      .filter((x): x is string => x !== null);
+    await fetchApplicants();
+    refreshCounts();
+    setSelectedIds(new Set());
+    setBulkInFlight(false);
+    if (failed.length > 0) {
+      setBulkError(
+        locale === "th"
+          ? `บางรายการไม่สำเร็จ (${failed.length}/${ids.length})`
+          : `Some updates failed (${failed.length}/${ids.length})`
+      );
+    }
+  };
 
   // Fetch pending counts per tab (independent of active tab)
   const fetchPendingCounts = useCallback(async () => {
@@ -965,6 +1030,46 @@ export default function ApplicantsPage() {
         </div>
       )}
 
+      {/* Bulk action bar — appears when at least one pending row is checked */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between gap-4 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-emerald-700">
+              {locale === "th"
+                ? `เลือก ${selectedIds.size} รายการ`
+                : `${selectedIds.size} selected`}
+            </span>
+            {bulkError && <span className="text-red-600">• {bulkError}</span>}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              disabled={bulkInFlight}
+              className="px-3 py-1.5 rounded-lg text-slate-600 hover:bg-white transition-colors text-sm"
+            >
+              {locale === "th" ? "ล้าง" : "Clear"}
+            </button>
+            <button
+              onClick={() => runBulk("rejected")}
+              disabled={bulkInFlight}
+              className="px-3 py-1.5 rounded-lg bg-white border border-red-300 text-red-700 text-sm font-medium hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              {locale === "th" ? "ปฏิเสธทั้งหมด" : "Reject all"}
+            </button>
+            <button
+              onClick={() => runBulk("approved")}
+              disabled={bulkInFlight}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition-colors inline-flex items-center gap-2 disabled:opacity-50"
+            >
+              {bulkInFlight && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              )}
+              {locale === "th" ? "อนุมัติทั้งหมด" : "Approve all"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       {!isLoading && !error && (
         <div>
@@ -973,6 +1078,19 @@ export default function ApplicantsPage() {
               <table className="w-full">
                 <thead>
                   <tr className="bg-slate-50/80 border-b border-slate-200">
+                    <th className="w-10 py-4 px-4">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                        disabled={pendingVisibleIds.length === 0}
+                        checked={
+                          pendingVisibleIds.length > 0 &&
+                          pendingVisibleIds.every((id) => selectedIds.has(id))
+                        }
+                        onChange={toggleSelectAll}
+                        aria-label="Select all pending"
+                      />
+                    </th>
                     <th className="text-left py-4 px-5 text-xs font-bold text-slate-500 uppercase tracking-wider">
                       {t.applicants.table.applicant}
                     </th>
@@ -1000,12 +1118,27 @@ export default function ApplicantsPage() {
                 <tbody className="divide-y divide-slate-100">
                   {applicants.map((applicant) => {
                     const status = statusConfig[applicant.approval_status];
+                    const isPending = applicant.approval_status === "pending";
                     return (
                       <tr
                         key={applicant.id}
                         onClick={() => setSelectedApplicant(applicant)}
                         className="hover:bg-slate-50/50 transition-colors group cursor-pointer"
                       >
+                        {/* Bulk-select checkbox — disabled for non-pending rows */}
+                        <td
+                          className="py-4 px-4"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                            disabled={!isPending}
+                            checked={selectedIds.has(applicant.id)}
+                            onChange={() => toggleSelected(applicant.id)}
+                            aria-label={`Select ${applicant.full_name}`}
+                          />
+                        </td>
                         {/* Applicant Name + Avatar */}
                         <td className="py-4 px-5">
                           <div className="flex items-center gap-3">
