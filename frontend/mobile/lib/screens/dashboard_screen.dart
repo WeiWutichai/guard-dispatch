@@ -7,7 +7,6 @@ import '../l10n/app_strings.dart';
 import '../providers/notification_provider.dart';
 import 'withdrawal_approval_screen.dart';
 import 'chat_list_screen.dart';
-import 'call_screen.dart';
 import 'notification_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
@@ -629,15 +628,16 @@ class DashboardScreen extends StatelessWidget {
                       label: isThai ? 'โทรหา' : 'Call',
                       color: AppColors.primary,
                       onTap: () {
+                        // This dashboard tile is mock — no real callee user.
+                        // Real call entry points are on /jobs and /chat where
+                        // we have a proper customer_id to dial.
                         Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => CallScreen(
-                              userName: isThai
-                                  ? 'เจ้าหน้าที่สมชาย'
-                                  : 'Guard Somchai',
-                            ),
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(isThai
+                                ? 'กรุณาโทรจากหน้างาน หรือแชท'
+                                : 'Open a job or chat to call'),
+                            behavior: SnackBarBehavior.floating,
                           ),
                         );
                       },
