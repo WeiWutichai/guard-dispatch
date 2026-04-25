@@ -72,7 +72,7 @@ TRUNCATE
     -- Auth ephemeral data (OTP only — sessions handled below)
     auth.otp_codes,
     -- Audit log — wipe so the test run starts from a clean slate
-    audit.logs
+    audit.audit_logs
 RESTART IDENTITY CASCADE;
 
 -- ──────────────────────────────────────────────────────────────────────────
