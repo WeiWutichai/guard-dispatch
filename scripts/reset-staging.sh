@@ -37,8 +37,11 @@ REDIS_CACHE_CONTAINER="${REDIS_CACHE_CONTAINER:-redis-cache}"
 REDIS_PUBSUB_CONTAINER="${REDIS_PUBSUB_CONTAINER:-redis-pubsub}"
 MINIO_CONTAINER="${MINIO_CONTAINER:-minio}"
 
-DB_NAME="${DB_NAME:-guard_dispatch_db}"
-DB_USER="${DB_USER:-postgres}"
+# Postgres user/db names. Prefer the same env var names docker-compose
+# uses (POSTGRES_USER / POSTGRES_DB from .env) so this works out of the
+# box; allow DB_USER / DB_NAME overrides for ad-hoc runs.
+DB_USER="${DB_USER:-${POSTGRES_USER:?POSTGRES_USER must be set (in .env or env)}}"
+DB_NAME="${DB_NAME:-${POSTGRES_DB:-guard_dispatch_db}}"
 
 # Pull Redis password from the .env file the compose stack already uses.
 # Falls back to env var if the file's not there.
