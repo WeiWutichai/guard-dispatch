@@ -6,7 +6,10 @@ use shared::error::AppError;
 
 const SIGNED_URL_EXPIRY_SECS: u64 = 3600; // 1 hour per CLAUDE.md
 const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB for images
-const MAX_VIDEO_SIZE: usize = 50 * 1024 * 1024; // 50MB for videos
+// Bumped 2026-04-25 from 50MB to 200MB to match booking. Phone video
+// at 1080p hits 50MB in ~15s. nginx `/chat/` lifted to 205m in lockstep
+// so requests reach the app before nginx 413's them.
+const MAX_VIDEO_SIZE: usize = 200 * 1024 * 1024;
 
 /// Allowed MIME types: images (JPEG, PNG, WEBP) + videos (MP4, QuickTime)
 const ALLOWED_MIME_TYPES: &[&str] = &[
@@ -298,17 +301,17 @@ mod tests {
     }
 
     #[test]
-    fn validate_upload_rejects_video_over_50mb() {
-        let over_50mb = 50 * 1024 * 1024 + 1;
-        let result = validate_upload("video/mp4", over_50mb, MP4_HEADER);
+    fn validate_upload_rejects_video_over_200mb() {
+        let over_200mb = 200 * 1024 * 1024 + 1;
+        let result = validate_upload("video/mp4", over_200mb, MP4_HEADER);
         assert!(result.is_err());
     }
 
     #[test]
-    fn validate_upload_accepts_video_under_50mb() {
-        // 20MB video should pass
-        let size_20mb = 20 * 1024 * 1024;
-        assert!(validate_upload("video/mp4", size_20mb, MP4_HEADER).is_ok());
+    fn validate_upload_accepts_video_under_200mb() {
+        // 100MB video should pass (fits ~30s of 1080p)
+        let size_100mb = 100 * 1024 * 1024;
+        assert!(validate_upload("video/mp4", size_100mb, MP4_HEADER).is_ok());
     }
 
     // =========================================================================
@@ -361,8 +364,8 @@ mod tests {
     }
 
     #[test]
-    fn max_video_size_is_50mb() {
-        assert_eq!(MAX_VIDEO_SIZE, 50 * 1024 * 1024);
+    fn max_video_size_is_200mb() {
+        assert_eq!(MAX_VIDEO_SIZE, 200 * 1024 * 1024);
     }
 
     #[test]
