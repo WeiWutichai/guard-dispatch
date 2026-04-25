@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -544,6 +545,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
             conversationId: conversationId,
             requestId: requestId,
             userName: customerName,
+            userId: customerId,
             userRole: isThai ? 'ลูกค้า' : 'Client',
             actingRole: 'guard',
           ),
@@ -1883,7 +1885,7 @@ class _ProgressReportSheetState extends State<_ProgressReportSheet> {
             style: GoogleFonts.inter(fontWeight: FontWeight.bold),
           ),
           content: Text(
-            '$e',
+            _formatErrorMessage(e),
             style: GoogleFonts.inter(fontSize: 13),
           ),
           actions: [
@@ -1895,6 +1897,28 @@ class _ProgressReportSheetState extends State<_ProgressReportSheet> {
         ),
       );
     }
+  }
+
+  /// Show the actual server `error.message` (e.g. "File too large: ... 50MB")
+  /// instead of Dio's generic toString. Mirrors the helper in CallScreen +
+  /// profile_settings_screen so guards see actionable text.
+  String _formatErrorMessage(Object e) {
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map) {
+        final err = data['error'];
+        if (err is Map && err['message'] is String) {
+          return err['message'] as String;
+        }
+        if (data['message'] is String) return data['message'] as String;
+      }
+      final s = e.response?.statusCode;
+      if (s != null) {
+        return widget.isThai ? 'ส่งไม่สำเร็จ (HTTP $s)' : 'Submit failed (HTTP $s)';
+      }
+      return widget.isThai ? 'เครือข่ายขัดข้อง' : 'Network error';
+    }
+    return e.toString();
   }
 
   @override

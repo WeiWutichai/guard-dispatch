@@ -837,19 +837,27 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
 
   Widget _buildCallChatRow(Map<String, dynamic> job, bool isThai) {
     final customerName = job['customer_name'] as String? ?? '-';
+    final customerId = job['customer_id'] as String?;
+    final assignmentId = job['assignment_id'] as String?;
 
     return Row(
       children: [
         Expanded(
           child: OutlinedButton.icon(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CallScreen(userName: customerName),
-                ),
-              );
-            },
+            onPressed: customerId == null
+                ? null
+                : () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CallScreen(
+                          userName: customerName,
+                          calleeId: customerId,
+                          assignmentId: assignmentId,
+                        ),
+                      ),
+                    );
+                  },
             icon: const Icon(Icons.phone_rounded, size: 18),
             label: Text(
               isThai ? 'โทร' : 'Call',
@@ -911,6 +919,7 @@ class _GuardJobsTabState extends State<GuardJobsTab> {
             conversationId: conversationId,
             requestId: requestId,
             userName: customerName,
+            userId: customerId,
             userRole: isThai ? 'ลูกค้า' : 'Client',
             actingRole: 'guard',
           ),

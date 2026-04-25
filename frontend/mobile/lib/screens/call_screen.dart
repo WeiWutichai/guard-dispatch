@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -73,6 +74,16 @@ class _CallScreenState extends State<CallScreen> {
     await _remoteRenderer.initialize();
     await _localRenderer.initialize();
 
+    // Defensive: in release mode `assert` is stripped, so we must check
+    // the inputs ourselves before dereferencing.
+    if (widget.incomingCallId == null && (widget.calleeId == null || widget.calleeId!.isEmpty)) {
+      setState(() {
+        _state = 'ended';
+        _errorMessage = 'ไม่พบผู้รับสาย';
+      });
+      return;
+    }
+
     try {
       if (widget.incomingCallId != null) {
         await _call.accept(
@@ -92,9 +103,28 @@ class _CallScreenState extends State<CallScreen> {
       if (!mounted) return;
       setState(() {
         _state = 'ended';
-        _errorMessage = 'เริ่มสายไม่สำเร็จ: $e';
+        _errorMessage = 'เริ่มสายไม่สำเร็จ: ${_formatErr(e)}';
       });
     }
+  }
+
+  /// Surface the backend's actual `error.message` instead of Dio's
+  /// generic toString. Falls back to the HTTP code, then the raw exception.
+  String _formatErr(Object e) {
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map) {
+        final err = data['error'];
+        if (err is Map && err['message'] is String) {
+          return err['message'] as String;
+        }
+        if (data['message'] is String) return data['message'] as String;
+      }
+      final s = e.response?.statusCode;
+      if (s != null) return 'HTTP $s';
+      return 'เครือข่ายขัดข้อง';
+    }
+    return e.toString();
   }
 
   void _handleConnected() {

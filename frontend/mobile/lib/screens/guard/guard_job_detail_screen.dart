@@ -604,10 +604,16 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: () {
+                      final calleeId = job['customer_id'] as String?;
+                      if (calleeId == null || calleeId.isEmpty) return;
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => CallScreen(userName: customerName),
+                          builder: (_) => CallScreen(
+                            userName: customerName,
+                            calleeId: calleeId,
+                            assignmentId: job['assignment_id'] as String?,
+                          ),
                         ),
                       );
                     },
@@ -689,6 +695,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
             conversationId: conversationId,
             requestId: requestId,
             userName: customerName,
+            userId: customerId,
             userRole: isThai ? 'ลูกค้า' : 'Client',
             actingRole: 'guard',
           ),

@@ -18,6 +18,10 @@ class ChatScreen extends StatefulWidget {
   final String userRole;
   final String? actingRole;
   final bool readOnly;
+  /// Counterpart's user id — needed so the call button can dial the right
+  /// person via `POST /booking/calls/initiate`. Optional only because old
+  /// callers may not provide it; the call button should be hidden when null.
+  final String? userId;
 
   const ChatScreen({
     super.key,
@@ -27,6 +31,7 @@ class ChatScreen extends StatefulWidget {
     required this.userRole,
     this.actingRole,
     this.readOnly = false,
+    this.userId,
   });
 
   @override
@@ -285,13 +290,17 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
-          if (!widget.readOnly)
+          if (!widget.readOnly && widget.userId != null)
             IconButton(
               onPressed: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => CallScreen(userName: widget.userName),
+                    builder: (_) => CallScreen(
+                      userName: widget.userName,
+                      calleeId: widget.userId!,
+                      conversationId: widget.conversationId,
+                    ),
                   ),
                 );
               },
