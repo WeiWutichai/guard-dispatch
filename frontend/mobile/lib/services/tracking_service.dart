@@ -318,10 +318,22 @@ class TrackingService {
     });
 
     // 4. Stream movement-based updates (distanceFilter ≥ 10m).
-    const locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 10,
-    );
+    //
+    // Platform-specific config so the GPS stream survives screen lock /
+    // app backgrounding:
+    //
+    //   Android — must declare a foreground service with a persistent
+    //   notification or Doze kills the stream within ~30s. The
+    //   `foregroundNotificationConfig` field auto-promotes the location
+    //   plugin to foreground, hooking ACCESS_BACKGROUND_LOCATION +
+    //   FOREGROUND_SERVICE_LOCATION (declared in AndroidManifest.xml).
+    //
+    //   iOS — must opt in to background updates explicitly via
+    //   `allowsBackgroundLocationUpdates`, AND the app must declare
+    //   `UIBackgroundModes: [location]` in Info.plist (already done).
+    //   `pauseLocationUpdatesAutomatically: false` keeps the stream open
+    //   when the OS thinks the user is "stopped".
+    final locationSettings = _backgroundLocationSettings();
 
     _positionSub = Geolocator.getPositionStream(
       locationSettings: locationSettings,
@@ -395,5 +407,43 @@ class TrackingService {
     } catch (_) {
       // WebSocket send failed — will reconnect via onDone/onError
     }
+  }
+
+  /// Build the platform-specific `LocationSettings` used by the position
+  /// stream. Android needs a foreground notification (Doze kills location
+  /// otherwise); iOS needs explicit background-update opt-in.
+  LocationSettings _backgroundLocationSettings() {
+    if (Platform.isAndroid) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+        // Mute Android battery optimizer's "stop in 30s" rule by promoting
+        // the location plugin to a foreground service. The notification is
+        // visible — that's the OS contract for background GPS.
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationTitle: 'P-Guard ออนไลน์',
+          notificationText: 'กำลังส่งตำแหน่งให้ลูกค้าเรียลไทม์',
+          enableWakeLock: true,
+          notificationIcon: AndroidResource(name: 'ic_launcher'),
+        ),
+      );
+    }
+    if (Platform.isIOS) {
+      // iOS: background location is enabled by `UIBackgroundModes: [location]`
+      // in Info.plist (declared in B4). The `pauseLocationUpdatesAutomatically:
+      // false` flag plus `showBackgroundLocationIndicator: true` keeps the
+      // stream live when the screen locks and shows the standard blue bar.
+      return AppleSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+        activityType: ActivityType.otherNavigation,
+        pauseLocationUpdatesAutomatically: false,
+        showBackgroundLocationIndicator: true,
+      );
+    }
+    return const LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 10,
+    );
   }
 }
