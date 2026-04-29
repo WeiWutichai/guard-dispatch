@@ -86,12 +86,20 @@ class CallService {
 
     // Caller creates the SDP offer right away; it will be delivered to the
     // callee when they subscribe.
-    final offer = await _peer!.createOffer();
-    await _peer!.setLocalDescription(offer);
-    _sendSignal({
-      'type': 'offer',
-      'data': {'sdp': offer.sdp, 'type': offer.type},
-    });
+    final peer = _peer;
+    if (peer == null) {
+      throw Exception('peer connection สูญหายหลัง _startPeer');
+    }
+    try {
+      final offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      _sendSignal({
+        'type': 'offer',
+        'data': {'sdp': offer.sdp, 'type': offer.type},
+      });
+    } catch (e) {
+      throw Exception('สร้าง SDP offer ล้มเหลว: $e');
+    }
 
     return call;
   }
@@ -167,14 +175,24 @@ class CallService {
       'sdpSemantics': 'unified-plan',
     };
 
-    _peer = await createPeerConnection(config, {
-      'mandatory': {},
-      'optional': [
-        {'DtlsSrtpKeyAgreement': true},
-      ],
-    });
+    // Use local refs everywhere instead of `_peer!` / `_localStream!`. The
+    // `!` operator made every step a potential "Null check operator used on
+    // a null value" with no clue WHICH step failed. With named locals we
+    // throw an explicit Exception that surfaces in the user-visible error.
+    final RTCPeerConnection peer;
+    try {
+      peer = await createPeerConnection(config, {
+        'mandatory': {},
+        'optional': [
+          {'DtlsSrtpKeyAgreement': true},
+        ],
+      });
+    } catch (e) {
+      throw Exception('สร้าง WebRTC peer connection ล้มเหลว: $e');
+    }
+    _peer = peer;
 
-    _peer!.onIceCandidate = (RTCIceCandidate c) {
+    peer.onIceCandidate = (RTCIceCandidate c) {
       _sendSignal({
         'type': 'candidate',
         'data': {
@@ -185,14 +203,15 @@ class CallService {
       });
     };
 
-    _peer!.onTrack = (RTCTrackEvent event) {
+    peer.onTrack = (RTCTrackEvent event) {
       if (event.streams.isNotEmpty) {
-        remoteStream = event.streams.first;
-        onRemoteStream?.call(remoteStream!);
+        final stream = event.streams.first;
+        remoteStream = stream;
+        onRemoteStream?.call(stream);
       }
     };
 
-    _peer!.onConnectionState = (RTCPeerConnectionState state) async {
+    peer.onConnectionState = (RTCPeerConnectionState state) async {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         final id = _callId;
         if (id != null) {
@@ -220,27 +239,52 @@ class CallService {
             }
           : false,
     };
-    _localStream = await navigator.mediaDevices.getUserMedia(constraints);
-    for (final track in _localStream!.getTracks()) {
-      await _peer!.addTrack(track, _localStream!);
+
+    final MediaStream stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (e) {
+      throw Exception('ขอสิทธิ์ใช้ไมโครโฟน/กล้องไม่สำเร็จ: $e');
+    }
+    _localStream = stream;
+    final tracks = stream.getTracks();
+    if (tracks.isEmpty) {
+      throw Exception('ไม่พบไมโครโฟนหรือกล้องบนเครื่อง');
+    }
+    for (final track in tracks) {
+      await peer.addTrack(track, stream);
     }
   }
 
   Future<void> _connectSignalling() async {
     final token = await AuthService.getAccessToken();
-    if (token == null) throw Exception('no_auth_token');
+    if (token == null || token.isEmpty) {
+      throw Exception('ไม่พบ access token — ล็อกอินใหม่');
+    }
+
+    final callId = _callId;
+    if (callId == null || callId.isEmpty) {
+      throw Exception('call id ว่างก่อน connect signalling');
+    }
 
     final base = ApiClient.baseUrl;
     final wsUrl = base.replaceFirst('http://', 'ws://').replaceFirst('https://', 'wss://');
-    _ws = IOWebSocketChannel.connect(
-      Uri.parse('$wsUrl/booking/ws/call'),
-      headers: {'Authorization': 'Bearer $token'},
-    );
+
+    final IOWebSocketChannel channel;
+    try {
+      channel = IOWebSocketChannel.connect(
+        Uri.parse('$wsUrl/booking/ws/call'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+    } catch (e) {
+      throw Exception('เปิด WebSocket signalling ล้มเหลว: $e');
+    }
+    _ws = channel;
 
     // First frame is the call_id (bare UUID, server handles both formats).
-    _ws!.sink.add(_callId!);
+    channel.sink.add(callId);
 
-    _wsSub = _ws!.stream.listen(
+    _wsSub = channel.stream.listen(
       (raw) => _handleSignal(raw),
       onDone: () {
         if (!_ended) onError?.call('signalling_closed');
