@@ -24,6 +24,26 @@ class ApiClient {
   /// can derive their own `ws://` / `wss://` URLs.
   static String get baseUrl => _defaultBaseUrl;
 
+  /// Rewrites the host of a media URL (MinIO presigned URL or stored avatar URL)
+  /// so the device can actually reach it. Backend signs with `S3_PUBLIC_URL`
+  /// (defaults to `http://localhost/minio-files` in dev), which works for the
+  /// web admin and iOS Simulator but fails on Android Emulator and physical
+  /// devices because `localhost` resolves to the device itself. This swaps the
+  /// origin with [baseUrl] so nginx's `/minio-files/` proxy is reachable. The
+  /// presigned signature is bound to `Host: minio:9000` (forced by nginx), not
+  /// the public host, so changing the client-side origin is safe. Production R2
+  /// URLs (or any host outside the internal-loopback set) pass through unchanged.
+  static String? rewriteMediaHost(String? url) {
+    if (url == null || url.isEmpty) return null;
+    final originPattern =
+        RegExp(r'^https?://(localhost|127\.0\.0\.1|10\.0\.2\.2|minio)(:\d+)?');
+    if (!originPattern.hasMatch(url)) return url;
+    final origin = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+    return url.replaceFirst(originPattern, origin);
+  }
+
   late final Dio dio;
 
   ApiClient({String? baseUrl}) {
@@ -129,7 +149,10 @@ class _AuthInterceptor extends Interceptor {
     // access token, so the `if (token != null)` check below skips the
     // header for them and they fall through to the body's phone_verified_token.
     final publicPaths = ['/auth/login', '/auth/login/phone', '/auth/login/mobile', '/auth/check-status', '/auth/register', '/auth/otp/challenge', '/auth/otp/request', '/auth/otp/verify', '/auth/register/otp', '/auth/profile/reissue', '/auth/profile/guard', '/auth/profile/customer', '/auth/refresh/mobile'];
-    final isPublic = publicPaths.any((p) => options.path.contains(p));
+    // Use exact-equality matching (not `.contains`) so sub-paths like
+    // `/auth/profile/guard/document/{type}` don't accidentally inherit the
+    // public-skip rule of their parent `/auth/profile/guard`.
+    final isPublic = publicPaths.contains(options.path);
 
     if (!isPublic) {
       var token = await AuthService.getAccessToken();

@@ -55,6 +55,10 @@ use crate::state::AppState;
         handlers::reissue_profile_token,
         handlers::update_role,
         handlers::get_public_guard_profile,
+        handlers::update_avatar,
+        handlers::update_guard_document,
+        handlers::update_guard_info,
+        handlers::get_guard_info,
     ),
     components(schemas(
         models::RegisterRequest,
@@ -247,11 +251,20 @@ async fn main() -> anyhow::Result<()> {
         .merge(
             Router::new()
                 .route("/profile/guard", post(handlers::submit_guard_profile))
-                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)), // 10MB for document uploads
+                .route("/profile/avatar", post(handlers::update_avatar))
+                .route(
+                    "/profile/guard/document/{doc_type}",
+                    put(handlers::update_guard_document),
+                )
+                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)), // 10MB for image uploads
         )
         .route("/profile/reissue", post(handlers::reissue_profile_token))
         .route("/profile/role", post(handlers::update_role))
         .route("/profile/customer", post(handlers::submit_customer_profile))
+        .route(
+            "/profile/guard/info",
+            get(handlers::get_guard_info).put(handlers::update_guard_info),
+        )
         .route(
             "/guards/{user_id}/profile",
             get(handlers::get_public_guard_profile),

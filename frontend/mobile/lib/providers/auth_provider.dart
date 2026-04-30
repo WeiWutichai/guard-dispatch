@@ -54,6 +54,15 @@ class AuthProvider extends ChangeNotifier {
   String? _dateOfBirth;
   int? _yearsOfExperience;
   String? _previousWorkplace;
+  // Self-only fields fetched via /profile/guard/info (not in /me).
+  String? _guardAddress;
+  String? _bankName;
+  String? _accountNumber; // returned masked from backend
+  String? _accountName;
+  String? _emergencyContactName;
+  String? _emergencyContactPhone;
+  String? _emergencyContactRelationship;
+  bool _guardInfoLoaded = false;
   // Guard document URLs + expiry dates (from /auth/guards/{id}/profile)
   Map<String, String?> _guardDocUrls = {};
   Map<String, String?> _guardDocExpiry = {};
@@ -78,6 +87,14 @@ class AuthProvider extends ChangeNotifier {
   String? get dateOfBirth => _dateOfBirth;
   int? get yearsOfExperience => _yearsOfExperience;
   String? get previousWorkplace => _previousWorkplace;
+  String? get guardAddress => _guardAddress;
+  String? get bankName => _bankName;
+  String? get accountNumber => _accountNumber;
+  String? get accountName => _accountName;
+  String? get emergencyContactName => _emergencyContactName;
+  String? get emergencyContactPhone => _emergencyContactPhone;
+  String? get emergencyContactRelationship => _emergencyContactRelationship;
+  bool get guardInfoLoaded => _guardInfoLoaded;
   Map<String, String?> get guardDocUrls => _guardDocUrls;
   Map<String, String?> get guardDocExpiry => _guardDocExpiry;
   bool get docsLoaded => _docsLoaded;
@@ -257,7 +274,7 @@ class AuthProvider extends ChangeNotifier {
       _email = data['email'] as String?;
       _approvalStatus = data['approval_status'] as String?;
       _createdAt = data['created_at'] as String?;
-      _avatarUrl = data['avatar_url'] as String?;
+      _avatarUrl = ApiClient.rewriteMediaHost(data['avatar_url'] as String?);
       _companyName = data['company_name'] as String?;
       _contactPhone = data['contact_phone'] as String?;
       _gender = data['gender'] as String?;
@@ -295,11 +312,15 @@ class AuthProvider extends ChangeNotifier {
       final data = response.data['data'];
       if (data is Map<String, dynamic>) {
         _guardDocUrls = {
-          'id_card': data['id_card_url'] as String?,
-          'security_license': data['security_license_url'] as String?,
-          'training_cert': data['training_cert_url'] as String?,
-          'criminal_check': data['criminal_check_url'] as String?,
-          'driver_license': data['driver_license_url'] as String?,
+          'id_card': ApiClient.rewriteMediaHost(data['id_card_url'] as String?),
+          'security_license':
+              ApiClient.rewriteMediaHost(data['security_license_url'] as String?),
+          'training_cert':
+              ApiClient.rewriteMediaHost(data['training_cert_url'] as String?),
+          'criminal_check':
+              ApiClient.rewriteMediaHost(data['criminal_check_url'] as String?),
+          'driver_license':
+              ApiClient.rewriteMediaHost(data['driver_license_url'] as String?),
         };
         _guardDocExpiry = {
           'id_card': data['id_card_expiry'] as String?,
@@ -327,6 +348,131 @@ class AuthProvider extends ChangeNotifier {
       _guardDocExpiry[key] = entry.value;
     }
     notifyListeners();
+  }
+
+  /// Fetch the guard's full profile (incl. bank, address, emergency contact).
+  /// Bank account number is masked by the backend (last 4 digits visible).
+  Future<void> fetchGuardInfo({bool force = false}) async {
+    if (_userId == null || (_guardInfoLoaded && !force)) return;
+    try {
+      final response = await _apiClient.dio.get('/auth/profile/guard/info');
+      final data = response.data['data'];
+      if (data is Map<String, dynamic>) {
+        _guardAddress = data['address'] as String?;
+        _bankName = data['bank_name'] as String?;
+        _accountNumber = data['account_number'] as String?;
+        _accountName = data['account_name'] as String?;
+        _emergencyContactName = data['emergency_contact_name'] as String?;
+        _emergencyContactPhone = data['emergency_contact_phone'] as String?;
+        _emergencyContactRelationship =
+            data['emergency_contact_relationship'] as String?;
+        _gender = data['gender'] as String? ?? _gender;
+        _dateOfBirth = data['date_of_birth'] as String? ?? _dateOfBirth;
+        _yearsOfExperience =
+            data['years_of_experience'] as int? ?? _yearsOfExperience;
+        _previousWorkplace =
+            data['previous_workplace'] as String? ?? _previousWorkplace;
+        _guardInfoLoaded = true;
+        notifyListeners();
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[AuthProvider] fetchGuardInfo error: $e');
+      }
+    }
+  }
+
+  /// Update the guard's own non-document profile fields. Pass only the
+  /// fields that changed (others remain via backend COALESCE).
+  Future<void> updateGuardInfo(Map<String, dynamic> patch) async {
+    if (patch.isEmpty) return;
+    await _apiClient.dio.put('/auth/profile/guard/info', data: patch);
+    // Sync local state with the values just written
+    if (patch.containsKey('gender')) _gender = patch['gender'] as String?;
+    if (patch.containsKey('date_of_birth')) {
+      _dateOfBirth = patch['date_of_birth'] as String?;
+    }
+    if (patch.containsKey('years_of_experience')) {
+      _yearsOfExperience = patch['years_of_experience'] as int?;
+    }
+    if (patch.containsKey('previous_workplace')) {
+      _previousWorkplace = patch['previous_workplace'] as String?;
+    }
+    if (patch.containsKey('bank_name')) {
+      _bankName = patch['bank_name'] as String?;
+    }
+    if (patch.containsKey('account_name')) {
+      _accountName = patch['account_name'] as String?;
+    }
+    if (patch.containsKey('account_number')) {
+      // Re-fetch to pick up the freshly masked value from the server.
+      await fetchGuardInfo(force: true);
+    }
+    if (patch.containsKey('address')) {
+      _guardAddress = patch['address'] as String?;
+    }
+    if (patch.containsKey('emergency_contact_name')) {
+      _emergencyContactName = patch['emergency_contact_name'] as String?;
+    }
+    if (patch.containsKey('emergency_contact_phone')) {
+      _emergencyContactPhone = patch['emergency_contact_phone'] as String?;
+    }
+    if (patch.containsKey('emergency_contact_relationship')) {
+      _emergencyContactRelationship =
+          patch['emergency_contact_relationship'] as String?;
+    }
+    notifyListeners();
+  }
+
+  /// Update name + email on `auth.users` via PUT /auth/me. Pass only changed
+  /// fields (the backend COALESCEs nulls). Phone is intentionally not exposed
+  /// here — it's the login identifier and changing it requires a re-OTP flow.
+  Future<void> updateUserProfile({String? fullName, String? email}) async {
+    if (fullName == null && email == null) return;
+    final body = <String, dynamic>{};
+    if (fullName != null) body['full_name'] = fullName;
+    if (email != null) body['email'] = email;
+    await _apiClient.dio.put('/auth/me', data: body);
+    if (fullName != null) _fullName = fullName;
+    if (email != null) _email = email;
+    notifyListeners();
+  }
+
+  /// Upload a new avatar image. Backend stores the file key and `get_profile`
+  /// presigns it on read. Refreshes local profile state on success.
+  Future<void> uploadAvatar(File file) async {
+    final form = FormData.fromMap({
+      'avatar': await MultipartFile.fromFile(file.path),
+    });
+    final response = await _apiClient.dio.post(
+      '/auth/profile/avatar',
+      data: form,
+      options: Options(contentType: 'multipart/form-data'),
+    );
+    final data = response.data['data'];
+    if (data is Map<String, dynamic>) {
+      _avatarUrl = ApiClient.rewriteMediaHost(data['avatar_url'] as String?);
+      notifyListeners();
+    }
+  }
+
+  /// Re-upload a single guard document (id_card, security_license,
+  /// training_cert, criminal_check, driver_license). Updates the cached
+  /// signed URL on success.
+  Future<void> uploadGuardDocument(String docType, File file) async {
+    final form = FormData.fromMap({
+      'file': await MultipartFile.fromFile(file.path),
+    });
+    final response = await _apiClient.dio.put(
+      '/auth/profile/guard/document/$docType',
+      data: form,
+      options: Options(contentType: 'multipart/form-data'),
+    );
+    final url = response.data['data'];
+    if (url is String && url.isNotEmpty) {
+      _guardDocUrls[docType] = ApiClient.rewriteMediaHost(url);
+      notifyListeners();
+    }
   }
 
   /// Fetch a math-captcha challenge the user must solve before `requestOtp`.
