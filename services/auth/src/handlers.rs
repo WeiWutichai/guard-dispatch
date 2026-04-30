@@ -331,7 +331,16 @@ pub async fn get_profile(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
 ) -> Result<Json<ApiResponse<UserResponse>>, AppError> {
-    let profile = crate::service::get_profile(&state.db, &state.redis, user.user_id).await?;
+    let profile = crate::service::get_profile(
+        &state.db,
+        &state.redis,
+        &state.s3_client,
+        &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
+        user.user_id,
+    )
+    .await?;
     Ok(Json(ApiResponse::success(profile)))
 }
 
@@ -819,6 +828,235 @@ pub async fn submit_guard_profile(
     ))
 }
 
+/// Upload a new avatar image (multipart/form-data).
+/// Field name: `avatar`. Replaces any existing avatar.
+#[utoipa::path(
+    post,
+    path = "/profile/avatar",
+    tag = "Profile",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Avatar updated", body = UserResponse),
+        (status = 400, description = "Invalid file (size, MIME, or magic bytes)", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    ),
+)]
+pub async fn update_avatar(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<UserResponse>>, AppError> {
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart parse error: {e}")))?
+    {
+        if field.name().unwrap_or("") == "avatar" {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+            if !bytes.is_empty() {
+                data = Some(bytes.to_vec());
+            }
+        }
+    }
+    let data = data.ok_or_else(|| AppError::BadRequest("Missing 'avatar' file field".to_string()))?;
+
+    crate::service::update_avatar(
+        &state.db,
+        &state.redis,
+        &state.s3_client,
+        &state.s3_bucket,
+        user.user_id,
+        data,
+    )
+    .await?;
+
+    let profile = crate::service::get_profile(
+        &state.db,
+        &state.redis,
+        &state.s3_client,
+        &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
+        user.user_id,
+    )
+    .await?;
+    Ok(Json(ApiResponse::success(profile)))
+}
+
+/// Re-upload a single guard document image (multipart/form-data).
+/// Path: `/profile/guard/document/{doc_type}` where `doc_type` is one of
+/// id_card, security_license, training_cert, criminal_check, driver_license.
+/// Field name: `file`. Caller must be the guard themselves; admins use the
+/// admin endpoint instead.
+#[utoipa::path(
+    put,
+    path = "/profile/guard/document/{doc_type}",
+    tag = "Profile",
+    security(("bearer" = [])),
+    params(
+        ("doc_type" = String, Path, description = "Document type"),
+    ),
+    responses(
+        (status = 200, description = "Document replaced — returns new signed URL", body = String),
+        (status = 400, description = "Invalid file or unknown doc_type", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Not a guard", body = ErrorBody),
+        (status = 404, description = "Guard profile not found", body = ErrorBody),
+    ),
+)]
+pub async fn update_guard_document(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(doc_type): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<String>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden(
+            "Only guards can re-upload their own documents".to_string(),
+        ));
+    }
+
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart parse error: {e}")))?
+    {
+        if field.name().unwrap_or("") == "file" {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+            if !bytes.is_empty() {
+                data = Some(bytes.to_vec());
+            }
+        }
+    }
+    let data = data.ok_or_else(|| AppError::BadRequest("Missing 'file' field".to_string()))?;
+
+    crate::service::update_guard_document(
+        &state.db,
+        &state.redis,
+        &state.s3_client,
+        &state.s3_bucket,
+        user.user_id,
+        &doc_type,
+        data,
+    )
+    .await?;
+
+    // Return the fresh signed URL for the just-uploaded document so the client
+    // can refresh its cache without a separate GET.
+    let profile = crate::service::get_guard_profile(
+        &state.db,
+        &state.s3_client,
+        &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
+        user.user_id,
+    )
+    .await?;
+    let url = match doc_type.as_str() {
+        "id_card" => profile.id_card_url,
+        "security_license" => profile.security_license_url,
+        "training_cert" => profile.training_cert_url,
+        "criminal_check" => profile.criminal_check_url,
+        "driver_license" => profile.driver_license_url,
+        _ => None,
+    }
+    .unwrap_or_default();
+
+    Ok(Json(ApiResponse::success(url)))
+}
+
+/// Guard self-fetch of their own full `auth.guard_profiles` row (incl. bank
+/// info, address, emergency contact, signed doc URLs). Mirrors the admin
+/// endpoint shape (`GuardProfileResponse`); account number is masked.
+#[utoipa::path(
+    get,
+    path = "/profile/guard/info",
+    tag = "Profile",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Full guard profile", body = GuardProfileResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Not a guard", body = ErrorBody),
+        (status = 404, description = "Guard profile not found", body = ErrorBody),
+    ),
+)]
+pub async fn get_guard_info(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<ApiResponse<GuardProfileResponse>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden(
+            "Only guards can fetch their own profile".to_string(),
+        ));
+    }
+
+    let profile = crate::service::get_guard_profile(
+        &state.db,
+        &state.s3_client,
+        &state.s3_bucket,
+        &state.s3_endpoint,
+        &state.s3_public_url,
+        user.user_id,
+    )
+    .await?;
+    Ok(Json(ApiResponse::success(profile)))
+}
+
+/// Guard self-update of their own `auth.guard_profiles` non-document fields.
+/// Reuses `admin_update_guard_profile()` service function but enforces
+/// `user.user_id` (from JWT) instead of taking user_id from path — guard can
+/// only edit their own profile.
+#[utoipa::path(
+    put,
+    path = "/profile/guard/info",
+    tag = "Profile",
+    security(("bearer" = [])),
+    request_body = AdminUpdateGuardProfileRequest,
+    responses(
+        (status = 200, description = "Profile updated"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Not a guard", body = ErrorBody),
+    ),
+)]
+pub async fn update_guard_info(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(req): Json<AdminUpdateGuardProfileRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    if user.role != "guard" {
+        return Err(AppError::Forbidden(
+            "Only guards can update their own profile".to_string(),
+        ));
+    }
+
+    // Strip document expiry fields so guards can't self-extend the validity
+    // of their licences via this endpoint. Expiry is admin-only territory
+    // (`PUT /admin/guard-profile/{id}`) — guards have a separate, explicit
+    // path at `PUT /guards/me/expiry` that goes through the same service
+    // function, so closing this hole doesn't break their workflow.
+    let safe_req = AdminUpdateGuardProfileRequest {
+        id_card_expiry: None,
+        security_license_expiry: None,
+        training_cert_expiry: None,
+        criminal_check_expiry: None,
+        driver_license_expiry: None,
+        ..req
+    };
+
+    crate::service::admin_update_guard_profile(&state.db, &state.redis, user.user_id, safe_req)
+        .await?;
+
+    Ok(Json(ApiResponse::success(())))
+}
+
 /// Reissue a profile_token for a pending guard who already verified OTP.
 /// Allows retry of guard profile submission without repeating the OTP flow.
 #[utoipa::path(
@@ -1047,6 +1285,10 @@ pub async fn update_own_expiry(
         training_cert_expiry: req.training_cert_expiry,
         criminal_check_expiry: req.criminal_check_expiry,
         driver_license_expiry: req.driver_license_expiry,
+        address: None,
+        emergency_contact_name: None,
+        emergency_contact_phone: None,
+        emergency_contact_relationship: None,
     };
     crate::service::admin_update_guard_profile(&state.db, &state.redis, user.user_id, expiry_only)
         .await?;

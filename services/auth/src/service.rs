@@ -607,9 +607,13 @@ pub async fn refresh_token(
 pub async fn get_profile(
     db: &PgPool,
     redis: &redis::aio::MultiplexedConnection,
+    s3_client: &aws_sdk_s3::Client,
+    s3_bucket: &str,
+    s3_endpoint: &str,
+    s3_public_url: &str,
     user_id: Uuid,
 ) -> Result<UserResponse, AppError> {
-    if let Some(cached) = get_cached_user(redis, &user_id).await? {
+    if let Some(mut cached) = get_cached_user(redis, &user_id).await? {
         // Only use cache if it has profile data populated.
         // Avoids stale cache from before profile LEFT JOIN was added.
         let has_profile_data = cached.customer_full_name.is_some()
@@ -628,6 +632,14 @@ pub async fn get_profile(
 
         // Use cache only if: no role / admin, OR has relevant profile data
         if (!is_customer && !is_guard) || has_profile_data {
+            cached.avatar_url = finalize_avatar_url(
+                cached.avatar_url,
+                s3_client,
+                s3_bucket,
+                s3_endpoint,
+                s3_public_url,
+            )
+            .await;
             return Ok(cached);
         }
         // Otherwise fall through to fresh DB query + re-cache
@@ -713,6 +725,15 @@ pub async fn get_profile(
     };
     cache_user(redis, &response).await?;
 
+    let mut response = response;
+    response.avatar_url = finalize_avatar_url(
+        response.avatar_url,
+        s3_client,
+        s3_bucket,
+        s3_endpoint,
+        s3_public_url,
+    )
+    .await;
     Ok(response)
 }
 
@@ -726,10 +747,20 @@ pub async fn update_profile(
     user_id: Uuid,
     req: UpdateProfileRequest,
 ) -> Result<UserResponse, AppError> {
-    if req.full_name.is_none() && req.phone.is_none() && req.avatar_url.is_none() {
+    if req.full_name.is_none()
+        && req.phone.is_none()
+        && req.avatar_url.is_none()
+        && req.email.is_none()
+    {
         return Err(AppError::BadRequest(
             "At least one field must be provided".to_string(),
         ));
+    }
+
+    if let Some(email) = req.email.as_ref() {
+        if !email.contains('@') || !email.contains('.') || email.len() < 5 {
+            return Err(AppError::BadRequest("Invalid email format".to_string()));
+        }
     }
 
     let user = sqlx::query_as::<_, UserRow>(
@@ -737,7 +768,9 @@ pub async fn update_profile(
         UPDATE auth.users
         SET full_name  = COALESCE($2, full_name),
             phone      = COALESCE($3, phone),
-            avatar_url = COALESCE($4, avatar_url)
+            avatar_url = COALESCE($4, avatar_url),
+            email      = COALESCE($5, email),
+            updated_at = NOW()
         WHERE id = $1
         RETURNING id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
         "#,
@@ -746,6 +779,7 @@ pub async fn update_profile(
     .bind(&req.full_name)
     .bind(&req.phone)
     .bind(&req.avatar_url)
+    .bind(&req.email)
     .fetch_optional(db)
     .await?
     .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
@@ -2239,7 +2273,9 @@ pub async fn get_guard_profile(
                id_card_key, security_license_key, training_cert_key, criminal_check_key,
                driver_license_key, bank_name, account_number, account_name, passbook_photo_key,
                id_card_expiry, security_license_expiry, training_cert_expiry,
-               criminal_check_expiry, driver_license_expiry
+               criminal_check_expiry, driver_license_expiry,
+               address, emergency_contact_name, emergency_contact_phone,
+               emergency_contact_relationship
         FROM auth.guard_profiles
         WHERE user_id = $1
         "#,
@@ -2324,6 +2360,10 @@ pub async fn get_guard_profile(
         driver_license_expiry: row
             .driver_license_expiry
             .map(|d| d.format("%Y-%m-%d").to_string()),
+        address: row.address,
+        emergency_contact_name: row.emergency_contact_name,
+        emergency_contact_phone: row.emergency_contact_phone,
+        emergency_contact_relationship: row.emergency_contact_relationship,
     })
 }
 
@@ -2379,7 +2419,12 @@ pub async fn admin_update_guard_profile(
             security_license_expiry = COALESCE($10, security_license_expiry),
             training_cert_expiry = COALESCE($11, training_cert_expiry),
             criminal_check_expiry = COALESCE($12, criminal_check_expiry),
-            driver_license_expiry = COALESCE($13, driver_license_expiry)
+            driver_license_expiry = COALESCE($13, driver_license_expiry),
+            address = COALESCE($14, address),
+            emergency_contact_name = COALESCE($15, emergency_contact_name),
+            emergency_contact_phone = COALESCE($16, emergency_contact_phone),
+            emergency_contact_relationship = COALESCE($17, emergency_contact_relationship),
+            updated_at = NOW()
         WHERE user_id = $1
         "#,
     )
@@ -2396,6 +2441,10 @@ pub async fn admin_update_guard_profile(
     .bind(training_cert_expiry)
     .bind(criminal_check_expiry)
     .bind(driver_license_expiry)
+    .bind(&req.address)
+    .bind(&req.emergency_contact_name)
+    .bind(&req.emergency_contact_phone)
+    .bind(&req.emergency_contact_relationship)
     .execute(db)
     .await?;
 
@@ -2668,6 +2717,133 @@ pub async fn update_customer_approval_status(
     invalidate_user_cache(redis, &user_id).await?;
 
     Ok(())
+}
+
+// =============================================================================
+// Update Avatar (any authenticated user — own avatar only)
+// =============================================================================
+
+/// Upload a new avatar image for the user. Replaces any existing avatar.
+/// Stores the S3 file key in `auth.users.avatar_url`; `get_profile()` presigns
+/// it before returning to the client.
+pub async fn update_avatar(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+    s3_client: &aws_sdk_s3::Client,
+    bucket: &str,
+    user_id: Uuid,
+    data: Vec<u8>,
+) -> Result<String, AppError> {
+    if data.len() > MAX_DOCUMENT_SIZE {
+        return Err(AppError::BadRequest(format!(
+            "File exceeds maximum size of 10MB (got {} bytes)",
+            data.len()
+        )));
+    }
+
+    let ext = validate_image_magic_bytes(&data)?;
+    let file_key = format!("profiles/avatars/{user_id}.{ext}");
+    let body = aws_sdk_s3::primitives::ByteStream::from(data);
+
+    s3_client
+        .put_object()
+        .bucket(bucket)
+        .key(&file_key)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to upload avatar to S3: {e}")))?;
+
+    sqlx::query("UPDATE auth.users SET avatar_url = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&file_key)
+        .bind(user_id)
+        .execute(db)
+        .await
+        .map_err(AppError::Database)?;
+
+    invalidate_user_cache(redis, &user_id).await?;
+    Ok(file_key)
+}
+
+// =============================================================================
+// Re-upload Single Guard Document (guard self-service)
+// =============================================================================
+
+/// Replace one document image on a guard's existing profile. Reuses
+/// `upload_document()` so the new image is watermarked + magic-byte validated.
+pub async fn update_guard_document(
+    db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
+    s3_client: &aws_sdk_s3::Client,
+    bucket: &str,
+    user_id: Uuid,
+    doc_type: &str,
+    data: Vec<u8>,
+) -> Result<String, AppError> {
+    let column = match doc_type {
+        "id_card" => "id_card_key",
+        "security_license" => "security_license_key",
+        "training_cert" => "training_cert_key",
+        "criminal_check" => "criminal_check_key",
+        "driver_license" => "driver_license_key",
+        _ => {
+            return Err(AppError::BadRequest(format!(
+                "Unknown document type: {doc_type}"
+            )))
+        }
+    };
+
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM auth.guard_profiles WHERE user_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await
+    .map_err(AppError::Database)?;
+    if !exists {
+        return Err(AppError::NotFound("Guard profile not found".to_string()));
+    }
+
+    let file_key = upload_document(s3_client, bucket, user_id, doc_type, data).await?;
+
+    let sql = format!(
+        "UPDATE auth.guard_profiles SET {column} = $1, updated_at = NOW() WHERE user_id = $2"
+    );
+    sqlx::query(&sql)
+        .bind(&file_key)
+        .bind(user_id)
+        .execute(db)
+        .await
+        .map_err(AppError::Database)?;
+
+    invalidate_user_cache(redis, &user_id).await?;
+    Ok(file_key)
+}
+
+// =============================================================================
+// Avatar URL presigning helper
+// =============================================================================
+
+/// If `value` is a stored S3 key (not a `http(s)://...` URL), generate a
+/// signed URL and rewrite the host with `s3_public_url` so clients can reach
+/// it through nginx. Returns the original value unchanged otherwise.
+async fn finalize_avatar_url(
+    value: Option<String>,
+    s3_client: &aws_sdk_s3::Client,
+    bucket: &str,
+    s3_endpoint: &str,
+    s3_public_url: &str,
+) -> Option<String> {
+    let key = value?;
+    if key.is_empty() || key.starts_with("http://") || key.starts_with("https://") {
+        return Some(key);
+    }
+    let signed = presign_url(s3_client, bucket, &key).await.ok()?;
+    if s3_endpoint != s3_public_url {
+        Some(signed.replacen(s3_endpoint, s3_public_url, 1))
+    } else {
+        Some(signed)
+    }
 }
 
 #[cfg(test)]

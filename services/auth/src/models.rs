@@ -63,6 +63,7 @@ pub struct UpdateProfileRequest {
     pub full_name: Option<String>,
     pub phone: Option<String>,
     pub avatar_url: Option<String>,
+    pub email: Option<String>,
 }
 
 // =============================================================================
@@ -444,6 +445,10 @@ pub struct GuardProfileRow {
     pub training_cert_expiry: Option<chrono::NaiveDate>,
     pub criminal_check_expiry: Option<chrono::NaiveDate>,
     pub driver_license_expiry: Option<chrono::NaiveDate>,
+    pub address: Option<String>,
+    pub emergency_contact_name: Option<String>,
+    pub emergency_contact_phone: Option<String>,
+    pub emergency_contact_relationship: Option<String>,
 }
 
 /// Guard profile response returned to the admin (document keys replaced with signed URLs).
@@ -473,9 +478,19 @@ pub struct GuardProfileResponse {
     pub criminal_check_expiry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub driver_license_expiry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emergency_contact_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emergency_contact_phone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emergency_contact_relationship: Option<String>,
 }
 
-/// Admin request to update guard profile fields.
+/// Admin request to update guard profile fields. Same shape is reused by the
+/// guard self-service endpoint `PUT /profile/guard/info` (handler enforces
+/// `user.user_id` instead of taking it from the path).
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AdminUpdateGuardProfileRequest {
     pub gender: Option<String>,
@@ -490,6 +505,10 @@ pub struct AdminUpdateGuardProfileRequest {
     pub training_cert_expiry: Option<String>,
     pub criminal_check_expiry: Option<String>,
     pub driver_license_expiry: Option<String>,
+    pub address: Option<String>,
+    pub emergency_contact_name: Option<String>,
+    pub emergency_contact_phone: Option<String>,
+    pub emergency_contact_relationship: Option<String>,
 }
 
 /// Public guard profile — documents only, no bank/sensitive info.
