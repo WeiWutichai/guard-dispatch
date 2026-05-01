@@ -1037,7 +1037,22 @@ pub async fn update_guard_info(
         ));
     }
 
-    crate::service::admin_update_guard_profile(&state.db, &state.redis, user.user_id, req).await?;
+    // Strip document expiry fields so guards can't self-extend the validity
+    // of their licences via this endpoint. Expiry is admin-only territory
+    // (`PUT /admin/guard-profile/{id}`) — guards have a separate, explicit
+    // path at `PUT /guards/me/expiry` that goes through the same service
+    // function, so closing this hole doesn't break their workflow.
+    let safe_req = AdminUpdateGuardProfileRequest {
+        id_card_expiry: None,
+        security_license_expiry: None,
+        training_cert_expiry: None,
+        criminal_check_expiry: None,
+        driver_license_expiry: None,
+        ..req
+    };
+
+    crate::service::admin_update_guard_profile(&state.db, &state.redis, user.user_id, safe_req)
+        .await?;
 
     Ok(Json(ApiResponse::success(())))
 }
