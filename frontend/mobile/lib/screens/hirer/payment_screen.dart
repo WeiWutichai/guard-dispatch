@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
+import 'guard_searching_screen.dart';
 import 'payment_success_screen.dart';
 
 class PaymentScreen extends StatefulWidget {
@@ -41,6 +43,165 @@ class PaymentScreen extends StatefulWidget {
 class _PaymentScreenState extends State<PaymentScreen> {
   String _selectedMethod = 'promptpay';
   bool _isPaying = false;
+
+  // Poll the assignment so we notice when the guard taps
+  // "ยกเลิกงาน (ลูกค้าไม่ชำระ)" (B1) before the customer pays. The cancel-
+  // unpaid endpoint flips this assignment to `cancelled` and resets the
+  // request to `pending`, so the customer needs an obvious recovery path.
+  Timer? _pollTimer;
+  bool _cancelDialogShown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _checkAssignmentStatus(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkAssignmentStatus() async {
+    if (_cancelDialogShown || _isPaying || !mounted) return;
+    try {
+      final assignments =
+          await context.read<BookingProvider>().getAssignments(widget.requestId);
+      if (!mounted) return;
+      final mine = assignments.firstWhere(
+        (a) => a['guard_id'] == widget.guardId,
+        orElse: () => <String, dynamic>{},
+      );
+      final status = mine['status'] as String?;
+      if (status == 'cancelled' && !_cancelDialogShown) {
+        _cancelDialogShown = true;
+        _pollTimer?.cancel();
+        _showGuardCancelledDialog();
+      }
+    } catch (_) {
+      // Silent — try again on next tick
+    }
+  }
+
+  void _showGuardCancelledDialog() {
+    final isThai = LanguageProvider.of(context).isThai;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.error_outline_rounded,
+                color: AppColors.danger, size: 26),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                isThai
+                    ? 'เจ้าหน้าที่ยกเลิกการให้บริการ'
+                    : 'Guard cancelled the job',
+                style: GoogleFonts.inter(
+                    fontWeight: FontWeight.bold, fontSize: 17),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          isThai
+              ? 'เจ้าหน้าที่ยกเลิกเนื่องจากยังไม่ได้รับชำระเงิน คุณต้องการดำเนินการต่ออย่างไร?'
+              : 'The guard cancelled because payment has not been received. How would you like to proceed?',
+          style: GoogleFonts.inter(fontSize: 14, height: 1.5),
+        ),
+        actionsPadding:
+            const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        actions: [
+          // Stack vertically so both labels stay readable in Thai.
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _onFindNewGuard(ctx),
+                  icon: const Icon(Icons.search_rounded, size: 18),
+                  label: Text(
+                    isThai ? 'ค้นหาเจ้าหน้าที่ใหม่' : 'Find a new guard',
+                    style: GoogleFonts.inter(
+                        fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _onBackToHome(ctx),
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: Text(
+                    isThai ? 'เริ่มเรียกรายการใหม่' : 'Start a new booking',
+                    style: GoogleFonts.inter(
+                        fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textPrimary,
+                    side: BorderSide(color: AppColors.border),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onFindNewGuard(BuildContext dialogCtx) {
+    Navigator.pop(dialogCtx);
+    if (!mounted) return;
+    // Backend already reset the request to `pending` in cancel_unpaid; we
+    // reuse the same requestId so the new assignment lands on the same
+    // booking instead of leaving an orphan.
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GuardSearchingScreen(
+          requestId: widget.requestId,
+          lat: widget.customerLat,
+          lng: widget.customerLng,
+          totalAmount: widget.totalAmount,
+          subtotal: widget.subtotal,
+          baseFee: widget.baseFee,
+          tip: widget.tip,
+          bookedHours: widget.bookedHours,
+          guardCount: widget.guardCount,
+        ),
+      ),
+    );
+  }
+
+  void _onBackToHome(BuildContext dialogCtx) {
+    Navigator.pop(dialogCtx);
+    if (!mounted) return;
+    // Pop everything booking-related back to the dashboard so the customer
+    // can start a fresh request from "เลือกบริการ".
+    Navigator.popUntil(context, (route) => route.isFirst);
+  }
 
   Future<void> _pay() async {
     final isThai = LanguageProvider.of(context).isThai;
