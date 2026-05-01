@@ -91,20 +91,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Idle logout: 15 min no activity → logout. Activity timestamp stored
-  // in localStorage so a page reload / browser close also enforces the rule.
+  // in localStorage so a page reload / browser close also enforces the rule,
+  // and so other open tabs don't drop the user when only one tab is idle.
   useEffect(() => {
     if (!isAuthenticated || typeof window === "undefined") return;
 
-    const scheduleIdleLogout = () => {
+    // The setTimeout callback re-reads the shared `last_activity_ts` so a
+    // tab that's been quiet doesn't hang up the session when another tab
+    // has been bumping the timestamp the whole time. If activity is fresh,
+    // we just reschedule for the remaining slack instead of logging out.
+    const scheduleIdleLogout = (delay = IDLE_TIMEOUT_MS) => {
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       idleTimerRef.current = setTimeout(() => {
+        const lastTs = Number(localStorage.getItem(ACTIVITY_STORAGE_KEY) || 0);
+        const idleFor = Date.now() - lastTs;
+        if (lastTs > 0 && idleFor < IDLE_TIMEOUT_MS) {
+          // Another tab (or this tab via storage event) updated the
+          // timestamp while we were waiting — reschedule for the remaining
+          // window rather than logging out.
+          scheduleIdleLogout(IDLE_TIMEOUT_MS - idleFor);
+          return;
+        }
         void logout();
-      }, IDLE_TIMEOUT_MS);
+      }, delay);
     };
 
     const onActivity = () => {
       localStorage.setItem(ACTIVITY_STORAGE_KEY, String(Date.now()));
       scheduleIdleLogout();
+    };
+
+    // Cross-tab sync — when another tab fires `setItem`, this tab gets a
+    // `storage` event. Refresh our timer without writing again (avoids the
+    // ping-pong that would happen if every tab wrote on every tab's read).
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === ACTIVITY_STORAGE_KEY) {
+        scheduleIdleLogout();
+      }
     };
 
     const storedTs = Number(localStorage.getItem(ACTIVITY_STORAGE_KEY) || 0);
@@ -115,17 +138,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     onActivity();
 
+    // `mousemove` and `pointerdown` cover users who scan tables / drawers
+    // without clicking; without them we logged people out mid-read.
+    // `passive: true` keeps the listeners from blocking scroll/touch.
     const events: (keyof WindowEventMap)[] = [
       "mousedown",
+      "mousemove",
+      "pointerdown",
       "keydown",
       "scroll",
       "touchstart",
     ];
     for (const ev of events) window.addEventListener(ev, onActivity, { passive: true });
+    window.addEventListener("storage", onStorage);
 
     return () => {
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       for (const ev of events) window.removeEventListener(ev, onActivity);
+      window.removeEventListener("storage", onStorage);
     };
   }, [isAuthenticated, logout]);
 
