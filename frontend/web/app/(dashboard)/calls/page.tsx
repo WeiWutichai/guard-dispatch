@@ -149,7 +149,14 @@ export default function CallsPage() {
         </div>
       </header>
 
-      {/* Summary cards */}
+      {/* Summary cards.
+          - "Total" comes from `page.total` (server-side COUNT) so it's
+            the system-wide number.
+          - The other three are client-side reductions over the rows we
+            fetched for the current view, so they're scoped "ในตาราง".
+            A future PR can move these to a /admin/calls/summary backend
+            endpoint that ignores limit/offset; until then we label them
+            so operators don't read them as system-wide KPIs. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <SummaryCard
           label={isThai ? "ทั้งหมด" : "Total"}
@@ -162,18 +169,21 @@ export default function CallsPage() {
           value={stats.connected.toString()}
           tone="emerald"
           icon={<Phone className="h-5 w-5" />}
+          scopeNote={isThai ? "ในตาราง" : "in current view"}
         />
         <SummaryCard
           label={isThai ? "ไม่รับสาย" : "Missed"}
           value={stats.missed.toString()}
           tone="orange"
           icon={<PhoneMissed className="h-5 w-5" />}
+          scopeNote={isThai ? "ในตาราง" : "in current view"}
         />
         <SummaryCard
           label={isThai ? "ระยะเวลาเฉลี่ย" : "Avg Duration"}
           value={formatDuration(stats.avgDuration)}
           tone="slate"
           icon={<PhoneOff className="h-5 w-5" />}
+          scopeNote={isThai ? "ในตาราง" : "in current view"}
         />
       </div>
 
@@ -298,11 +308,15 @@ function SummaryCard({
   value,
   tone,
   icon,
+  scopeNote,
 }: {
   label: string;
   value: string;
   tone: "slate" | "emerald" | "orange" | "red";
   icon: React.ReactNode;
+  /** Optional sub-label clarifying the value's scope (e.g. "ในตาราง"
+   *  for stats computed client-side over the current page only). */
+  scopeNote?: string;
 }) {
   const bg = {
     slate: "from-slate-50 to-slate-100 border-slate-200",
@@ -328,6 +342,9 @@ function SummaryCard({
         <span className={cn("rounded-lg bg-white/60 p-1.5", fg)}>{icon}</span>
       </div>
       <p className={cn("text-2xl font-bold mt-2", fg)}>{value}</p>
+      {scopeNote && (
+        <p className="text-[10px] font-medium text-slate-500 mt-1">{scopeNote}</p>
+      )}
     </div>
   );
 }

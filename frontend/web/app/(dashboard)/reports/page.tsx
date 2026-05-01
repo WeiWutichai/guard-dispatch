@@ -2,29 +2,21 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  FileText,
   Download,
   Calendar,
-  TrendingUp,
-  TrendingDown,
   Users,
   Briefcase,
   AlertTriangle,
   DollarSign,
-  Clock,
   CheckCircle2,
-  BarChart3,
-  PieChart,
   ArrowUpRight,
   ArrowDownRight,
-  Filter,
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reportsApi, type AdminReportSummary } from "@/lib/api";
 
 type ReportPeriod = "week" | "month" | "quarter" | "year";
-type ReportType = "overview" | "personnel" | "incidents" | "appeals";
 
 interface MetricCard {
   title: string;
@@ -52,7 +44,6 @@ const appealsSummary = [
 
 export default function ReportsPage() {
   const [period, setPeriod] = useState<ReportPeriod>("month");
-  const [reportType, setReportType] = useState<ReportType>("overview");
 
   // Real summary + weekly series from the backend.
   const [summary, setSummary] = useState<AdminReportSummary | null>(null);
@@ -147,26 +138,13 @@ export default function ReportsPage() {
         </button>
       </div>
 
-      {/* Filters */}
+      {/* Filters — only the period selector is wired today. The
+          old "Report Type" chips (overview/personnel/incidents/appeals)
+          were removed because they toggled visual state without changing
+          the rendered data, which read as a UI bug to operators. Re-add
+          when each type has its own backend view. */}
       <div className="bg-white rounded-xl border border-slate-200 p-4">
-        <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-500">Report Type:</span>
-            {(["overview", "personnel", "incidents", "appeals"] as const).map((type) => (
-              <button
-                key={type}
-                onClick={() => setReportType(type)}
-                className={cn(
-                  "px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-colors",
-                  reportType === type
-                    ? "bg-primary text-white"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                )}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+        <div className="flex flex-col sm:flex-row gap-4 items-center justify-end">
           <div className="flex items-center gap-2">
             <Calendar className="h-4 w-4 text-slate-400" />
             <span className="text-sm text-slate-500">Period:</span>
