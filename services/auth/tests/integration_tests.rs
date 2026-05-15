@@ -469,16 +469,68 @@ async fn update_role_bearer_sub_mismatch_with_body_phone_returns_403() {}
 // =============================================================================
 
 #[tokio::test]
+async fn otp_challenge_returns_id_question_and_ttl() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let res = send_retrying(|| client().get(format!("{}/otp/challenge", base_url()))).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().await.expect("json");
+    let data = body.get("data").expect("data envelope");
+
+    let challenge_id = data
+        .get("challenge_id")
+        .and_then(|v| v.as_str())
+        .expect("challenge_id");
+    assert!(!challenge_id.is_empty(), "challenge_id must be non-empty");
+    // UUID v4 — 36 chars with hyphens
+    assert_eq!(
+        challenge_id.len(),
+        36,
+        "challenge_id must be UUID v4 (36 chars)"
+    );
+
+    let question = data
+        .get("question")
+        .and_then(|v| v.as_str())
+        .expect("question");
+    let parts: Vec<&str> = question.split_whitespace().collect();
+    assert_eq!(parts.len(), 5, "question must be 'A + B = ?' format");
+    assert_eq!(parts[1], "+");
+    assert_eq!(parts[3], "=");
+    assert_eq!(parts[4], "?");
+
+    let expires_in = data
+        .get("expires_in")
+        .and_then(|v| v.as_i64())
+        .expect("expires_in");
+    assert_eq!(
+        expires_in, 180,
+        "TTL must be 180 seconds (3 min) per service.rs:854"
+    );
+}
+
+#[tokio::test]
 async fn request_otp_handler_is_wired_and_returns_json() {
     if service_unreachable().await {
         return;
     }
     throttle().await;
-    // Fresh phone per test avoids per-phone Redis cooldown. Depending on
-    // whether SmsConfig points at a real or stubbed gateway, the response
-    // may be 200 or 4xx/5xx — the point of this test is just that the route
-    // is wired and returns a parseable JSON envelope.
-    let res = post_json("/otp/request", json!({"phone": unique_phone()})).await;
+    // Captcha gating was added by commit f05224f. Fetch a real challenge,
+    // then POST the full envelope. Depending on whether SmsConfig points at
+    // a real or stubbed gateway, the response may be 200 or 4xx/5xx — the
+    // point of this test is just that the route is wired and returns JSON.
+    let (challenge_id, answer) = fresh_captcha().await;
+    let res = post_json(
+        "/otp/request",
+        json!({
+            "phone": unique_phone(),
+            "challenge_id": challenge_id,
+            "answer": answer,
+        }),
+    )
+    .await;
     assert!(
         res.status() == StatusCode::OK
             || res.status() == StatusCode::BAD_REQUEST
@@ -495,7 +547,68 @@ async fn request_otp_rejects_non_thai_phone_format() {
         return;
     }
     throttle().await;
-    let res = post_json("/otp/request", json!({"phone": "+1-555-1234"})).await;
+    // Captcha is validated BEFORE phone format (service.rs:894-914), so we
+    // need a real captcha to even reach the phone validation. With a valid
+    // captcha + bad phone, expect 400.
+    let (challenge_id, answer) = fresh_captcha().await;
+    let res = post_json(
+        "/otp/request",
+        json!({
+            "phone": "+1-555-1234",
+            "challenge_id": challenge_id,
+            "answer": answer,
+        }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn request_otp_with_bogus_challenge_id_returns_400() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    // Bogus UUID that was never issued by /otp/challenge → captcha GETDEL
+    // returns None → BadRequest at service.rs:911
+    let res = post_json(
+        "/otp/request",
+        json!({
+            "phone": unique_phone(),
+            "challenge_id": "00000000-0000-0000-0000-000000000000",
+            "answer": "42",
+        }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body: Value = res.json().await.expect("json");
+    let err = body["error"]["message"].as_str().unwrap_or("");
+    // Body should mention the captcha being wrong — exact Thai message per service.rs:913
+    assert!(
+        err.contains("รหัสยืนยัน") || err.contains("captcha") || err.contains("challenge"),
+        "expected captcha error message, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn request_otp_with_wrong_answer_returns_400() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    // Real challenge but with intentionally-wrong answer. Answer is the sum
+    // (A+B), which is at most 19+19=38. "999" will never match any valid
+    // challenge.
+    let (challenge_id, _correct_answer) = fresh_captcha().await;
+    let res = post_json(
+        "/otp/request",
+        json!({
+            "phone": unique_phone(),
+            "challenge_id": challenge_id,
+            "answer": "999",
+        }),
+    )
+    .await;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -761,6 +874,41 @@ fn service_url(service: &str, path: &str) -> String {
     } else {
         format!("{}/{}{}", trimmed_base, trimmed_service, path)
     }
+}
+
+// Helper for Task 7: Fetch a fresh captcha challenge and compute its answer.
+// Returns (challenge_id, answer_as_string). Panics on parse failure since the
+// captcha format is contract-tested separately.
+async fn fresh_captcha() -> (String, String) {
+    let res = send_retrying(|| client().get(format!("{}/otp/challenge", base_url()))).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "captcha challenge must return 200"
+    );
+    let body: Value = res.json().await.expect("captcha challenge JSON envelope");
+    let data = body.get("data").expect("data field");
+    let challenge_id = data
+        .get("challenge_id")
+        .and_then(|v| v.as_str())
+        .expect("challenge_id string")
+        .to_string();
+    let question = data
+        .get("question")
+        .and_then(|v| v.as_str())
+        .expect("question string");
+    // Parse "A + B = ?" — only addition per service.rs:861
+    let parts: Vec<&str> = question.split_whitespace().collect();
+    assert_eq!(
+        parts.len(),
+        5,
+        "captcha format must be 'A + B = ?', got: {question}"
+    );
+    assert_eq!(parts[1], "+", "captcha must be addition only");
+    let a: u32 = parts[0].parse().expect("captcha operand A is u32");
+    let b: u32 = parts[2].parse().expect("captcha operand B is u32");
+    let answer = (a + b).to_string();
+    (challenge_id, answer)
 }
 
 // =============================================================================
