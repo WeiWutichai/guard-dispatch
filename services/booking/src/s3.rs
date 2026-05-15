@@ -6,11 +6,11 @@ use shared::error::AppError;
 
 const SIGNED_URL_EXPIRY_SECS: u64 = 3600; // 1 hour per CLAUDE.md
 const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB for images
-// Bumped 2026-04-25 from 50MB to 200MB. 1080p phone video at ~3 Mbps fits
-// roughly 60s in 200MB; below that the cap was rejecting normal job photos
-// recorded at 1080p the moment the guard panned around the site.
-// nginx `/booking/assignments/` limit raised in lockstep (205m) so requests
-// reach the app before being short-circuited by the proxy.
+                                                // Bumped 2026-04-25 from 50MB to 200MB. 1080p phone video at ~3 Mbps fits
+                                                // roughly 60s in 200MB; below that the cap was rejecting normal job photos
+                                                // recorded at 1080p the moment the guard panned around the site.
+                                                // nginx `/booking/assignments/` limit raised in lockstep (205m) so requests
+                                                // reach the app before being short-circuited by the proxy.
 const MAX_VIDEO_SIZE: usize = 200 * 1024 * 1024;
 
 /// Allowed MIME types: images (JPEG, PNG, WEBP) + videos (MP4, QuickTime)

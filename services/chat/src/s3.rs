@@ -6,9 +6,9 @@ use shared::error::AppError;
 
 const SIGNED_URL_EXPIRY_SECS: u64 = 3600; // 1 hour per CLAUDE.md
 const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB for images
-// Bumped 2026-04-25 from 50MB to 200MB to match booking. Phone video
-// at 1080p hits 50MB in ~15s. nginx `/chat/` lifted to 205m in lockstep
-// so requests reach the app before nginx 413's them.
+                                                // Bumped 2026-04-25 from 50MB to 200MB to match booking. Phone video
+                                                // at 1080p hits 50MB in ~15s. nginx `/chat/` lifted to 205m in lockstep
+                                                // so requests reach the app before nginx 413's them.
 const MAX_VIDEO_SIZE: usize = 200 * 1024 * 1024;
 
 /// Allowed MIME types: images (JPEG, PNG, WEBP) + videos (MP4, QuickTime)

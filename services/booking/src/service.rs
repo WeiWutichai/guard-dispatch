@@ -1997,12 +1997,7 @@ pub async fn guard_cancel_unpaid(
         }
     });
 
-    publish_assignment_event(
-        redis_conn,
-        existing.request_id,
-        assignment_id,
-        "cancelled",
-    );
+    publish_assignment_event(redis_conn, existing.request_id, assignment_id, "cancelled");
 
     Ok(AssignmentResponse::from(row))
 }
@@ -4135,7 +4130,12 @@ pub async fn list_progress_reports(
     Ok(responses)
 }
 
+// Call-related production functions (initiate_call, accept_call, etc.) were
+// appended below this test module instead of above it. Relocating mod tests
+// is a ~528-line structural change reserved for a dedicated task. Suppressed
+// per PM decision (Task 3a followup).
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::models::{CreateRequestDto, UrgencyLevel};
@@ -4671,19 +4671,16 @@ pub async fn initiate_call(
     req: crate::models::InitiateCallDto,
 ) -> Result<crate::models::CallResponse, AppError> {
     if caller_id == req.callee_id {
-        return Err(AppError::BadRequest(
-            "Cannot call yourself".to_string(),
-        ));
+        return Err(AppError::BadRequest("Cannot call yourself".to_string()));
     }
 
     // Ensure callee exists, is active, and isn't an admin (admins aren't
     // reachable via the mobile UI).
-    let callee_role: Option<String> = sqlx::query_scalar(
-        "SELECT role::text FROM auth.users WHERE id = $1 AND is_active = true",
-    )
-    .bind(req.callee_id)
-    .fetch_optional(db)
-    .await?;
+    let callee_role: Option<String> =
+        sqlx::query_scalar("SELECT role::text FROM auth.users WHERE id = $1 AND is_active = true")
+            .bind(req.callee_id)
+            .fetch_optional(db)
+            .await?;
     match callee_role {
         None => return Err(AppError::NotFound("Callee not found".to_string())),
         Some(r) if r == "admin" => {
@@ -4723,7 +4720,12 @@ pub async fn initiate_call(
     )
     .bind(caller_id)
     .bind(req.callee_id)
-    .bind(serde_json::to_string(&req.call_type).unwrap_or_else(|_| "\"audio\"".to_string()).trim_matches('"').to_string())
+    .bind(
+        serde_json::to_string(&req.call_type)
+            .unwrap_or_else(|_| "\"audio\"".to_string())
+            .trim_matches('"')
+            .to_string(),
+    )
     .bind(req.assignment_id)
     .bind(req.conversation_id)
     .fetch_one(db)
@@ -4740,10 +4742,13 @@ pub async fn initiate_call(
         db.clone(),
         req.callee_id,
         "สายเรียกเข้า".to_string(),
-        format!("มีสายเรียกเข้า ({})", match req.call_type {
-            crate::models::CallType::Audio => "เสียง",
-            crate::models::CallType::Video => "วิดีโอ",
-        }),
+        format!(
+            "มีสายเรียกเข้า ({})",
+            match req.call_type {
+                crate::models::CallType::Audio => "เสียง",
+                crate::models::CallType::Video => "วิดีโอ",
+            }
+        ),
         "system",
         Some(serde_json::json!({
             "kind": "incoming_call",
@@ -4754,10 +4759,12 @@ pub async fn initiate_call(
         })),
     );
 
-    Ok(crate::models::CallResponse::from(crate::models::CallLogRow {
-        status: crate::models::CallStatus::Ringing,
-        ..row
-    }))
+    Ok(crate::models::CallResponse::from(
+        crate::models::CallLogRow {
+            status: crate::models::CallStatus::Ringing,
+            ..row
+        },
+    ))
 }
 
 pub async fn accept_call(
@@ -4778,9 +4785,7 @@ pub async fn accept_call(
     .bind(user_id)
     .fetch_optional(db)
     .await?
-    .ok_or_else(|| {
-        AppError::BadRequest("Call not found or not pending acceptance".to_string())
-    })?;
+    .ok_or_else(|| AppError::BadRequest("Call not found or not pending acceptance".to_string()))?;
     Ok(row.into())
 }
 
@@ -4857,9 +4862,7 @@ pub async fn end_call(
     .bind(reason)
     .fetch_optional(db)
     .await?
-    .ok_or_else(|| {
-        AppError::BadRequest("Call not found or already ended".to_string())
-    })?;
+    .ok_or_else(|| AppError::BadRequest("Call not found or already ended".to_string()))?;
 
     Ok(row.into())
 }

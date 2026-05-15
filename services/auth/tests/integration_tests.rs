@@ -747,6 +747,22 @@ async fn patch_json_bearer(path: &str, token: &str, body: Value) -> reqwest::Res
     send_retrying(|| client().patch(&url).bearer_auth(token).json(&body)).await
 }
 
+// Helper for Task 4: Cross-service URL construction. Existing `base_url()`
+// only points at `/auth`; the JTI blocklist propagation tests need to call
+// other services (`/booking/requests`, `/ws/track`) through the same nginx
+// gateway. Pass an empty `service` to hit a gateway-root path (e.g. `/ws/track`
+// is routed at the gateway root, not under `/tracking/`).
+fn service_url(service: &str, path: &str) -> String {
+    let base = std::env::var("GATEWAY_BASE_URL").unwrap_or_else(|_| "http://localhost".to_string());
+    let trimmed_base = base.trim_end_matches('/');
+    let trimmed_service = service.trim_matches('/');
+    if trimmed_service.is_empty() {
+        format!("{}{}", trimmed_base, path)
+    } else {
+        format!("{}/{}{}", trimmed_base, trimmed_service, path)
+    }
+}
+
 // =============================================================================
 // Priority 6 — Mobile login flow
 // =============================================================================
@@ -960,6 +976,242 @@ async fn mobile_refresh_with_used_token_is_rejected() {
     );
 }
 
+// Atomic rotation per CLAUDE.md line 1378+419 — proves the
+// UPDATE...WHERE...RETURNING is row-locked and not SELECT-then-UPDATE.
+#[tokio::test]
+async fn mobile_refresh_concurrent_only_one_succeeds() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    let (_, refresh_token) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Fire two refresh requests in parallel with the SAME token. The DB's
+    // atomic UPDATE ... WHERE refresh_token = $1 RETURNING ... must let
+    // exactly one transaction win and force the other to find no matching
+    // row (-> 401). If the production code ever regresses to a non-atomic
+    // SELECT-then-UPDATE pattern, both calls would succeed and this test
+    // would fail with 2x 200.
+    let body = json!({ "refresh_token": &refresh_token });
+    let (res_a, res_b) = tokio::join!(
+        post_json("/refresh/mobile", body.clone()),
+        post_json("/refresh/mobile", body.clone()),
+    );
+
+    let status_a = res_a.status();
+    let status_b = res_b.status();
+    let count_200 = [status_a, status_b]
+        .iter()
+        .filter(|s| **s == StatusCode::OK)
+        .count();
+    let count_401 = [status_a, status_b]
+        .iter()
+        .filter(|s| **s == StatusCode::UNAUTHORIZED)
+        .count();
+    assert_eq!(
+        count_200, 1,
+        "exactly one concurrent refresh must succeed; got statuses {status_a} / {status_b}"
+    );
+    assert_eq!(
+        count_401, 1,
+        "the losing race must return 401, not retry-success; got statuses {status_a} / {status_b}"
+    );
+}
+
+// Defense-in-depth: bogus refresh attempts against any phone must not
+// invalidate or rotate the real session belonging to a different user.
+// The handler must look up by refresh_token alone, find nothing for bogus
+// values, return 401, and leave every stored session intact.
+#[tokio::test]
+async fn mobile_refresh_bogus_token_does_not_affect_valid_session() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    // Get a fresh, unused refresh token for the real session.
+    let (_, refresh_token) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Fire 5 sequential bogus refresh attempts.
+    for i in 0..5 {
+        let res = post_json(
+            "/refresh/mobile",
+            json!({"refresh_token": format!("bogus-token-attempt-{}-{}", i, Uuid::new_v4())}),
+        )
+        .await;
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "bogus refresh attempt #{i} must be 401; got {}",
+            res.status()
+        );
+        throttle().await;
+    }
+
+    // Real refresh must still work — the bogus attempts must not have
+    // touched the real session row.
+    let res = post_json("/refresh/mobile", json!({"refresh_token": &refresh_token})).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "real refresh must still succeed after bogus attempts; got {}",
+        res.status()
+    );
+}
+
+// CLAUDE.md: only logout revokes access tokens via the JTI blocklist —
+// refresh-token rotation must NOT touch the old access token's lifetime.
+// Both AT_old (issued at login) and AT_new (issued by /refresh) must work
+// against /me until each one's 15-minute TTL expires.
+#[tokio::test]
+async fn mobile_refresh_rotated_token_then_access_token_still_works() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    // Login → (AT_old, RT_old).
+    let (access_old, refresh_old) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Rotate: RT_old → (AT_new, RT_new).
+    let res = post_json("/refresh/mobile", json!({"refresh_token": refresh_old})).await;
+    assert_eq!(res.status(), StatusCode::OK, "rotation must succeed");
+    let body: Value = res.json().await.expect("json");
+    let data = &body["data"];
+    let access_new = data["access_token"]
+        .as_str()
+        .expect("new access_token in refresh response")
+        .to_string();
+    throttle().await;
+
+    // Old access token MUST still work — refresh rotation does not revoke it.
+    let res = get_bearer("/me", &access_old).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "AT_old must remain valid after rotation (only /logout adds JTI to blocklist)"
+    );
+    throttle().await;
+
+    // New access token must work too.
+    let res = get_bearer("/me", &access_new).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "AT_new must be valid immediately after rotation"
+    );
+}
+
+// Web refresh path: /refresh reads the refresh_token cookie, rotates the
+// row, and SETs a NEW refresh_token cookie in the response. Existing tests
+// only cover the 400 error branch — this covers the cookie-jar happy path.
+#[tokio::test]
+async fn web_refresh_via_cookie_rotates_cookie() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    // Fresh client w/ cookie store enabled — fresh_client() defaults to
+    // cookie_store(true) so the refresh_token cookie returned by /login/phone
+    // is automatically replayed by the same client on subsequent calls.
+    let c = fresh_client();
+
+    // Step 1: web phone login → server sets refresh_token cookie.
+    let login_url = format!("{}/login/phone", base_url());
+    let login_res = send_retrying(|| {
+        c.post(&login_url)
+            .json(&json!({"phone": &phone, "password": &password}))
+    })
+    .await;
+    assert_eq!(login_res.status(), StatusCode::OK, "web login must succeed");
+
+    // Capture cookies from the login response Set-Cookie headers. We inspect
+    // raw `set-cookie` (not the cookie jar API) because reqwest's cookie jar
+    // doesn't expose individual cookies; raw headers reveal both the value
+    // and the attributes (Path=/auth, HttpOnly, Secure).
+    let mut cookie_old: Option<String> = None;
+    for hv in login_res.headers().get_all("set-cookie").iter() {
+        let s = hv.to_str().unwrap_or("");
+        if let Some(rest) = s.strip_prefix("refresh_token=") {
+            if let Some((value, _attrs)) = rest.split_once(';') {
+                cookie_old = Some(value.to_string());
+            }
+        }
+    }
+    let cookie_old = cookie_old.expect("login must set refresh_token cookie");
+    throttle().await;
+
+    // Step 2: POST /refresh with cookie jar (no body). Reqwest replays the
+    // refresh_token cookie automatically because cookie_store(true).
+    let refresh_url = format!("{}/refresh", base_url());
+    let refresh_res = send_retrying(|| {
+        c.post(&refresh_url)
+            .header("content-type", "application/json")
+            .body("")
+    })
+    .await;
+    assert_eq!(
+        refresh_res.status(),
+        StatusCode::OK,
+        "cookie-based refresh must succeed; body: {}",
+        refresh_res
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+    );
+
+    // Inspect Set-Cookie on the refresh response — the server must have
+    // issued a *different* refresh_token value (rotation invariant).
+    let mut cookie_new: Option<String> = None;
+    for hv in refresh_res.headers().get_all("set-cookie").iter() {
+        let s = hv.to_str().unwrap_or("");
+        if let Some(rest) = s.strip_prefix("refresh_token=") {
+            if let Some((value, _attrs)) = rest.split_once(';') {
+                cookie_new = Some(value.to_string());
+            }
+        }
+    }
+    let cookie_new = cookie_new.expect("/refresh must set a new refresh_token cookie");
+    assert_ne!(
+        cookie_old, cookie_new,
+        "rotated refresh_token cookie must differ from the original"
+    );
+}
+
 #[tokio::test]
 async fn web_refresh_without_cookie_or_body_returns_400() {
     if service_unreachable().await {
@@ -1091,6 +1343,481 @@ async fn mobile_logout_with_refresh_token_in_body_is_single_session() {
         StatusCode::OK,
         "session B must survive session A's logout (single-session isolation)"
     );
+}
+
+// Logout deletes the session row (refresh_token + jti), so a subsequent
+// /refresh/mobile with that same RT must miss its UPDATE...WHERE clause and
+// return 401. Together with `mobile_refresh_with_used_token_is_rejected` this
+// closes the rotation lifecycle: rotated → 401, logged-out → 401.
+#[tokio::test]
+async fn mobile_refresh_after_logout_is_rejected() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    let (access_token, refresh_token) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Logout — must send refresh_token in body so logout deletes THIS
+    // session only (the single-session pattern verified by
+    // `mobile_logout_with_refresh_token_in_body_is_single_session`).
+    let url = format!("{}/logout", base_url());
+    let res = send_retrying(|| {
+        client()
+            .post(&url)
+            .bearer_auth(&access_token)
+            .json(&json!({ "refresh_token": &refresh_token }))
+    })
+    .await;
+    assert_eq!(res.status(), StatusCode::OK, "logout must succeed");
+    throttle().await;
+
+    // Now try /refresh/mobile with the logged-out RT — the session row is
+    // gone, so the UPDATE finds nothing → 401.
+    let res = post_json("/refresh/mobile", json!({"refresh_token": refresh_token})).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "refresh token must be rejected after the session is logged out"
+    );
+}
+
+// JTI blocklist propagates via shared Redis — a token revoked at `/auth/logout`
+// must also be rejected at `/booking/requests` (and every other service that
+// uses the same `AuthUser` extractor). Without this guarantee, logout would
+// only revoke at the auth service while leaving the token live everywhere else.
+#[tokio::test]
+async fn logout_revokes_token_across_services() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    let (access_token, refresh_token) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Baseline: token works against booking. `/booking/requests` is the
+    // authenticated list endpoint (customer sees own, admin sees all); the
+    // fixture admin user is allowed. If your fixture isn't admin and gets
+    // 403/422 here, the cross-service property is still observable: post-
+    // logout must move from "permitted" to 401.
+    let booking_url = service_url("booking", "/requests");
+    let res = send_retrying(|| client().get(&booking_url).bearer_auth(&access_token)).await;
+    assert!(
+        res.status() == StatusCode::OK
+            || res.status() == StatusCode::FORBIDDEN
+            || res.status() == StatusCode::UNPROCESSABLE_ENTITY,
+        "baseline /booking/requests with valid AT must NOT be 401 (got {})",
+        res.status()
+    );
+    let baseline_status = res.status();
+    assert_ne!(
+        baseline_status,
+        StatusCode::UNAUTHORIZED,
+        "baseline must not already be 401 — otherwise this test cannot distinguish revocation"
+    );
+    throttle().await;
+
+    // Logout at /auth — single-session (refresh_token in body).
+    let logout_url = format!("{}/logout", base_url());
+    let res = send_retrying(|| {
+        client()
+            .post(&logout_url)
+            .bearer_auth(&access_token)
+            .json(&json!({ "refresh_token": &refresh_token }))
+    })
+    .await;
+    assert_eq!(res.status(), StatusCode::OK, "logout must succeed");
+    throttle().await;
+
+    // Same AT now hits /booking/requests → must be 401 because the JTI is on
+    // the shared Redis blocklist and the booking AuthUser extractor consults it.
+    let res = send_retrying(|| client().get(&booking_url).bearer_auth(&access_token)).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "booking must reject revoked AT (blocklist propagation); baseline was {}",
+        baseline_status
+    );
+}
+
+// WebSocket handshake authentication: revoked tokens must be rejected by the
+// AuthUser extractor BEFORE the upgrade completes. The tracking `/ws/track`
+// handler signature is `(State, WebSocketUpgrade, AuthUser)`. With a *revoked*
+// AT, AuthUser fails first → 401. With a *valid* AT the request progresses to
+// the role check (admin → 403) or upgrades (guard → 101). The status delta
+// between pre- and post-logout is the property under test.
+//
+// We send a properly-shaped WS handshake request via reqwest (Connection +
+// Upgrade + Sec-WebSocket-Version + Sec-WebSocket-Key) so the upgrade
+// extractor itself doesn't 400 us before AuthUser runs. The handshake is
+// routed at the gateway root `/ws/track` (not under `/tracking/`) per the
+// nginx config.
+#[tokio::test]
+async fn logout_then_new_ws_handshake_is_rejected() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    let (access_token, refresh_token) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    let ws_url = service_url("", "/ws/track");
+    let ws_handshake = |token: String| {
+        let url = ws_url.clone();
+        move || {
+            client()
+                .get(&url)
+                .bearer_auth(&token)
+                .header("connection", "upgrade")
+                .header("upgrade", "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        }
+    };
+
+    // Pre-logout baseline: AT is valid → upgrade extractor passes → role
+    // check runs. Admin fixture → 403. Guard fixture → 101. Either way it
+    // must NOT be 401 — that's our distinguishing signal.
+    let res = send_retrying(ws_handshake(access_token.clone())).await;
+    let baseline_status = res.status();
+    assert_ne!(
+        baseline_status,
+        StatusCode::UNAUTHORIZED,
+        "pre-logout WS handshake with valid AT must NOT be 401 — otherwise the post-logout 401 is indistinguishable from baseline"
+    );
+    throttle().await;
+
+    // Logout — revoke the access token via Redis blocklist.
+    let logout_url = format!("{}/logout", base_url());
+    let res = send_retrying(|| {
+        client()
+            .post(&logout_url)
+            .bearer_auth(&access_token)
+            .json(&json!({ "refresh_token": &refresh_token }))
+    })
+    .await;
+    assert_eq!(res.status(), StatusCode::OK, "logout must succeed");
+    throttle().await;
+
+    // Post-logout: same AT must now fail at the AuthUser extractor with 401,
+    // before WebSocketUpgrade or the role check get a turn.
+    let res = send_retrying(ws_handshake(access_token.clone())).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "post-logout WS handshake must be 401 (blocklist hit); baseline was {}",
+        baseline_status
+    );
+}
+
+// Idempotent logout — calling /logout twice with the same Bearer must result
+// in 200 then 401, because the first call adds the AT's jti to the blocklist
+// and the second call's AuthUser extractor rejects the request before any
+// handler logic runs.
+#[tokio::test]
+async fn logout_twice_second_call_unauthorized() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    let (access_token, refresh_token) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    let logout_url = format!("{}/logout", base_url());
+    let logout_body = json!({ "refresh_token": &refresh_token });
+
+    // First logout: 200, AT goes onto blocklist.
+    let res = send_retrying(|| {
+        client()
+            .post(&logout_url)
+            .bearer_auth(&access_token)
+            .json(&logout_body)
+    })
+    .await;
+    assert_eq!(res.status(), StatusCode::OK, "first logout must succeed");
+    throttle().await;
+
+    // Second logout with the same AT: blocked at AuthUser → 401.
+    let res = send_retrying(|| {
+        client()
+            .post(&logout_url)
+            .bearer_auth(&access_token)
+            .json(&logout_body)
+    })
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "second logout with revoked AT must be rejected by AuthUser blocklist check"
+    );
+}
+
+// Documents the existing all-sessions fallback in `service::logout` (the
+// `if let Some(rt) = refresh_token { ... } else { DELETE WHERE user_id = $1 }`
+// branch). Mobile is expected to always send the refresh_token in the body
+// per `mobile_logout_with_refresh_token_in_body_is_single_session`; this test
+// pins down what happens when it doesn't. If product policy ever changes the
+// fallback (e.g. to refuse logout without a refresh token), this test will
+// catch the regression.
+#[tokio::test]
+async fn mobile_logout_without_refresh_token_revokes_access_only() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    // Two independent mobile logins → two session rows for the same user.
+    let (access_a, refresh_a) = mobile_login(&phone, &password).await;
+    throttle().await;
+    let (access_b, refresh_b) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Logout session A with EMPTY body — falls through to the
+    // DELETE WHERE user_id = $1 branch that wipes BOTH sessions.
+    let logout_url = format!("{}/logout", base_url());
+    let res = send_retrying(|| {
+        client()
+            .post(&logout_url)
+            .bearer_auth(&access_a)
+            .header("content-type", "application/json")
+            .body("")
+    })
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "logout without refresh token must still return 200 (fallback path)"
+    );
+    throttle().await;
+
+    // Session A's refresh token is gone.
+    let res = post_json("/refresh/mobile", json!({"refresh_token": refresh_a})).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "RT_a must be 401 after all-sessions fallback wipe"
+    );
+    throttle().await;
+
+    // Session B's refresh token is ALSO gone — that's the fallback's contract.
+    let res = post_json("/refresh/mobile", json!({"refresh_token": refresh_b})).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "RT_b must be 401 — all-sessions fallback also wiped session B"
+    );
+    throttle().await;
+
+    // AT_b was never blocklisted (only the Bearer used to call /logout — AT_a —
+    // gets a jti revocation). AT_b's JWT remains structurally valid until its
+    // 15-min TTL elapses; access tokens are not consulted against DB sessions.
+    let res = get_bearer("/me", &access_b).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "AT_b must still pass /me — only AT_a's jti was added to the blocklist"
+    );
+}
+
+// Mismatched refresh token: caller sends Bearer AT_a (valid) and a body
+// `{"refresh_token": "fake-token-not-in-db"}`. The DB DELETE sees no matching
+// row (hashed fake ≠ any stored hash) and silently affects 0 rows. The access
+// token's jti is still blocklisted from the Bearer header path. Net effect:
+// caller's own AT_a is revoked, OTHER sessions of the same user are untouched,
+// and the orphan RT_a (never explicitly logged out) remains usable.
+#[tokio::test]
+async fn logout_with_mismatched_refresh_token_revokes_caller_only() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    // Two sessions for user A.
+    let (access_a, refresh_a) = mobile_login(&phone, &password).await;
+    throttle().await;
+    let (access_a2, _refresh_a2) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    // Logout AT_a with a refresh token that's NOT in the DB.
+    let logout_url = format!("{}/logout", base_url());
+    let res = send_retrying(|| {
+        client()
+            .post(&logout_url)
+            .bearer_auth(&access_a)
+            .json(&json!({ "refresh_token": "fake-token-definitely-not-in-db" }))
+    })
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "logout with mismatched refresh token must NOT error — DELETE 0 rows is fine"
+    );
+    throttle().await;
+
+    // AT_a is blocklisted (jti came from the Bearer header).
+    let res = get_bearer("/me", &access_a).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "AT_a must be revoked — its jti was added to the blocklist"
+    );
+    throttle().await;
+
+    // AT_a2 is NOT blocklisted — its jti was never seen by /logout.
+    let res = get_bearer("/me", &access_a2).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "AT_a2 must survive — mismatched refresh did not cascade"
+    );
+    throttle().await;
+
+    // RT_a is still in the DB (the DELETE matched nothing because the body
+    // refresh_token was a fake) → refresh still works.
+    let res = post_json("/refresh/mobile", json!({"refresh_token": &refresh_a})).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "RT_a must still refresh — its row wasn't deleted by the mismatched logout"
+    );
+}
+
+// Web logout must clear all three auth cookies (access_token on Path=/,
+// refresh_token on Path=/auth, logged_in on Path=/) by emitting Set-Cookie
+// headers with Max-Age=0. Without those clears, a browser would keep replaying
+// stale cookies and the user would appear "logged out then logged back in"
+// via cookie persistence.
+#[tokio::test]
+async fn web_logout_clears_all_cookies() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_user() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_PHONE / FIXTURE_PASSWORD not set");
+            return;
+        }
+    };
+
+    let c = fresh_client();
+
+    // Web login — server sets access_token, refresh_token, logged_in cookies.
+    let login_url = format!("{}/login/phone", base_url());
+    let login_res = send_retrying(|| {
+        c.post(&login_url)
+            .json(&json!({"phone": &phone, "password": &password}))
+    })
+    .await;
+    assert_eq!(login_res.status(), StatusCode::OK, "web login must succeed");
+
+    // Baseline: confirm all three cookie names were set at login.
+    let login_cookies: Vec<String> = login_res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+        .collect();
+    for name in ["access_token=", "refresh_token=", "logged_in="] {
+        assert!(
+            login_cookies.iter().any(|c| c.starts_with(name)),
+            "login must set {name} cookie; got {:?}",
+            login_cookies
+        );
+    }
+    throttle().await;
+
+    // Logout — cookie jar carries the auth cookies; no Bearer header needed.
+    // CSRF protection in `shared::auth::AuthUser` requires `X-Requested-With`
+    // for state-changing methods when auth comes from cookies (browsers block
+    // cross-origin custom headers, so a CSRF form can't forge it). The web
+    // admin frontend sends `x-requested-with: XMLHttpRequest` on every POST
+    // for this reason; the test must do the same.
+    let logout_url = format!("{}/logout", base_url());
+    let logout_res = send_retrying(|| {
+        c.post(&logout_url)
+            .header("x-requested-with", "XMLHttpRequest")
+    })
+    .await;
+    assert_eq!(
+        logout_res.status(),
+        StatusCode::OK,
+        "web logout via cookie must succeed"
+    );
+
+    // Inspect Set-Cookie on the logout response — must include three clear
+    // cookies, each with Max-Age=0.
+    let clears: Vec<String> = logout_res
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+        .collect();
+    assert!(
+        clears.len() >= 3,
+        "logout must emit ≥3 Set-Cookie headers; got {clears:?}"
+    );
+
+    // Each named cookie must appear with Max-Age=0 (case-insensitive on the
+    // attribute name to tolerate server formatting choices).
+    for name in ["access_token", "refresh_token", "logged_in"] {
+        let prefix = format!("{name}=");
+        let clear = clears
+            .iter()
+            .find(|c| c.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("logout must clear {name}; got {clears:?}"));
+        assert!(
+            clear.to_lowercase().contains("max-age=0"),
+            "{name} clear cookie must set Max-Age=0; got {clear}"
+        );
+    }
 }
 
 // =============================================================================

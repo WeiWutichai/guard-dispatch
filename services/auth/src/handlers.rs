@@ -862,7 +862,8 @@ pub async fn update_avatar(
             }
         }
     }
-    let data = data.ok_or_else(|| AppError::BadRequest("Missing 'avatar' file field".to_string()))?;
+    let data =
+        data.ok_or_else(|| AppError::BadRequest("Missing 'avatar' file field".to_string()))?;
 
     crate::service::update_avatar(
         &state.db,

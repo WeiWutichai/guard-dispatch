@@ -881,6 +881,11 @@ pub async fn create_otp_challenge(
     })
 }
 
+// 8 dependencies (db, redis, sms_config, otp_config, http_client) + 3 inputs
+// (phone, challenge_id, answer). Splitting into a context struct would shuffle
+// the same data through one more indirection without simplifying call sites.
+// Suppressed per PM decision (Task 3a followup) — refactor deferred to backlog.
+#[allow(clippy::too_many_arguments)]
 pub async fn request_otp(
     db: &PgPool,
     redis: &redis::aio::MultiplexedConnection,
@@ -2380,19 +2385,13 @@ pub async fn admin_update_guard_profile(
     // Parse an optional `YYYY-MM-DD` date. Returns BadRequest rather than silently
     // dropping the value — without this, an invalid payload would COALESCE to NULL
     // and the UPDATE would look successful while changing nothing. (security-reviewer)
-    fn parse_date(
-        s: &Option<String>,
-        field: &str,
-    ) -> Result<Option<chrono::NaiveDate>, AppError> {
+    fn parse_date(s: &Option<String>, field: &str) -> Result<Option<chrono::NaiveDate>, AppError> {
         match s.as_ref() {
             None => Ok(None),
             Some(d) => chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
                 .map(Some)
                 .map_err(|_| {
-                    AppError::BadRequest(format!(
-                        "Invalid {} format, expected YYYY-MM-DD",
-                        field
-                    ))
+                    AppError::BadRequest(format!("Invalid {} format, expected YYYY-MM-DD", field))
                 }),
         }
     }
@@ -3105,9 +3104,13 @@ mod tests {
             full_name: None,
             phone: None,
             avatar_url: None,
+            email: None,
         };
         // Mirror the validation in update_profile()
-        let all_none = req.full_name.is_none() && req.phone.is_none() && req.avatar_url.is_none();
+        let all_none = req.full_name.is_none()
+            && req.phone.is_none()
+            && req.avatar_url.is_none()
+            && req.email.is_none();
         assert!(all_none, "All-None request should be rejected");
     }
 
@@ -3117,8 +3120,12 @@ mod tests {
             full_name: Some("New Name".to_string()),
             phone: None,
             avatar_url: None,
+            email: None,
         };
-        let all_none = req.full_name.is_none() && req.phone.is_none() && req.avatar_url.is_none();
+        let all_none = req.full_name.is_none()
+            && req.phone.is_none()
+            && req.avatar_url.is_none()
+            && req.email.is_none();
         assert!(!all_none, "Partial update should be accepted");
     }
 

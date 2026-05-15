@@ -5,9 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:p-guard_mobile/providers/auth_provider.dart';
-import 'package:p-guard_mobile/screens/guard/guard_registration_screen.dart';
-import 'package:p-guard_mobile/services/language_service.dart';
+import 'package:p_guard_mobile/providers/auth_provider.dart';
+import 'package:p_guard_mobile/screens/guard/guard_registration_screen.dart';
+import 'package:p_guard_mobile/services/language_service.dart';
 
 // ─── Fake AuthProvider ───────────────────────────────────────────────────────
 class _FakeAuthProvider extends AuthProvider {
@@ -27,6 +27,7 @@ class _FakeAuthProvider extends AuthProvider {
     String? accountNumber,
     String? accountName,
     Map<String, File> files = const {},
+    Map<String, String> documentExpiry = const {},
   }) async {
     submitGuardProfileCalled = true;
     capturedFullName = fullName;
@@ -34,7 +35,7 @@ class _FakeAuthProvider extends AuthProvider {
   }
 
   @override
-  Future<String> reissueProfileToken(String phone, {String? role}) async {
+  Future<String> reissueProfileToken(String phone, {String? role, required String phoneVerifiedToken}) async {
     return 'test_reissued_profile_token';
   }
 }
