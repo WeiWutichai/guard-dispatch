@@ -121,6 +121,14 @@ impl RedisConfig {
 impl JwtConfig {
     pub fn from_env() -> Result<Self, AppError> {
         let secret = require_env("JWT_SECRET")?;
+        // Fail-fast: JWT_EXPIRY_HOURS was deprecated; operators must explicitly
+        // migrate to JWT_EXPIRY_MINUTES. Silent default would otherwise produce
+        // a 96x shorter token lifetime than the operator's old config indicated.
+        if std::env::var("JWT_EXPIRY_HOURS").is_ok() {
+            return Err(AppError::Internal(
+                "JWT_EXPIRY_HOURS is no longer read. Set JWT_EXPIRY_MINUTES instead. See CLAUDE.md.".to_string(),
+            ));
+        }
         if secret.len() < 64 {
             return Err(AppError::Internal(
                 "JWT_SECRET must be at least 64 characters".to_string(),
@@ -283,6 +291,54 @@ mod tests {
             let result = JwtConfig::from_env();
             assert!(result.is_err());
         });
+    }
+
+    #[test]
+    fn jwt_config_fails_when_deprecated_jwt_expiry_hours_is_set() {
+        with_env_vars(
+            &[
+                (
+                    "JWT_SECRET",
+                    "super-secret-key-that-is-at-least-64-characters-long-for-hs256-security!",
+                ),
+                ("JWT_EXPIRY_HOURS", "24"),
+            ],
+            || {
+                let result = JwtConfig::from_env();
+                assert!(
+                    result.is_err(),
+                    "must fail when deprecated JWT_EXPIRY_HOURS is set"
+                );
+                let err_msg = format!("{:?}", result.unwrap_err());
+                assert!(
+                    err_msg.contains("JWT_EXPIRY_HOURS"),
+                    "error message must mention JWT_EXPIRY_HOURS, got: {err_msg}"
+                );
+                assert!(
+                    err_msg.contains("JWT_EXPIRY_MINUTES"),
+                    "error message must point operator to JWT_EXPIRY_MINUTES, got: {err_msg}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn jwt_config_succeeds_without_deprecated_var_even_if_minutes_set() {
+        with_env_vars(
+            &[
+                (
+                    "JWT_SECRET",
+                    "super-secret-key-that-is-at-least-64-characters-long-for-hs256-security!",
+                ),
+                ("JWT_EXPIRY_MINUTES", "20"),
+            ],
+            || {
+                // Defensive: ensure deprecated var not leaking from another test
+                std::env::remove_var("JWT_EXPIRY_HOURS");
+                let cfg = JwtConfig::from_env().expect("must succeed when only new var is set");
+                assert_eq!(cfg.expiry_minutes, 20);
+            },
+        );
     }
 
     #[test]

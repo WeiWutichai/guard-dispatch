@@ -278,7 +278,7 @@ Key variables required in `.env` (see `.env.example` for the full list):
 | `REDIS_CACHE_URL` | Redis cache connection URL (includes password) |
 | `REDIS_PUBSUB_URL` | Redis pubsub connection URL (includes password) |
 | `JWT_SECRET` | Secret key for JWT signing (min 64 characters) |
-| `JWT_EXPIRY_HOURS` | Token expiry duration (default: 24) |
+| `JWT_EXPIRY_MINUTES` | Access token expiry in minutes (default: 15, OWASP-recommended) |
 | `FCM_SERVER_KEY` | Firebase Cloud Messaging server key |
 | `FCM_PROJECT_ID` | Firebase project ID |
 | `S3_ENDPOINT` | MinIO/R2 endpoint URL |
