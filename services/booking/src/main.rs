@@ -162,16 +162,25 @@ async fn main() -> anyhow::Result<()> {
 
     let db = create_pool(&db_config).await?;
 
-    // Redis for pub/sub (assignment status notifications)
-    let redis_url = redis_config
+    // Redis for pub/sub (assignment status notifications, call signaling).
+    let redis_pubsub_url = redis_config
         .pubsub_url
         .as_deref()
         .unwrap_or(&redis_config.cache_url);
-    let redis_client = create_redis_client(redis_url)?;
-    let redis_conn = redis_client
+    let redis_pubsub_client = create_redis_client(redis_pubsub_url)?;
+    let redis_pubsub_conn = redis_pubsub_client
         .get_multiplexed_tokio_connection()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis pubsub: {e}"))?;
+
+    // Cache-instance connection — backs the `revoked_jti:{jti}` blocklist
+    // check inside `AuthUser`. MUST be the same Redis as auth-service writes
+    // logout entries to; mismatching this lets revoked tokens survive logout.
+    let redis_cache_client = create_redis_client(&redis_config.cache_url)?;
+    let redis_cache_conn = redis_cache_client
+        .get_multiplexed_tokio_connection()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis cache: {e}"))?;
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -201,8 +210,9 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         db,
         jwt_config,
-        redis_client,
-        redis_conn,
+        redis_pubsub_client,
+        redis_pubsub_conn,
+        redis_cache_conn,
         http_client,
         s3_client,
         s3_bucket: s3_config.bucket.clone(),
@@ -215,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
     // opens the push. Runs every 10 seconds.
     {
         let db = state.db.clone();
-        let redis = state.redis_conn.clone();
+        let redis = state.redis_pubsub_conn.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
             interval.tick().await;

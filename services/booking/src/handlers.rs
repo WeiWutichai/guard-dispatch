@@ -14,8 +14,8 @@ use shared::models::ApiResponse;
 
 use crate::models::{
     AcceptDeclineDto, ActiveJobResponse, AddTipDto, AdminCallsPage, AdminCallsQuery,
-    AdminPaymentItem, AdminPaymentsPage, AdminPaymentsQuery, AdminRefundsQuery,
-    AdminReportSummary, AdminReportsQuery, AdminReviewsQuery, AssignGuardDto, AssignmentResponse,
+    AdminPaymentItem, AdminPaymentsPage, AdminPaymentsQuery, AdminRefundsQuery, AdminReportSummary,
+    AdminReportsQuery, AdminReviewsQuery, AssignGuardDto, AssignmentResponse,
     AvailableGuardResponse, AvailableGuardsQuery, CallResponse, CostSummaryResponse,
     CreatePaymentDto, CreateRequestDto, CreateReviewDto, CreateServiceRateDto, EndCallDto,
     GuardDashboardSummary, GuardEarnings, GuardJobResponse, GuardJobsQuery, GuardRatingsSummary,
@@ -197,7 +197,7 @@ pub async fn update_assignment_status(
         user.user_id,
         &user.role,
         req,
-        &state.redis_conn,
+        &state.redis_pubsub_conn,
         &state.http_client,
     )
     .await?;
@@ -229,7 +229,7 @@ pub async fn review_completion(
         user.user_id,
         &user.role,
         req,
-        &state.redis_conn,
+        &state.redis_pubsub_conn,
     )
     .await?;
     Ok(Json(ApiResponse::success(assignment)))
@@ -556,7 +556,7 @@ pub async fn accept_decline_assignment(
         id,
         user.user_id,
         req,
-        &state.redis_conn,
+        &state.redis_pubsub_conn,
     )
     .await?;
     Ok(Json(ApiResponse::success(assignment)))
@@ -587,7 +587,7 @@ pub async fn cancel_unpaid_assignment(
         return Err(AppError::Forbidden("Guard only endpoint".to_string()));
     }
     let assignment =
-        crate::service::guard_cancel_unpaid(&state.db, id, user.user_id, &state.redis_conn)
+        crate::service::guard_cancel_unpaid(&state.db, id, user.user_id, &state.redis_pubsub_conn)
             .await?;
     Ok(Json(ApiResponse::success(assignment)))
 }
@@ -613,7 +613,8 @@ pub async fn create_payment(
     Json(req): Json<CreatePaymentDto>,
 ) -> Result<Json<ApiResponse<PaymentResponse>>, AppError> {
     let payment =
-        crate::service::create_payment(&state.db, user.user_id, req, &state.redis_conn).await?;
+        crate::service::create_payment(&state.db, user.user_id, req, &state.redis_pubsub_conn)
+            .await?;
     Ok(Json(ApiResponse::success(payment)))
 }
 
@@ -1174,7 +1175,7 @@ async fn handle_assignment_ws(mut socket: WebSocket, state: Arc<AppState>, user:
     // Step 3: Subscribe to Redis channel for this request's assignment updates
     let channel = format!("assignment_status:{request_id}");
 
-    let mut pubsub = match state.redis_client.get_async_pubsub().await {
+    let mut pubsub = match state.redis_pubsub_client.get_async_pubsub().await {
         Ok(ps) => ps,
         Err(e) => {
             tracing::error!("Failed to create Redis PubSub connection: {e}");
@@ -1408,7 +1409,7 @@ pub async fn accept_call(
     let resp = crate::service::accept_call(&state.db, id, user.user_id).await?;
     // Notify caller via signalling so their ringing UI can flip to "connected"
     // immediately without waiting for the HTTP response to propagate. Fire-and-forget.
-    publish_call_event(&state.redis_conn, id, "accepted");
+    publish_call_event(&state.redis_pubsub_conn, id, "accepted");
     Ok(Json(ApiResponse::success(resp)))
 }
 
@@ -1426,7 +1427,7 @@ pub async fn reject_call(
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
     let resp = crate::service::reject_call(&state.db, id, user.user_id).await?;
-    publish_call_event(&state.redis_conn, id, "rejected");
+    publish_call_event(&state.redis_pubsub_conn, id, "rejected");
     Ok(Json(ApiResponse::success(resp)))
 }
 
@@ -1446,7 +1447,7 @@ pub async fn end_call(
     Json(req): Json<EndCallDto>,
 ) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
     let resp = crate::service::end_call(&state.db, id, user.user_id, &req.reason).await?;
-    publish_call_event(&state.redis_conn, id, "ended");
+    publish_call_event(&state.redis_pubsub_conn, id, "ended");
     Ok(Json(ApiResponse::success(resp)))
 }
 
@@ -1529,7 +1530,11 @@ pub async fn list_admin_calls(
 // Redis PubSub on channel `call_sig:{call_id}`. Connection authorised only
 // if the user is caller or callee on this call.
 
-pub fn publish_call_event(redis_conn: &redis::aio::MultiplexedConnection, call_id: uuid::Uuid, kind: &str) {
+pub fn publish_call_event(
+    redis_conn: &redis::aio::MultiplexedConnection,
+    call_id: uuid::Uuid,
+    kind: &str,
+) {
     use redis::AsyncCommands;
     let mut conn = redis_conn.clone();
     let channel = format!("call_sig:{call_id}");
@@ -1582,7 +1587,11 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
     let call_id = match uuid::Uuid::parse_str(&call_id_str).ok().or_else(|| {
         serde_json::from_str::<serde_json::Value>(&call_id_str)
             .ok()
-            .and_then(|v| v.get("call_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .and_then(|v| {
+                v.get("call_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
             .and_then(|s| uuid::Uuid::parse_str(&s).ok())
     }) {
         Some(id) => id,
@@ -1593,14 +1602,15 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
     };
 
     // Authorize — must be caller or callee.
-    let participants: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
-        "SELECT caller_id, callee_id FROM calls.call_logs WHERE id = $1",
-    )
-    .bind(call_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    let participants: Option<(uuid::Uuid, uuid::Uuid)> =
+        sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid)>(
+            "SELECT caller_id, callee_id FROM calls.call_logs WHERE id = $1",
+        )
+        .bind(call_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
     let Some((caller_id, callee_id)) = participants else {
         let _ = socket.send(Message::Text("call not found".into())).await;
         return;
@@ -1611,7 +1621,7 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
     }
 
     // Subscribe to Redis channel `call_sig:{call_id}`
-    let mut pubsub = match state.redis_client.get_async_pubsub().await {
+    let mut pubsub = match state.redis_pubsub_client.get_async_pubsub().await {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("call_signaling: pubsub failed: {e}");
@@ -1673,7 +1683,7 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
                 let out = value.to_string();
 
                 use redis::AsyncCommands;
-                let mut conn = state.redis_conn.clone();
+                let mut conn = state.redis_pubsub_conn.clone();
                 let _: Result<(), redis::RedisError> =
                     conn.publish(&channel, &out).await;
             }

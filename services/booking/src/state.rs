@@ -7,10 +7,24 @@ use sqlx::PgPool;
 pub struct AppState {
     pub db: PgPool,
     pub jwt_config: JwtConfig,
-    /// Redis client for creating per-WS PubSub subscription connections.
-    pub redis_client: redis::Client,
-    /// Multiplexed connection for PUBLISH commands (cheap to clone).
-    pub redis_conn: redis::aio::MultiplexedConnection,
+    /// Redis client (pubsub instance) for opening per-WS subscriber
+    /// connections via `get_async_pubsub()`. Was named `redis_client`;
+    /// renamed for symmetry with chat-service and to make the intent
+    /// explicit alongside `redis_cache_conn`.
+    pub redis_pubsub_client: redis::Client,
+    /// Multiplexed connection to the pubsub Redis instance used for
+    /// PUBLISH commands (call signaling, assignment notifications).
+    /// Cheap to clone — shares the underlying connection.
+    pub redis_pubsub_conn: redis::aio::MultiplexedConnection,
+    /// Multiplexed connection to the **cache** Redis instance — the same
+    /// one `auth-service` writes `revoked_jti:{jti}` blocklist entries to.
+    /// `HasJwtSecret::redis_conn()` returns this so `AuthUser` checks see
+    /// revocations made at logout. (Bug fix: previously the single
+    /// `redis_conn` field was used both as pub/sub publish channel AND
+    /// as the blocklist source — and since it pointed at `redis-pubsub`
+    /// rather than `redis-cache`, logged-out tokens kept working on every
+    /// booking endpoint until their 15-min TTL elapsed.)
+    pub redis_cache_conn: redis::aio::MultiplexedConnection,
     /// Shared HTTP client for outbound requests (e.g. reverse geocoding).
     pub http_client: reqwest::Client,
     /// S3/MinIO client for file uploads (progress report photos).
@@ -30,7 +44,7 @@ impl HasJwtSecret for AppState {
     }
 
     fn redis_conn(&self) -> &redis::aio::MultiplexedConnection {
-        &self.redis_conn
+        &self.redis_cache_conn
     }
 }
 

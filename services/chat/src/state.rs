@@ -8,6 +8,13 @@ pub struct AppState {
     pub db: PgPool,
     #[allow(dead_code)]
     pub redis_cache: redis::Client,
+    /// Multiplexed connection to the **cache** Redis instance — the same one
+    /// `auth-service` writes `revoked_jti:{jti}` blocklist entries to.
+    /// `HasJwtSecret::redis_conn()` returns this so `AuthUser` checks see
+    /// revocations made at logout. (Bug fix: previously returned
+    /// `redis_pubsub`, which is a separate instance that never holds the
+    /// blocklist — letting revoked tokens stay valid on chat endpoints.)
+    pub redis_cache_conn: redis::aio::MultiplexedConnection,
     /// Pre-established multiplexed Redis connection for chat PubSub.
     /// Clone is cheap — shares the underlying connection (per CLAUDE.md).
     pub redis_pubsub: redis::aio::MultiplexedConnection,
@@ -32,7 +39,7 @@ impl HasJwtSecret for AppState {
     }
 
     fn redis_conn(&self) -> &redis::aio::MultiplexedConnection {
-        &self.redis_pubsub
+        &self.redis_cache_conn
     }
 }
 

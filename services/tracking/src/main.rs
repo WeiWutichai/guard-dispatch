@@ -61,6 +61,13 @@ async fn main() -> anyhow::Result<()> {
 
     let db = create_pool(&db_config).await?;
     let redis_cache = create_redis_client(&redis_config.cache_url)?;
+    // Cache-instance connection — backs the `revoked_jti:{jti}` blocklist
+    // check inside `AuthUser`. MUST be the same Redis as auth-service writes
+    // logout entries to; mismatching this lets revoked tokens survive logout.
+    let redis_cache_conn = redis_cache
+        .get_multiplexed_tokio_connection()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Redis cache: {e}"))?;
     let redis_pubsub_client = create_redis_client(
         redis_config
             .pubsub_url
@@ -76,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         db,
         redis_cache,
+        redis_cache_conn,
         redis_pubsub,
         jwt_config,
     });
