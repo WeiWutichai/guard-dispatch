@@ -1,37 +1,24 @@
-// This is a basic Flutter widget test.
+// Smoke test for the P-Guard mobile app.
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// The previous content of this file was the Flutter scaffold counter test
+// (find.text('0') / tap Icons.add), which is meaningless because this app is
+// not a counter app — that test would always have failed if anyone actually
+// ran it.
+//
+// A richer smoke test that pumps `MyApp` and asserts the initial
+// CircularProgressIndicator (from AuthStatus.unknown) was considered, but
+// requires mocking platform channels for SharedPreferences,
+// FlutterSecureStorage, Firebase, and FCM — none of which have testing
+// helpers wired up in this project, and the task scope forbids adding new
+// dependencies. So we limit this file to a compile-only check: the test
+// failing to compile would mean MyApp's public surface has drifted from
+// what the rest of the codebase imports.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:p-guard_mobile/main.dart';
-import 'package:p-guard_mobile/services/pin_storage_service.dart';
-import 'package:p-guard_mobile/services/language_service.dart';
+import 'package:p_guard_mobile/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Initializing services for the test
-    final pinService = await PinStorageService.init();
-    final langNotifier = await LanguageNotifier.init();
-
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(
-      MyApp(pinService: pinService, langNotifier: langNotifier),
-    );
-
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('MyApp class is exported from main.dart', () {
+    expect(MyApp, isNotNull);
   });
 }

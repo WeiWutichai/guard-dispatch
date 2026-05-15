@@ -49,11 +49,19 @@ export default function ReportsPage() {
   const [summary, setSummary] = useState<AdminReportSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [trackedPeriod, setTrackedPeriod] = useState(period);
+
+  // Reset loading/error during render when the period changes.
+  // "Adjusting state during a render" — recommended over setState-in-effect:
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  if (trackedPeriod !== period) {
+    setTrackedPeriod(period);
+    setLoading(true);
+    setError(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     reportsApi
       .summary(period)
       .then((s) => {
