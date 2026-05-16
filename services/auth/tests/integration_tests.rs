@@ -2379,6 +2379,205 @@ async fn admin_list_users_filters_by_role() {
     }
 }
 
+// Task 10 (close /applicants approval-status filter bug):
+// list_users must use customer_profiles.approval_status for role='customer' users
+// (CASE-WHEN in services/auth/src/service.rs:1341). Before the fix, an approved
+// customer would still show in /users?approval_status=pending because their
+// auth.users.approval_status stays 'pending' forever (that field is for guard
+// approval; customer approval lives on customer_profiles). These property tests
+// catch regressions by inspecting the actual API response without needing seeded
+// fixtures — they pass trivially on empty data and fail loudly if the bug returns.
+#[tokio::test]
+async fn admin_list_users_pending_excludes_approved_customers() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_admin() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_ADMIN_PHONE / FIXTURE_PHONE not set");
+            return;
+        }
+    };
+    let (access_token, _) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    let probe = get_bearer("/users?approval_status=pending&limit=100", &access_token).await;
+    if probe.status() == StatusCode::FORBIDDEN {
+        eprintln!("NOTE: fixture user is not admin — approval-filter test skipped");
+        return;
+    }
+    assert_eq!(probe.status(), StatusCode::OK);
+    let pending_body: Value = probe.json().await.expect("json");
+    let empty: Vec<Value> = vec![];
+    let pending = pending_body["data"]["users"]
+        .as_array()
+        .unwrap_or(&empty)
+        .clone();
+
+    throttle().await;
+    let approved_res = get_bearer("/users?approval_status=approved&limit=100", &access_token).await;
+    assert_eq!(approved_res.status(), StatusCode::OK);
+    let approved_body: Value = approved_res.json().await.expect("json");
+    let approved = approved_body["data"]["users"]
+        .as_array()
+        .unwrap_or(&empty)
+        .clone();
+
+    // Property 1: mutual exclusion — no user_id may appear in both filters.
+    use std::collections::HashSet;
+    let pending_ids: HashSet<String> = pending
+        .iter()
+        .filter_map(|u| u.get("id").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+    let approved_ids: HashSet<String> = approved
+        .iter()
+        .filter_map(|u| u.get("id").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+    let overlap: Vec<&String> = pending_ids.intersection(&approved_ids).collect();
+    assert!(
+        overlap.is_empty(),
+        "User(s) appear in BOTH pending and approved lists (mutual-exclusion broken): {:?}",
+        overlap
+    );
+
+    // Property 2: for each customer in pending list, their customer_profile MUST NOT be 'approved'.
+    // This is exactly the bug we fixed — an approved-customer-with-pending-user row showed up in
+    // /users?approval_status=pending because list_users used u.approval_status for all roles.
+    for user in &pending {
+        if user.get("role").and_then(|v| v.as_str()) != Some("customer") {
+            continue;
+        }
+        let user_id = user["id"].as_str().expect("user id");
+        throttle().await;
+        let url = format!("{}/admin/customer-profile/{}", base_url(), user_id);
+        let res = send_retrying(|| client().get(&url).bearer_auth(&access_token)).await;
+        if res.status() == StatusCode::NOT_FOUND {
+            continue; // no customer_profile — outside the bug surface
+        }
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "get customer profile for {user_id} failed: {}",
+            res.status()
+        );
+        let cp_body: Value = res.json().await.expect("json");
+        let cp_status = cp_body["data"]["approval_status"].as_str().unwrap_or("");
+        assert_ne!(
+            cp_status, "approved",
+            "Customer user {user_id} appears in pending list but customer_profile.approval_status='approved' \
+             — list_users approval_status filter must use cp.approval_status for role=customer (Task 10 regression)"
+        );
+    }
+
+    // Property 3 (mirror): for each customer in approved list, customer_profile MUST be 'approved'.
+    for user in &approved {
+        if user.get("role").and_then(|v| v.as_str()) != Some("customer") {
+            continue;
+        }
+        let user_id = user["id"].as_str().expect("user id");
+        throttle().await;
+        let url = format!("{}/admin/customer-profile/{}", base_url(), user_id);
+        let res = send_retrying(|| client().get(&url).bearer_auth(&access_token)).await;
+        if res.status() == StatusCode::NOT_FOUND {
+            continue;
+        }
+        assert_eq!(res.status(), StatusCode::OK);
+        let cp_body: Value = res.json().await.expect("json");
+        let cp_status = cp_body["data"]["approval_status"].as_str().unwrap_or("");
+        assert_eq!(
+            cp_status, "approved",
+            "Customer user {user_id} appears in approved list but customer_profile.approval_status='{cp_status}' \
+             — should be 'approved'"
+        );
+    }
+}
+
+#[tokio::test]
+async fn admin_list_users_pending_guard_with_approved_customer_profile_shows_as_guard_status() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let (phone, password) = match fixture_admin() {
+        Some(creds) => creds,
+        None => {
+            eprintln!("SKIP: FIXTURE_ADMIN_PHONE / FIXTURE_PHONE not set");
+            return;
+        }
+    };
+    let (access_token, _) = mobile_login(&phone, &password).await;
+    throttle().await;
+
+    let probe = get_bearer("/users?approval_status=pending&limit=100", &access_token).await;
+    if probe.status() == StatusCode::FORBIDDEN {
+        eprintln!("NOTE: fixture user is not admin — guard-semantics test skipped");
+        return;
+    }
+    assert_eq!(probe.status(), StatusCode::OK);
+    let pending_body: Value = probe.json().await.expect("json");
+    let empty: Vec<Value> = vec![];
+    let pending = pending_body["data"]["users"]
+        .as_array()
+        .unwrap_or(&empty)
+        .clone();
+
+    throttle().await;
+    let approved_res = get_bearer("/users?approval_status=approved&limit=100", &access_token).await;
+    assert_eq!(approved_res.status(), StatusCode::OK);
+    let approved_body: Value = approved_res.json().await.expect("json");
+    let approved = approved_body["data"]["users"]
+        .as_array()
+        .unwrap_or(&empty)
+        .clone();
+
+    use std::collections::HashSet;
+    let approved_ids: HashSet<String> = approved
+        .iter()
+        .filter_map(|u| u.get("id").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+
+    // For each guard in pending list, the CASE-WHEN ELSE branch must apply
+    // (u.role='guard' so ELSE returns u.approval_status — guard semantics).
+    // Response's approval_status field is the CASE result, so for a guard listed
+    // under ?approval_status=pending it must equal 'pending' (proves ELSE branch
+    // ran and didn't accidentally pull cp.approval_status). And no guard may also
+    // appear under ?approval_status=approved (filter consistency).
+    for user in &pending {
+        if user.get("role").and_then(|v| v.as_str()) != Some("guard") {
+            continue;
+        }
+        let user_id = user["id"].as_str().expect("user id").to_string();
+        let returned_status = user.get("approval_status").and_then(|v| v.as_str());
+        assert_eq!(
+            returned_status,
+            Some("pending"),
+            "Guard user {user_id} listed via ?approval_status=pending but response \
+             approval_status={returned_status:?} — CASE-WHEN ELSE branch should \
+             return u.approval_status='pending' for role=guard"
+        );
+        assert!(
+            !approved_ids.contains(&user_id),
+            "Guard user {user_id} appears in BOTH pending and approved lists (filter inconsistency)"
+        );
+    }
+
+    // Mirror — every guard in the approved list must show approval_status='approved' in the response.
+    for user in &approved {
+        if user.get("role").and_then(|v| v.as_str()) != Some("guard") {
+            continue;
+        }
+        let returned_status = user.get("approval_status").and_then(|v| v.as_str());
+        assert_eq!(
+            returned_status,
+            Some("approved"),
+            "Guard listed via ?approval_status=approved must have approval_status=approved \
+             in response (ELSE branch returned u.approval_status)"
+        );
+    }
+}
+
 #[tokio::test]
 async fn admin_list_customer_applicants_returns_paginated_result() {
     if service_unreachable().await {

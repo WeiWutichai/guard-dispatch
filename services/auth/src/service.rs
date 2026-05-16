@@ -1355,14 +1355,26 @@ pub async fn list_users(db: &PgPool, query: ListUsersQuery) -> Result<PaginatedU
         .filter(|s| !s.is_empty())
         .cloned();
 
+    // The `approval_status` filter must respect the dual-approval data model:
+    //   - role='customer': customer_profiles.approval_status is authoritative
+    //     (users.approval_status is for guard approval only; stays 'pending' for
+    //     customer-only users forever).
+    //   - any other role: users.approval_status applies.
+    // CASE-WHEN below mirrors this in both COUNT and SELECT queries so the
+    // /applicants "All" tab no longer shows approved customers as pending.
     let total: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*)
-        FROM auth.users
-        WHERE (role IS NULL OR role != 'admin')
-          AND ($1::user_role IS NULL OR role = $1::user_role)
-          AND ($2::approval_status IS NULL OR approval_status = $2::approval_status)
-          AND ($3::text IS NULL OR full_name ILIKE $3 OR email ILIKE $3 OR phone ILIKE $3)
+        FROM auth.users u
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+        WHERE (u.role IS NULL OR u.role != 'admin')
+          AND ($1::user_role IS NULL OR u.role = $1::user_role)
+          AND ($2::approval_status IS NULL OR
+               (CASE WHEN u.role = 'customer'
+                     THEN COALESCE(cp.approval_status, u.approval_status)
+                     ELSE u.approval_status
+                END) = $2::approval_status)
+          AND ($3::text IS NULL OR u.full_name ILIKE $3 OR u.email ILIKE $3 OR u.phone ILIKE $3)
         "#,
     )
     .bind(&role_filter)
@@ -1373,13 +1385,23 @@ pub async fn list_users(db: &PgPool, query: ListUsersQuery) -> Result<PaginatedU
 
     let rows = sqlx::query_as::<_, UserRow>(
         r#"
-        SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
-        FROM auth.users
-        WHERE (role IS NULL OR role != 'admin')
-          AND ($1::user_role IS NULL OR role = $1::user_role)
-          AND ($2::approval_status IS NULL OR approval_status = $2::approval_status)
-          AND ($3::text IS NULL OR full_name ILIKE $3 OR email ILIKE $3 OR phone ILIKE $3)
-        ORDER BY created_at DESC
+        SELECT u.id, u.email, u.phone, u.password_hash, u.full_name, u.role, u.avatar_url, u.is_active,
+               (CASE WHEN u.role = 'customer'
+                     THEN COALESCE(cp.approval_status, u.approval_status)
+                     ELSE u.approval_status
+                END) AS approval_status,
+               u.created_at, u.updated_at
+        FROM auth.users u
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+        WHERE (u.role IS NULL OR u.role != 'admin')
+          AND ($1::user_role IS NULL OR u.role = $1::user_role)
+          AND ($2::approval_status IS NULL OR
+               (CASE WHEN u.role = 'customer'
+                     THEN COALESCE(cp.approval_status, u.approval_status)
+                     ELSE u.approval_status
+                END) = $2::approval_status)
+          AND ($3::text IS NULL OR u.full_name ILIKE $3 OR u.email ILIKE $3 OR u.phone ILIKE $3)
+        ORDER BY u.created_at DESC
         LIMIT $4 OFFSET $5
         "#,
     )
