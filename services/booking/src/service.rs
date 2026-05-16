@@ -556,6 +556,7 @@ pub async fn assign_guard(
     tx.commit().await?;
 
     // Notify guard: new job assigned
+    // `kind` is the frontend deep-link discriminator (Task 13 — push routing).
     spawn_notification(
         db.clone(),
         req.guard_id,
@@ -563,6 +564,7 @@ pub async fn assign_guard(
         format!("คุณได้รับมอบหมายงานใหม่ที่ {}", request.address),
         "guard_assigned",
         Some(serde_json::json!({
+            "kind": "guard_assigned",
             "request_id": request_id.to_string(),
             "assignment_id": assignment.id.to_string(),
             "target_role": "guard",
@@ -841,6 +843,8 @@ pub async fn update_assignment_status(
                     ),
                     _ => return,
                 };
+                // `kind` mirrors `ntype` so the mobile push handler can deep-link
+                // straight to the relevant screen without re-deriving from status.
                 spawn_notification(
                     db_clone,
                     customer_id,
@@ -848,6 +852,7 @@ pub async fn update_assignment_status(
                     body.to_string(),
                     ntype,
                     Some(serde_json::json!({
+                        "kind": ntype,
                         "request_id": req_id.to_string(),
                         "assignment_id": a_id.to_string(),
                         "target_role": "customer",
@@ -1863,6 +1868,8 @@ pub async fn accept_or_decline_assignment(
                     .flatten();
 
             if let Some(customer_id) = cid {
+                // `kind` distinguishes accept vs reject vs initial-assign for
+                // the mobile push handler (Task 13).
                 if accepted {
                     spawn_notification(
                         db_clone,
@@ -1871,6 +1878,7 @@ pub async fn accept_or_decline_assignment(
                         "เจ้าหน้าที่ รปภ. ตอบรับงานแล้ว กรุณาชำระเงิน".to_string(),
                         "guard_assigned",
                         Some(serde_json::json!({
+                            "kind": "guard_accepted",
                             "request_id": req_id.to_string(),
                             "assignment_id": a_id.to_string(),
                             "target_role": "customer",
@@ -1884,6 +1892,7 @@ pub async fn accept_or_decline_assignment(
                         "เจ้าหน้าที่ รปภ. ปฏิเสธงาน กรุณาเลือกเจ้าหน้าที่ใหม่".to_string(),
                         "booking_cancelled",
                         Some(serde_json::json!({
+                            "kind": "guard_rejected",
                             "request_id": req_id.to_string(),
                             "target_role": "customer",
                         })),
@@ -1981,6 +1990,8 @@ pub async fn guard_cancel_unpaid(
                 .ok()
                 .flatten();
         if let Some(customer_id) = cid {
+            // `kind` is the Task-13 deep-link discriminator; `reason` kept for
+            // backward compatibility with any logging consumer.
             spawn_notification(
                 db_clone,
                 customer_id,
@@ -1988,6 +1999,7 @@ pub async fn guard_cancel_unpaid(
                 "เจ้าหน้าที่ยกเลิกงานเนื่องจากยังไม่ได้ชำระเงิน กรุณาเลือกเจ้าหน้าที่ใหม่".to_string(),
                 "booking_cancelled",
                 Some(serde_json::json!({
+                    "kind": "guard_cancelled_unpaid",
                     "request_id": req_id.to_string(),
                     "assignment_id": a_id.to_string(),
                     "reason": "guard_cancelled_unpaid",
@@ -3460,6 +3472,7 @@ pub async fn add_tip(
     tx.commit().await?;
 
     // Notify guard about the tip
+    // `kind` is the Task-13 deep-link discriminator.
     spawn_notification(
         db.clone(),
         row.guard_id,
@@ -3467,6 +3480,7 @@ pub async fn add_tip(
         format!("คุณได้รับทิปเพิ่มเติม {} บาท", amount),
         "system",
         Some(serde_json::json!({
+            "kind": "tip_received",
             "request_id": row.request_id.to_string(),
             "assignment_id": assignment_id.to_string(),
             "tip_amount": amount.to_string(),
@@ -3575,6 +3589,7 @@ pub async fn review_completion(
         publish_assignment_event(redis_conn, existing.request_id, assignment_id, "completed");
 
         // Notify guard: job completed/approved
+        // `kind` is the Task-13 deep-link discriminator.
         spawn_notification(
             db.clone(),
             existing.guard_id,
@@ -3582,6 +3597,7 @@ pub async fn review_completion(
             "ลูกค้าอนุมัติการทำงานเสร็จสิ้นแล้ว".to_string(),
             "booking_completed",
             Some(serde_json::json!({
+                "kind": "booking_completed",
                 "request_id": existing.request_id.to_string(),
                 "assignment_id": assignment_id.to_string(),
                 "target_role": "guard",

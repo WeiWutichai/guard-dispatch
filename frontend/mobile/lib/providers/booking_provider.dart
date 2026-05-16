@@ -552,6 +552,22 @@ class BookingProvider extends ChangeNotifier {
     }
   }
 
+  /// Fetch a single guard request by id. Wrapper around
+  /// `BookingService.getRequest` (line 193). Used by the push notification
+  /// handler (Task 13) when the guard's cached job list hasn't seen the
+  /// just-assigned job yet — compose a fresh job map from
+  /// request + assignments and deep-link directly without falling back to
+  /// the notification list.
+  Future<Map<String, dynamic>> getRequest(String requestId) async {
+    try {
+      return await _service.getRequest(requestId);
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   // =========================================================================
   // Guard Location (Customer tracking)
   // =========================================================================

@@ -8,7 +8,10 @@ import '../providers/auth_provider.dart';
 import '../providers/booking_provider.dart';
 import '../screens/chat_list_screen.dart';
 import '../screens/guard/guard_job_detail_screen.dart';
+import '../screens/hirer/customer_active_job_screen.dart';
+import '../screens/hirer/customer_tracking_screen.dart';
 import '../screens/hirer/hirer_history_screen.dart';
+import '../screens/hirer/payment_screen.dart';
 import '../screens/incoming_call_screen.dart';
 import '../screens/notification_screen.dart';
 
@@ -166,11 +169,18 @@ void _routeFromPayload(Map<String, dynamic> data) {
 
   // 3. Booking events with a request_id and a guard recipient → go to job
   //    detail. We need the full job map (the screen reads many fields), so
-  //    we fetch the guard's jobs first and find the matching row.
+  //    we fetch the guard's jobs first and find the matching row. If the
+  //    push arrived before the cached list saw the new assignment (race
+  //    condition — common because backend FCM dispatch beats most clients
+  //    fetching their job list), fall through to a request-by-id fetch and
+  //    compose the job map ourselves so the deep-link still lands on the
+  //    job detail screen instead of the notification list.
   if (requestId != null && targetRole == 'guard') {
     () async {
       try {
         final booking = ctx.read<BookingProvider>();
+
+        // Fast path: cached list.
         final allJobs = await booking.fetchJobsAndReturn();
         final match = allJobs.where(
           (j) => j['request_id']?.toString() == requestId,
@@ -181,12 +191,17 @@ void _routeFromPayload(Map<String, dynamic> data) {
           ));
           return;
         }
-        // Fallback when the job isn't in our cache yet — open the
-        // notification list so the user can drill in manually.
+
+        // Cache miss → fetch by id (race-safe).
+        final request = await booking.getRequest(requestId);
+        final assignments = await booking.getAssignments(requestId);
+        final jobMap = _composeGuardJobMap(request, assignments);
         nav.push(MaterialPageRoute(
-          builder: (_) => const NotificationScreen(isGuard: true),
+          builder: (_) => GuardJobDetailScreen(job: jobMap),
         ));
       } catch (_) {
+        // Last-ditch fallback only if BOTH cache lookup and direct fetch
+        // failed (network out, server down, etc.).
         nav.push(MaterialPageRoute(
           builder: (_) => const NotificationScreen(isGuard: true),
         ));
@@ -195,12 +210,118 @@ void _routeFromPayload(Map<String, dynamic> data) {
     return;
   }
 
-  // 4. Booking events going to the customer → history screen lists the
-  //    request and lets them drill in.
+  // 4. Booking events going to the customer → route by request + assignment
+  //    state, mirroring HirerHistoryScreen._trackGuard (lines 543-661). The
+  //    matching screen for the current state (PaymentScreen / ActiveJob /
+  //    Tracking) is what the user actually wants — the old behaviour of
+  //    always landing on HirerHistoryScreen forced an extra tap and lost
+  //    deep-link intent. NOTE: the routing logic here is intentionally a
+  //    duplicate of _trackGuard; extracting it into a shared helper is
+  //    deferred (B12-D follow-up — out of Task 13 scope).
   if (requestId != null && targetRole == 'customer') {
-    nav.push(MaterialPageRoute(
-      builder: (_) => const HirerHistoryScreen(),
-    ));
+    () async {
+      try {
+        final booking = ctx.read<BookingProvider>();
+        final request = await booking.getRequest(requestId);
+        final assignments = await booking.getAssignments(requestId);
+
+        // Find the active assignment (mirrors _trackGuard:566-569).
+        final active = assignments.where((a) {
+          final s = a['status'] as String?;
+          return s == 'awaiting_payment' ||
+              s == 'accepted' ||
+              s == 'en_route' ||
+              s == 'arrived' ||
+              s == 'pending_completion';
+        });
+
+        if (active.isEmpty) {
+          // No active assignment yet (declined / cancelled / pre-acceptance).
+          // History screen lets the user drill in manually.
+          nav.push(MaterialPageRoute(
+            builder: (_) => const HirerHistoryScreen(),
+          ));
+          return;
+        }
+
+        final assignment = active.first;
+        final status = assignment['status'] as String?;
+        final guardId = assignment['guard_id']?.toString() ?? '';
+        final guardName = assignment['guard_name'] as String? ?? '-';
+        final startedAt = assignment['started_at'] as String?;
+        final customerLat = (request['location_lat'] as num?)?.toDouble();
+        final customerLng = (request['location_lng'] as num?)?.toDouble();
+        final bookedHours = (request['booked_hours'] as num?)?.toInt() ?? 6;
+
+        if (status == 'awaiting_payment' &&
+            customerLat != null &&
+            customerLng != null) {
+          final price = request['offered_price'];
+          final totalAmount = price is num
+              ? price.toDouble()
+              : double.tryParse(price?.toString() ?? '') ?? 0;
+          nav.push(MaterialPageRoute(
+            builder: (_) => PaymentScreen(
+              requestId: requestId,
+              totalAmount: totalAmount,
+              subtotal: totalAmount,
+              baseFee: 0,
+              tip: 0,
+              bookedHours: bookedHours,
+              guardCount: 1,
+              guardName: guardName,
+              guardId: guardId,
+              customerLat: customerLat,
+              customerLng: customerLng,
+            ),
+          ));
+          return;
+        }
+
+        if ((status == 'arrived' || status == 'pending_completion') &&
+            startedAt != null) {
+          final address = request['address'] as String?;
+          final startTime = DateTime.parse(startedAt);
+          final elapsed =
+              DateTime.now().toUtc().difference(startTime).inSeconds;
+          final total = bookedHours * 3600;
+          final remainingSeconds = (total - elapsed).clamp(0, total);
+          nav.push(MaterialPageRoute(
+            builder: (_) => CustomerActiveJobScreen(
+              requestId: requestId,
+              guardName: guardName,
+              address: address,
+              bookedHours: bookedHours,
+              remainingSeconds: remainingSeconds,
+              startedAt: startedAt,
+            ),
+          ));
+          return;
+        }
+
+        // Default: tracking screen for accepted/en_route. Requires lat/lng;
+        // fall back to history if the request never captured them.
+        if (customerLat != null && customerLng != null) {
+          nav.push(MaterialPageRoute(
+            builder: (_) => CustomerTrackingScreen(
+              requestId: requestId,
+              guardId: guardId,
+              guardName: guardName,
+              customerLat: customerLat,
+              customerLng: customerLng,
+            ),
+          ));
+        } else {
+          nav.push(MaterialPageRoute(
+            builder: (_) => const HirerHistoryScreen(),
+          ));
+        }
+      } catch (_) {
+        nav.push(MaterialPageRoute(
+          builder: (_) => const HirerHistoryScreen(),
+        ));
+      }
+    }();
     return;
   }
 
@@ -246,4 +367,63 @@ bool _tryOpenIncomingCall(Map<String, dynamic> data) {
     ),
   );
   return true;
+}
+
+/// Compose the merged job map that `GuardJobDetailScreen` reads. The screen
+/// expects a single map containing request fields (id, address, booked_hours,
+/// offered_price, customer_*, etc.) plus assignment fields (assignment_id,
+/// assignment_status, started_at, en_route_*, arrived_*, etc.). The
+/// `/booking/guard/jobs` list endpoint already returns this merged shape; this
+/// helper exists for the cache-miss path where we only have request +
+/// assignments separately (Task 13 race-condition fix).
+Map<String, dynamic> _composeGuardJobMap(
+  Map<String, dynamic> request,
+  List<Map<String, dynamic>> assignments,
+) {
+  // Start with request fields.
+  final merged = Map<String, dynamic>.from(request);
+
+  // Overlay assignment fields. There may be multiple historical assignments
+  // for one request (declined guards then re-assigned); for push routing we
+  // want the most recent non-declined one. Heuristic: the first row not in
+  // {declined, cancelled, rejected} — the API orders newest-first.
+  Map<String, dynamic>? active;
+  for (final a in assignments) {
+    final s = a['status'] as String?;
+    if (s == 'declined' || s == 'cancelled' || s == 'rejected') continue;
+    active = a;
+    break;
+  }
+  active ??= assignments.isNotEmpty ? assignments.first : null;
+  if (active == null) return merged;
+
+  merged['assignment_id'] = active['id'];
+  merged['assignment_status'] = active['status'];
+  // Copy timestamps + location fields the detail screen reads (see
+  // guard_job_detail_screen.dart lines 736-750).
+  const assignmentFields = [
+    'started_at',
+    'en_route_at',
+    'arrived_at',
+    'completed_at',
+    'completion_requested_at',
+    'en_route_lat',
+    'en_route_lng',
+    'arrived_lat',
+    'arrived_lng',
+    'started_lat',
+    'started_lng',
+    'completion_lat',
+    'completion_lng',
+    'en_route_place',
+    'arrived_place',
+    'started_place',
+    'completion_place',
+    'guard_id',
+    'guard_name',
+  ];
+  for (final key in assignmentFields) {
+    if (active[key] != null) merged[key] = active[key];
+  }
+  return merged;
 }
