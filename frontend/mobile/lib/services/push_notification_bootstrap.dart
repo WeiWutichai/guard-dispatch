@@ -6,8 +6,11 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/booking_provider.dart';
+import '../providers/chat_provider.dart';
 import '../screens/chat_list_screen.dart';
+import '../screens/chat_screen.dart';
 import '../screens/guard/guard_job_detail_screen.dart';
+import 'language_service.dart';
 import '../screens/hirer/customer_active_job_screen.dart';
 import '../screens/hirer/customer_tracking_screen.dart';
 import '../screens/hirer/hirer_history_screen.dart';
@@ -325,14 +328,82 @@ void _routeFromPayload(Map<String, dynamic> data) {
     return;
   }
 
-  // 5. Chat-message kind (currently unused via FCM but we cover it for
-  //    parity with NotificationScreen's routing).
+  // 5. Chat-message — deep-link straight to the conversation when we have
+  //    a conversation_id (Task 14 — chat now triggers FCM push). Falls back
+  //    to the chat list if the conversation isn't found in the cached list
+  //    (e.g., very new conversation, or fetchConversations failed).
   if (kind == 'chat_message') {
-    final auth = ctx.read<AuthProvider>();
-    final actingRole = targetRole ?? (auth.role == 'guard' ? 'guard' : 'customer');
-    nav.push(MaterialPageRoute(
-      builder: (_) => ChatListScreen(actingRole: actingRole),
-    ));
+    () async {
+      final auth = ctx.read<AuthProvider>();
+      // Resolve locale before any awaits — ChatListScreen uses the same
+      // LanguageProvider.of(context).isThai pattern at line 29 to localize
+      // strings, so reuse it here for parity with in-app navigation.
+      final isThai = LanguageProvider.of(ctx).isThai;
+      // target_role for chat is "any" (backend sets this) — we resolve the
+      // acting role from the local AuthProvider in that case.
+      final actingRole = (targetRole == 'guard' || targetRole == 'customer')
+          ? targetRole!
+          : (auth.role == 'guard' ? 'guard' : 'customer');
+      final conversationId = data['conversation_id'] as String?;
+
+      if (conversationId == null || conversationId.isEmpty) {
+        nav.push(MaterialPageRoute(
+          builder: (_) => ChatListScreen(actingRole: actingRole),
+        ));
+        return;
+      }
+
+      try {
+        final chat = ctx.read<ChatProvider>();
+        // No backend GET /conversations/{id} yet (carry-forward B12-H), so
+        // we list-then-filter. fetchConversations populates ChatProvider's
+        // _conversations field which we then search by id.
+        await chat.fetchConversations(role: actingRole);
+        Map<String, dynamic>? conv;
+        for (final c in chat.conversations) {
+          if (c['id']?.toString() == conversationId) {
+            conv = c;
+            break;
+          }
+        }
+        if (conv == null) {
+          nav.push(MaterialPageRoute(
+            builder: (_) => ChatListScreen(actingRole: actingRole),
+          ));
+          return;
+        }
+
+        // Field names + locale-aware fallback mirror chat_list_screen.dart's
+        // mapping (lines 91-94) so we stay consistent with in-app navigation.
+        final requestId = conv['request_id']?.toString() ?? '';
+        final counterpartName = conv['participant_name'] as String? ??
+            (isThai ? 'ไม่ทราบชื่อ' : 'Unknown');
+        final requestStatus = conv['request_status'] as String? ?? '';
+        final isReadOnly =
+            requestStatus == 'completed' || requestStatus == 'cancelled';
+        // Counterpart label flips by acting role (guard ↔ customer) and
+        // localizes; matches ChatListScreen's localized userRole at line 204
+        // but corrects the side: previously hardcoded 'Client' on both sides.
+        final counterpartRoleLabel = actingRole == 'guard'
+            ? (isThai ? 'ลูกค้า' : 'Client')
+            : (isThai ? 'รปภ.' : 'Security');
+
+        nav.push(MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversationId: conversationId,
+            requestId: requestId,
+            userName: counterpartName,
+            userRole: counterpartRoleLabel,
+            actingRole: actingRole,
+            readOnly: isReadOnly,
+          ),
+        ));
+      } catch (_) {
+        nav.push(MaterialPageRoute(
+          builder: (_) => ChatListScreen(actingRole: actingRole),
+        ));
+      }
+    }();
     return;
   }
 

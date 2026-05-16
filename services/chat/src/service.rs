@@ -29,9 +29,18 @@ fn spawn_chat_notification(
         } else {
             message_preview.chars().take(100).collect::<String>()
         };
+        // `kind` follows Task 13 frontend routing contract — the mobile push
+        // handler reads it to deep-link straight to the conversation.
+        // `target_role: "any"` because chat goes to whoever's online (the
+        // mobile-side decides acting role from AuthProvider in that case).
         let payload = serde_json::json!({
+            "kind": "chat_message",
             "conversation_id": conversation_id.to_string(),
+            "target_role": "any",
         });
+
+        // 1. DB log — persists so the in-app notification list shows it even
+        // if FCM push delivery fails (e.g., user's FCM token is stale).
         let _ = sqlx::query(
             r#"
             INSERT INTO notification.notification_logs (user_id, title, body, notification_type, payload)
@@ -44,6 +53,38 @@ fn spawn_chat_notification(
         .bind(&payload)
         .execute(&db)
         .await;
+
+        // 2. Trigger FCM push via notification-service internal API. Mirrors
+        // booking-side spawn_notification (services/booking/src/service.rs).
+        // Fire-and-forget: if notification-service is down, the DB log
+        // persists and the user sees it on next app open via the REST API.
+        let push_body = serde_json::json!({
+            "user_id": recipient_id.to_string(),
+            "title": title,
+            "body": body,
+            "notification_type": "chat_message",
+            "payload": payload,
+        });
+
+        let client = reqwest::Client::new();
+        match client
+            .post("http://rust-notification:3004/internal/push")
+            .header("X-Internal-Service", "chat-service")
+            .json(&push_body)
+            .send()
+            .await
+        {
+            Ok(resp) if !resp.status().is_success() => {
+                tracing::warn!(
+                    "notification-service push returned status={}",
+                    resp.status()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to call notification-service for push: {e}");
+            }
+            _ => {}
+        }
     });
 }
 
