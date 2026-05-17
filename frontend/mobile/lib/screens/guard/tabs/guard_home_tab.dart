@@ -12,6 +12,7 @@ import '../../../l10n/app_strings.dart';
 import '../../notification_screen.dart';
 import '../../role_selection_screen.dart';
 import '../active_job_screen.dart';
+import '../guard_job_detail_screen.dart';
 
 class GuardHomeTab extends StatefulWidget {
   final void Function(int)? onSwitchTab;
@@ -381,13 +382,20 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
                   ],
                 ),
               ),
-              Switch.adaptive(
-                value: isOnline || isConnecting,
-                activeTrackColor: hasActiveJob ? const Color(0xFFF59E0B) : AppColors.primary,
-                onChanged: (isConnecting || hasActiveJob)
-                    ? null
-                    : (_) => _handleToggle(context),
-              ),
+              // Task 17 — when guard has an active job, the toggle becomes
+              // a "View Job" badge instead of a misleading off-state Switch.
+              // Switch is only rendered when the guard is free (no active
+              // job). Defensive `|| hasActiveJob` in the Switch's value is
+              // a belt-and-suspenders for any future code path that bypasses
+              // this conditional and lets the Switch render while busy.
+              if (hasActiveJob)
+                _buildBusyBadge(isThai)
+              else
+                Switch.adaptive(
+                  value: isOnline || isConnecting || hasActiveJob,
+                  activeTrackColor: AppColors.primary,
+                  onChanged: isConnecting ? null : (_) => _handleToggle(context),
+                ),
             ],
           ),
         ),
@@ -454,6 +462,62 @@ class _GuardHomeTabState extends State<GuardHomeTab> {
             ),
           ),
       ],
+    );
+  }
+
+  /// Task 17 — replaces the Switch in the status row when guard has an
+  /// active job. Tappable, navigates to GuardJobDetailScreen using the
+  /// merged-shape job map exposed by `BookingProvider.activeJob` (sourced
+  /// from `GET /booking/guard/active-job`). The dashboard refreshes on
+  /// pop so the badge disappears when the job is completed/cancelled.
+  Widget _buildBusyBadge(bool isThai) {
+    return GestureDetector(
+      onTap: () {
+        final job = context.read<BookingProvider>().activeJob;
+        if (job == null) {
+          // Defensive: hasActiveJob was true at render time but the cache
+          // was cleared concurrently. Refetch instead of crashing.
+          context.read<BookingProvider>().fetchActiveJob();
+          return;
+        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => GuardJobDetailScreen(job: job),
+          ),
+        ).then((_) {
+          if (!mounted) return;
+          context.read<BookingProvider>().fetchActiveJob();
+          context.read<BookingProvider>().fetchDashboard();
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFF59E0B)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.work_rounded,
+              size: 16,
+              color: Color(0xFFF59E0B),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              isThai ? 'ดูงาน' : 'View Job',
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFFF59E0B),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
