@@ -12,7 +12,7 @@ import 'auth_service.dart';
 /// in-app call. Lifecycle mirrors the backend:
 ///   initiate → ringing → accepted → connected → ended
 ///
-/// The signalling protocol on `/booking/ws/call` is:
+/// The signalling protocol on `/ws/call` is:
 ///   - client connects, sends `<call_id>` as the first text frame
 ///   - server acks with `{"type":"subscribed"}`
 ///   - both peers exchange `{"type":"offer|answer|candidate","data":...}`
@@ -273,7 +273,7 @@ class CallService {
     final IOWebSocketChannel channel;
     try {
       channel = IOWebSocketChannel.connect(
-        Uri.parse('$wsUrl/booking/ws/call'),
+        Uri.parse('$wsUrl/ws/call'),
         headers: {'Authorization': 'Bearer $token'},
       );
     } catch (e) {
