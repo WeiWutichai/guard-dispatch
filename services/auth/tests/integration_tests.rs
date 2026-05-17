@@ -2144,6 +2144,115 @@ async fn check_status_approved_user_shows_approved() {
     assert!(data["role"].is_string(), "approved user should have a role");
 }
 
+// Task 11: Customer login flow end-to-end.
+//
+// Verifies the 4-site fix (login, login_with_phone, refresh_token, check_status)
+// works for a customer who was approved via customer_profiles.approval_status
+// but whose auth.users.approval_status remains 'pending' (the normal post-
+// customer-approval DB state — guard approval lives there, not customer
+// approval). Pre-fix, all four sites blocked this user; post-fix, they pass.
+//
+// REQUIRES: FIXTURE_CUSTOMER_PHONE + FIXTURE_CUSTOMER_PASSWORD env vars set to
+// credentials of such a customer. Without them the test SKIPS — the existing
+// test infrastructure can't manufacture this state via API (the /register/otp
+// path needs a real SMS code we can't intercept; the /profile/customer path
+// needs a profile_token derived from OTP). Fixture-provisioning helper is
+// tracked as a separate backlog item.
+#[tokio::test]
+async fn customer_with_approved_profile_can_login_and_refresh() {
+    if service_unreachable().await {
+        return;
+    }
+    throttle().await;
+    let phone = match std::env::var("FIXTURE_CUSTOMER_PHONE").ok() {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            eprintln!(
+                "SKIP: FIXTURE_CUSTOMER_PHONE not set — customer dual-approval login test skipped"
+            );
+            return;
+        }
+    };
+    let password = match std::env::var("FIXTURE_CUSTOMER_PASSWORD").ok() {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            eprintln!("SKIP: FIXTURE_CUSTOMER_PASSWORD not set");
+            return;
+        }
+    };
+
+    // Site 405 (check_status) — the EFFECTIVE approval_status returned to the
+    // mobile client must reflect customer_profiles.approval_status='approved',
+    // not the raw u.approval_status='pending'. This is what makes the mobile
+    // client decide "approved → call login_with_phone" instead of "pending →
+    // stay on pending screen".
+    let res = post_json(
+        "/check-status",
+        json!({"phone": &phone, "password": &password}),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().await.expect("json");
+    let data = &body["data"];
+    assert_eq!(data["exists"].as_bool(), Some(true));
+    assert_eq!(
+        data["role"].as_str(),
+        Some("customer"),
+        "FIXTURE_CUSTOMER_* must point at a role='customer' user"
+    );
+    assert_eq!(
+        data["approval_status"].as_str(),
+        Some("approved"),
+        "Task 11 site 405: check_status must return effective approval_status (CASE-WHEN \
+         COALESCE(cp, u) for role=customer) — saw approval_status={:?}, customer_approval_status={:?}",
+        data["approval_status"].as_str(),
+        data["customer_approval_status"].as_str()
+    );
+
+    // Site 457 (login_with_phone) — token issuance no longer blocked for a
+    // customer with cp.approved + u.pending.
+    throttle().await;
+    let res = post_json(
+        "/login/mobile",
+        json!({"phone": &phone, "password": &password}),
+    )
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "Task 11 site 457: customer with approved customer_profile must be able to login_with_phone"
+    );
+    let body: Value = res.json().await.expect("json");
+    let data = &body["data"];
+    let access_token = data["access_token"]
+        .as_str()
+        .expect("access_token in mobile login response")
+        .to_string();
+    let refresh_token = data["refresh_token"]
+        .as_str()
+        .expect("refresh_token in mobile login response")
+        .to_string();
+    assert!(
+        !access_token.is_empty(),
+        "access_token must be non-empty after customer login"
+    );
+
+    // Site 571 (refresh_token) — refresh issues new tokens for the same customer.
+    throttle().await;
+    let res = post_json("/refresh/mobile", json!({"refresh_token": &refresh_token})).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "Task 11 site 571: refresh_token must succeed for customer with cp.approved + u.pending"
+    );
+    let body: Value = res.json().await.expect("json");
+    let new_access = body["data"]["access_token"].as_str().unwrap_or("");
+    assert!(
+        !new_access.is_empty() && new_access != access_token,
+        "refresh must rotate the access_token (got same token or empty)"
+    );
+}
+
 // =============================================================================
 // Priority 12 — Admin endpoint authorization
 // =============================================================================

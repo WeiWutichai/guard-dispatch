@@ -236,11 +236,21 @@ pub async fn login(
     // If user not found, verify against a dummy hash (constant time).
     let dummy_hash =
         "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // Task 11: approval_status returned here is the EFFECTIVE status per role
+    // (CASE-WHEN + COALESCE). For role='customer' the cp.approval_status overrides
+    // u.approval_status — needed so a customer approved at customer_profiles can
+    // log in even though u.approval_status stays 'pending' forever for them.
     let user = sqlx::query_as::<_, UserRow>(
         r#"
-        SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
-        FROM auth.users
-        WHERE email = $1
+        SELECT u.id, u.email, u.phone, u.password_hash, u.full_name, u.role, u.avatar_url, u.is_active,
+               (CASE WHEN u.role = 'customer'
+                     THEN COALESCE(cp.approval_status, u.approval_status)
+                     ELSE u.approval_status
+                END) AS approval_status,
+               u.created_at, u.updated_at
+        FROM auth.users u
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+        WHERE u.email = $1
         "#,
     )
     .bind(&req.email)
@@ -343,10 +353,22 @@ pub async fn check_status(
     db: &PgPool,
     req: crate::models::CheckStatusRequest,
 ) -> Result<crate::models::CheckStatusResponse, AppError> {
+    // Task 11: approval_status returned here is the EFFECTIVE status per role —
+    // mobile uses it to decide "approved → call login" vs "pending → stay pending".
+    // Customers approved at customer_profiles but u.approval_status='pending' (the
+    // normal post-customer-approval state) were stuck on the pending screen because
+    // mobile only sees raw u.approval_status without this CASE-WHEN.
     let user = sqlx::query_as::<_, UserRow>(
-        r#"SELECT id, email, phone, password_hash, full_name, role, avatar_url,
-                  is_active, approval_status, created_at, updated_at
-           FROM auth.users WHERE phone = $1"#,
+        r#"SELECT u.id, u.email, u.phone, u.password_hash, u.full_name, u.role, u.avatar_url,
+                  u.is_active,
+                  (CASE WHEN u.role = 'customer'
+                        THEN COALESCE(cp.approval_status, u.approval_status)
+                        ELSE u.approval_status
+                   END) AS approval_status,
+                  u.created_at, u.updated_at
+           FROM auth.users u
+           LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+           WHERE u.phone = $1"#,
     )
     .bind(&req.phone)
     .fetch_optional(db)
@@ -421,11 +443,18 @@ pub async fn login_with_phone(
     // If user not found, verify against a dummy hash (constant time).
     let dummy_hash =
         "$argon2id$v=19$m=19456,t=2,p=1$dW5rbm93bg$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // Task 11: effective approval_status per role (see login() for rationale).
     let user = sqlx::query_as::<_, UserRow>(
         r#"
-        SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
-        FROM auth.users
-        WHERE phone = $1
+        SELECT u.id, u.email, u.phone, u.password_hash, u.full_name, u.role, u.avatar_url, u.is_active,
+               (CASE WHEN u.role = 'customer'
+                     THEN COALESCE(cp.approval_status, u.approval_status)
+                     ELSE u.approval_status
+                END) AS approval_status,
+               u.created_at, u.updated_at
+        FROM auth.users u
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+        WHERE u.phone = $1
         "#,
     )
     .bind(&req.phone)
@@ -556,11 +585,18 @@ pub async fn refresh_token(
     .await?
     .ok_or_else(|| AppError::Unauthorized("Invalid or expired refresh token".to_string()))?;
 
+    // Task 11: effective approval_status per role (see login() for rationale).
     let user = sqlx::query_as::<_, UserRow>(
         r#"
-        SELECT id, email, phone, password_hash, full_name, role, avatar_url, is_active, approval_status, created_at, updated_at
-        FROM auth.users
-        WHERE id = $1
+        SELECT u.id, u.email, u.phone, u.password_hash, u.full_name, u.role, u.avatar_url, u.is_active,
+               (CASE WHEN u.role = 'customer'
+                     THEN COALESCE(cp.approval_status, u.approval_status)
+                     ELSE u.approval_status
+                END) AS approval_status,
+               u.created_at, u.updated_at
+        FROM auth.users u
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+        WHERE u.id = $1
         "#,
     )
     .bind(session.user_id)
