@@ -4754,12 +4754,34 @@ pub async fn initiate_call(
         .execute(db)
         .await?;
 
+    // Task 18 — resolve caller's display name so the callee's incoming-call
+    // screen shows who's calling instead of the "ไม่ทราบชื่อ" fallback.
+    // LEFT JOIN customer_profiles to honour the dual-approval data model
+    // (Task 11): a customer's display name lives in customer_profiles, not
+    // in auth.users — guards' lives in auth.users; the COALESCE picks
+    // whichever is set.
+    let caller_name: String = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(cp.full_name, u.full_name, 'User')
+        FROM auth.users u
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = u.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(caller_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "ผู้ใช้".to_string());
+
     spawn_notification(
         db.clone(),
         req.callee_id,
-        "สายเรียกเข้า".to_string(),
+        format!("สายเรียกเข้าจาก {caller_name}"),
         format!(
-            "มีสายเรียกเข้า ({})",
+            "{} ({})",
+            caller_name,
             match req.call_type {
                 crate::models::CallType::Audio => "เสียง",
                 crate::models::CallType::Video => "วิดีโอ",
@@ -4770,6 +4792,7 @@ pub async fn initiate_call(
             "kind": "incoming_call",
             "call_id": row.id.to_string(),
             "caller_id": caller_id.to_string(),
+            "caller_name": caller_name,
             "call_type": req.call_type,
             "target_role": "any",
         })),

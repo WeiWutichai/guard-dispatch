@@ -423,6 +423,7 @@ bool _tryOpenIncomingCall(Map<String, dynamic> data) {
   final callId = data['call_id'] as String?;
   final callerId = data['caller_id'] as String?;
   final callType = (data['call_type'] as String?) ?? 'audio';
+  final callerName = data['caller_name'] as String?;
   if (callId == null || callerId == null) return false;
 
   final nav = appNavigatorKey.currentState;
@@ -434,6 +435,7 @@ bool _tryOpenIncomingCall(Map<String, dynamic> data) {
         callId: callId,
         callerId: callerId,
         callType: callType,
+        callerName: callerName,
       ),
     ),
   );

@@ -1600,6 +1600,7 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
             return;
         }
     };
+    tracing::info!("call_signaling: parsed call_id={}", call_id);
 
     // Authorize — must be caller or callee.
     let participants: Option<(uuid::Uuid, uuid::Uuid)> =
@@ -1619,6 +1620,17 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
         let _ = socket.send(Message::Text("forbidden".into())).await;
         return;
     }
+    let (role_label, peer_id) = if user.user_id == caller_id {
+        ("caller", callee_id)
+    } else {
+        ("callee", caller_id)
+    };
+    tracing::info!(
+        "call_signaling: connected user_id={} call_id={} role={}",
+        user.user_id,
+        call_id,
+        role_label
+    );
 
     // Subscribe to Redis channel `call_sig:{call_id}`
     let mut pubsub = match state.redis_pubsub_client.get_async_pubsub().await {
@@ -1633,6 +1645,7 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
         tracing::error!("call_signaling: subscribe failed: {e}");
         return;
     }
+    tracing::info!("call_signaling: subscribed channel={}", channel);
     let mut pubsub_stream = pubsub.on_message();
 
     // Acknowledge connection
@@ -1642,7 +1655,7 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
         ))
         .await;
 
-    loop {
+    let close_reason: &'static str = loop {
         tokio::select! {
             // pubsub → client
             Some(msg) = pubsub_stream.next() => {
@@ -1653,15 +1666,21 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
                         continue;
                     }
                 }
-                if socket.send(Message::Text(payload.into())).await.is_err() { break; }
+                if socket.send(Message::Text(payload.into())).await.is_err() {
+                    break "send_failed";
+                }
             }
 
             // client → pubsub
             msg = socket.recv() => {
-                let Some(msg) = msg else { break };
+                let Some(msg) = msg else {
+                    break "recv_none";
+                };
                 let text = match msg {
                     Ok(Message::Text(t)) => t,
-                    Ok(Message::Close(_)) => break,
+                    Ok(Message::Close(_)) => {
+                        break "peer_close";
+                    }
                     Ok(Message::Ping(p)) => {
                         let _ = socket.send(Message::Pong(p)).await;
                         continue;
@@ -1680,6 +1699,18 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
                         serde_json::Value::String(user.user_id.to_string()),
                     );
                 }
+                // Log signal type only — never the SDP/ICE body (privacy + log size).
+                let signal_type = value
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                tracing::info!(
+                    "call_signaling: forward signal_type={} from={} to={}",
+                    signal_type,
+                    user.user_id,
+                    peer_id
+                );
                 let out = value.to_string();
 
                 use redis::AsyncCommands;
@@ -1688,5 +1719,10 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
                     conn.publish(&channel, &out).await;
             }
         }
-    }
+    };
+    tracing::info!(
+        "call_signaling: socket closed call_id={} reason={}",
+        call_id,
+        close_reason
+    );
 }
