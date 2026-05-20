@@ -37,7 +37,7 @@ minio          (Port 9000) -- Object Storage (Dev) / Cloudflare R2 (Prod)
 | Mobile App | Flutter (iOS + Android) |
 | Backend | Rust + Axum 0.8 (5 microservices) |
 | Async Runtime | Tokio |
-| ORM / Query | SQLx (compile-time checked macros) |
+| ORM / Query | SQLx (runtime API primary; compile-time macros encouraged for vanilla queries) |
 | Auth | JWT (jsonwebtoken crate) |
 | API Documentation | utoipa 5 + utoipa-swagger-ui 9 |
 | Primary Database | PostgreSQL 16 |
@@ -173,7 +173,7 @@ File attachments (chat images) are stored in MinIO/R2 object storage. PostgreSQL
 
 - **JWT authentication** with httpOnly + Secure + SameSite=Lax cookies (web) and FlutterSecureStorage (mobile)
 - **Rate limiting at Nginx layer** -- auth: 5 req/s, API: 30 req/s, WebSocket: 5 req/s per IP
-- **Global request body limit** of 1MB at Nginx (overridden to 10MB only for chat attachment uploads)
+- **Global request body limit** of 1MB at Nginx; overridden to **205MB for chat attachments** (image up to 10MB + video up to 200MB) and **10MB for profile avatar / guard document uploads**
 - **Audit logging on all services** -- every request is logged to the `audit` schema via middleware
 - **IDOR prevention** on all endpoints -- ownership and role checks enforced at the service layer
 - **Network isolation** -- only Nginx exposes ports to the host; all services, databases, and caches are internal-only

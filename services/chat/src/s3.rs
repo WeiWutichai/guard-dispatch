@@ -66,15 +66,9 @@ pub fn validate_upload(mime_type: &str, file_size: usize, data: &[u8]) -> Result
         MAX_IMAGE_SIZE
     };
     if file_size > max_size {
+        let max_mb = max_size / (1024 * 1024);
         return Err(AppError::BadRequest(format!(
-            "File too large: {} bytes. Maximum: {} bytes ({})",
-            file_size,
-            max_size,
-            if is_video_mime(mime_type) {
-                "50MB"
-            } else {
-                "10MB"
-            }
+            "File too large: {file_size} bytes. Maximum: {max_size} bytes ({max_mb}MB)"
         )));
     }
 

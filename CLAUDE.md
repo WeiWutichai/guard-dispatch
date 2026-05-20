@@ -33,7 +33,7 @@
 ### Backend (Rust ทั้งหมด)
 - **Framework:** Axum 0.8 (ใช้ route syntax `/{id}` ไม่ใช่ `:id`)
 - **Async Runtime:** Tokio (latest stable)
-- **ORM/Query:** SQLx (latest) + compile-time checked macros เท่านั้น
+- **ORM/Query:** SQLx (latest) — runtime API เป็น convention หลัก; compile-time macros (`query!`, `query_as!`) ใช้ได้สำหรับ vanilla query ที่ไม่ใช่ dynamic/cross-crate
 - **Auth:** JWT (jsonwebtoken crate)
 - **OTP:** Phone verification via SMS (INET/Cheese Digital CSGAPI)
 - **Serialization:** Serde + serde_json
@@ -296,7 +296,10 @@ CREATE TABLE notification.fcm_tokens (
 - ใช้ **Axum 0.8** เสมอ — route syntax: `/{id}` ไม่ใช่ `:id`
 - ทุก dependency ต้องเป็น **latest stable version**
 - ทุก endpoint ต้องมี **error handling** ด้วย `Result<T, AppError>`
-- ใช้ **SQLx compile-time macros** เท่านั้น (`query!`, `query_as!`) ห้ามใช้ raw string query
+- **SQLx รองรับ 2 patterns:**
+  - **Runtime API** (`sqlx::query`, `sqlx::query_as::<_, T>`, `sqlx::query_scalar`) — convention หลักของ codebase นี้ ใช้กับ query ปกติ + dynamic / cross-crate cases
+  - **Compile-time macros** (`query!`, `query_as!`) — encourage สำหรับ vanilla SELECT ที่ไม่ใช้ dynamic SQL หรือ cross-schema types — catches SQL/schema mismatch ที่ build time
+  - **ห้ามใช้ raw `format!()` SQL ที่มี user input interpolate** — SQL injection vector. Format string ใช้ได้เฉพาะ static base + parameterized placeholders (`$1`, `$2`, ...) เท่านั้น (เช่น `services/booking/src/service.rs:3221` admin payment query)
 - ทุก Service ต้องเป็น **Stateless** — ห้ามเก็บ session ใน memory
 - Session และ state ทั้งหมดเก็บใน **Redis**
 - GPS data ส่งผ่าน **WebSocket เท่านั้น** ห้ามใช้ REST polling
@@ -306,15 +309,28 @@ CREATE TABLE notification.fcm_tokens (
 - **Location History Columns:** เก็บ `accuracy`, `heading`, `speed` ด้วย (migration 031) — สำหรับ route replay + dispute resolution
 
 ### File Upload
-- ขนาดไฟล์สูงสุด: **10MB ต่อไฟล์**
-- Format ที่รับ: **JPEG, PNG, WEBP เท่านั้น**
-- ต้อง validate ทั้ง **declared MIME type** และ **magic bytes** ก่อน upload เสมอ
+
+**Profile avatar + guard documents** (auth service):
+- Max size: **10MB ต่อไฟล์**
+- Allowed: **JPEG, PNG, WEBP เท่านั้น**
+- Endpoints: `POST /profile/avatar`, `PUT /profile/guard/document/{type}`, registration doc uploads
+
+**Chat attachments** (chat service, bumped 2026-04-25 via #52):
+- Max size: **10MB images, 200MB video**
+- Allowed: **JPEG, PNG, WEBP, MP4, QuickTime (.mov)**
+- Endpoint: `POST /chat/attachments`
+- nginx `/chat/` block: `client_max_body_size 205m`
+
+**ทั้ง 2 endpoint families ต้อง:**
+- Validate ทั้ง **declared MIME type** และ **magic bytes** ก่อน upload เสมอ
   - JPEG: `FF D8 FF`
   - PNG: `89 50 4E 47 0D 0A 1A 0A`
   - WEBP: `RIFF....WEBP` (bytes 0-3 = `RIFF`, bytes 8-11 = `WEBP`)
+  - MP4: bytes 4-7 = `ftyp` (any brand) — chat only
+  - QuickTime: bytes 4-7 = `ftyp` + bytes 8-11 = `qt  ` — chat only
 - ห้ามเชื่อ Content-Type จาก client เพียงอย่างเดียว — ต้องตรวจ magic bytes ด้วยเสมอ
 - ใช้ **Signed URL** เสมอ ห้าม expose bucket โดยตรง
-- file_key format: `chat/{chat_id}/{uuid}.{ext}`
+- file_key format: `chat/{chat_id}/{uuid}.{ext}` หรือ `profiles/{type}/{user_id}.{ext}`
 - URL หมดอายุ: **1 ชั่วโมง**
 - **Presigned URL Host Rewrite:** MinIO ใน Docker มี internal host `http://minio:9000` — browser ไม่สามารถเข้าถึงได้โดยตรง
   - ต้องตั้ง `S3_PUBLIC_URL=http://localhost/minio-files` ใน env — presigned URL จะ replace `http://minio:9000` → `http://localhost/minio-files` ก่อน return ให้ client
@@ -378,7 +394,9 @@ CREATE TABLE notification.fcm_tokens (
   - Docker Compose: ใช้ `expose` ไม่ใช่ `ports` สำหรับ internal services (PostgreSQL, Redis, MinIO)
 - **Nginx:**
   - Security Headers: X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy
-  - **Global `client_max_body_size 1m;`** ที่ http block — override เฉพาะ endpoint ที่ต้องการ (เช่น chat attachments: 10m)
+  - **Global `client_max_body_size 1m;`** ที่ http block — override:
+    - `/chat/` → **205m** (image 10MB + video 200MB)
+    - multipart endpoints อื่น (avatar, guard docs) → 10m
   - **Swagger UI rate limiting:** ทุก Swagger location (`/swagger-ui`, `/api-docs`, `/docs`) ต้องมี `limit_req zone=api_limit burst=10 nodelay`
 - **WebSocket Auth:** Web ใช้ cookie (ส่งอัตโนมัติตอน upgrade); Mobile ใช้ Bearer token ใน `Authorization` header ตอน WS upgrade (ผ่าน `IOWebSocketChannel.connect(headers:)`) — ห้ามส่ง token ใน URL query params
 - **WebSocket Data:** ห้ามส่ง conversation_id หรือ sensitive data ใน URL query params — ส่งเป็น message หลัง connection open
@@ -1364,7 +1382,8 @@ Delete (or flip to `true`) the `if: false` line at `jobs.deploy` in `.github/wor
 - ❌ ห้ามให้ non-guard roles (admin/customer) connect WebSocket GPS — `ws_handler` ต้องตรวจ `user.role == "guard"` ก่อน upgrade
 - ❌ ห้าม store binary/image ใน PostgreSQL
 - ❌ ห้าม expose MinIO/R2 bucket โดยตรง
-- ❌ ห้าม accept ไฟล์ที่ไม่ใช่ image/jpeg, image/png, image/webp
+- ❌ ห้าม profile avatar / guard document accept ไฟล์ที่ไม่ใช่ image/jpeg, image/png, image/webp
+- ❌ ห้าม chat attachments accept ไฟล์ที่ไม่ใช่ image/jpeg, image/png, image/webp, video/mp4, video/quicktime
 - ❌ ห้ามเรียก fetch ตรงใน Frontend — ใช้ `lib/api.ts` (web) หรือ `ApiClient` (mobile) เท่านั้น
 - ❌ ห้ามเก็บ JWT ใน localStorage/sessionStorage — ใช้ httpOnly cookie (web) หรือ FlutterSecureStorage (mobile) เท่านั้น
 - ❌ ห้ามส่ง JWT token ใน WebSocket URL query params — Web ใช้ cookie auth, Mobile ใช้ Bearer header

@@ -227,21 +227,60 @@ Router::new().route("/{id}", get(get_item))
 Router::new().route("/:id", get(get_item))
 ```
 
-**SQLx Compile-Time Macros Only**
+**SQLx — Two Supported Patterns**
 
-Use `query!` and `query_as!` exclusively. Never use raw string queries:
+The codebase supports both runtime API and compile-time macros. Pick what
+fits the query.
+
+- **Runtime API** (`sqlx::query`, `sqlx::query_as::<_, T>`,
+  `sqlx::query_scalar`) -- the established convention across all six service
+  crates. Use this for queries that touch dynamic SQL (e.g.
+  `services/booking/src/service.rs:3221` admin payments base query) or
+  cross-crate schema types (e.g. booking writing to the notification schema
+  whose Rust types live in the notification crate).
+- **Compile-time macros** (`query!`, `query_as!`) -- encouraged for vanilla
+  `SELECT` / `INSERT` / `UPDATE` that doesn't need dynamic SQL or
+  cross-crate types. They catch SQL syntax errors and column/type mismatches
+  at `cargo check` time. Note: enabling macros requires either a live
+  `DATABASE_URL` at build time or a committed `.sqlx/` prepared-metadata
+  directory plus `SQLX_OFFLINE=true`. CI does not currently run
+  `cargo sqlx prepare`, so if you introduce a `query!` you must commit its
+  metadata or set up the prepare step.
 
 ```rust
-// Correct
-let user = sqlx::query_as!(User, "SELECT * FROM auth.users WHERE id = $1", user_id)
-    .fetch_optional(&pool)
-    .await?;
-
-// Wrong -- raw string query without compile-time checking
-let user = sqlx::query("SELECT * FROM auth.users WHERE id = $1")
+// Pattern 1 -- runtime API (current convention)
+let user: Option<User> = sqlx::query_as::<_, User>(
+        "SELECT id, full_name, phone FROM auth.users WHERE id = $1",
+    )
     .bind(user_id)
     .fetch_optional(&pool)
     .await?;
+
+// Pattern 2 -- compile-time macro (preferred for new vanilla queries)
+let user = sqlx::query_as!(
+        User,
+        "SELECT id, full_name, phone FROM auth.users WHERE id = $1",
+        user_id,
+    )
+    .fetch_optional(&pool)
+    .await?;
+```
+
+**Forbidden -- raw `format!()` SQL with user input**
+
+Building a query string by interpolating untrusted values is a direct SQL
+injection vector. Format-string SQL is only acceptable when the
+interpolated values are static base templates -- never user data -- and
+all user input still flows through parameterised placeholders (`$1`, `$2`,
+...):
+
+```rust
+// Correct -- static base + parameterised user input
+let sql = format!("{base} WHERE p.id = $1", base = ADMIN_PAYMENT_BASE_SELECT);
+sqlx::query_as::<_, AdminPaymentRow>(&sql).bind(payment_id).fetch_one(&pool).await?;
+
+// Wrong -- user input interpolated into the SQL string
+let sql = format!("SELECT * FROM users WHERE phone = '{phone}'");
 ```
 
 **Error Handling**
@@ -865,21 +904,41 @@ In Docker, migrations run automatically on first PostgreSQL startup via the
 
 ### Constraints
 
+Constraints differ by endpoint family:
+
+**Profile avatar + guard documents (auth service):**
+
 - Maximum file size: **10 MB** per file
 - Allowed formats: **JPEG, PNG, WEBP** only
+- Endpoints: `POST /profile/avatar`, `PUT /profile/guard/document/{type}`,
+  registration document uploads
+- nginx body limit: 10m (the multipart override)
+
+**Chat attachments (chat service, bumped 2026-04-25 via #52):**
+
+- Maximum file size: **10 MB images, 200 MB video**
+- Allowed formats: **JPEG, PNG, WEBP, MP4, QuickTime (.mov)**
+- Endpoint: `POST /chat/attachments`
+- nginx `/chat/` block: `client_max_body_size 205m`
+
+**Both endpoint families must:**
+
 - Storage: MinIO (development) or Cloudflare R2 (production)
 - Database: Store only URL/file_key -- never store binary data in PostgreSQL
+- Validate both the declared MIME type AND magic bytes
 
 ### Magic Bytes Validation
 
 You must validate file content by checking magic bytes. Do not trust the
 client-provided Content-Type header alone:
 
-| Format | Magic Bytes                              | Hex Values                       |
-|--------|------------------------------------------|----------------------------------|
-| JPEG   | First 3 bytes                            | `FF D8 FF`                       |
-| PNG    | First 8 bytes                            | `89 50 4E 47 0D 0A 1A 0A`       |
-| WEBP   | Bytes 0-3 = `RIFF`, bytes 8-11 = `WEBP` | `52 49 46 46 .... 57 45 42 50`   |
+| Format    | Magic Bytes                                       | Hex Values                       |
+|-----------|---------------------------------------------------|----------------------------------|
+| JPEG      | First 3 bytes                                     | `FF D8 FF`                       |
+| PNG       | First 8 bytes                                     | `89 50 4E 47 0D 0A 1A 0A`       |
+| WEBP      | Bytes 0-3 = `RIFF`, bytes 8-11 = `WEBP`           | `52 49 46 46 .... 57 45 42 50`   |
+| MP4       | Bytes 4-7 = `ftyp` (chat only)                    | `66 74 79 70`                    |
+| QuickTime | Bytes 4-7 = `ftyp` + bytes 8-11 = `qt  ` (chat)   | `66 74 79 70 .... 71 74 20 20`   |
 
 Example validation in Rust:
 
