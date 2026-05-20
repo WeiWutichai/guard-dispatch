@@ -1655,6 +1655,44 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
         ))
         .await;
 
+    // Replay any signals that were published before this peer subscribed.
+    // The publisher mirrors every publish into a Redis LIST with TTL 60s so
+    // the late-joining peer (typically the callee, after they tap accept)
+    // can catch up on offer + ICE candidates that arrived during the
+    // pre-accept gap. See Task 19.
+    let buffer_key = format!("call_sig_buf:{call_id}");
+    {
+        use redis::AsyncCommands;
+        let mut conn = state.redis_pubsub_conn.clone();
+        let buffered: Result<Vec<String>, redis::RedisError> =
+            conn.lrange(&buffer_key, 0, -1).await;
+        if let Ok(items) = buffered {
+            let replay_count = items.len();
+            for payload in items {
+                // Drop self-echo, same as the live path
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    if v.get("sender_id").and_then(|x| x.as_str())
+                        == Some(&user.user_id.to_string())
+                    {
+                        continue;
+                    }
+                }
+                if socket.send(Message::Text(payload.into())).await.is_err() {
+                    tracing::warn!("call_signaling: replay send failed call_id={}", call_id);
+                    return;
+                }
+            }
+            if replay_count > 0 {
+                tracing::info!(
+                    "call_signaling: replayed {} buffered signals to user_id={} call_id={}",
+                    replay_count,
+                    user.user_id,
+                    call_id
+                );
+            }
+        }
+    }
+
     let close_reason: &'static str = loop {
         tokio::select! {
             // pubsub → client
@@ -1717,9 +1755,31 @@ async fn handle_call_signaling(mut socket: WebSocket, state: Arc<AppState>, user
                 let mut conn = state.redis_pubsub_conn.clone();
                 let _: Result<(), redis::RedisError> =
                     conn.publish(&channel, &out).await;
+
+                // Mirror to buffer for late-joining peer (Task 19).
+                // RPUSH preserves FIFO order (offer first, then candidates).
+                // EXPIRE keeps the buffer to 60s — long enough for typical
+                // accept latency (~10-15s observed in production), short
+                // enough that stale buffers don't pile up. The buffer is
+                // naturally drained on second-peer subscribe.
+                let _: Result<(), redis::RedisError> =
+                    conn.rpush(&buffer_key, &out).await;
+                let _: Result<(), redis::RedisError> =
+                    conn.expire(&buffer_key, 60).await;
             }
         }
     };
+
+    // Clean up the signal buffer on session end.
+    // Note: EXPIRE 60s is the safety net; this DEL is the happy-path cleanup.
+    // Two peers will close their sockets; the first to close will DEL the
+    // buffer (race-safe, idempotent).
+    {
+        use redis::AsyncCommands;
+        let mut conn = state.redis_pubsub_conn.clone();
+        let _: Result<(), redis::RedisError> = conn.del(&buffer_key).await;
+    }
+
     tracing::info!(
         "call_signaling: socket closed call_id={} reason={}",
         call_id,
