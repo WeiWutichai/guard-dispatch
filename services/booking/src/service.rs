@@ -1261,7 +1261,7 @@ pub async fn get_guard_work_history(
                 COUNT(*) AS total_jobs,
                 COALESCE(SUM(
                     EXTRACT(EPOCH FROM (a.completed_at - a.arrived_at))::bigint / 60
-                ), 0) AS total_minutes,
+                ), 0)::bigint AS total_minutes,
                 (SELECT AVG(r.overall_rating)
                  FROM reviews.guard_reviews r WHERE r.guard_id = $1) AS avg_rating
             FROM booking.assignments a
@@ -1272,6 +1272,39 @@ pub async fn get_guard_work_history(
         .fetch_one(db),
         {
             match status {
+                Some("ongoing") => {
+                    // Pseudo-status mapping: ongoing = assigned + en_route + arrived.
+                    // Frontend tab "กำลังดำเนินการ" sends 'ongoing'; expand here so
+                    // we don't leak the assignment_status enum vocabulary across the
+                    // API boundary. Match arm must precede the generic Some(s) below.
+                    sqlx::query_as::<_, WorkHistoryRow>(
+                        r#"
+                        SELECT gr.id, a.id AS assignment_id,
+                               COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.description,
+                               gr.offered_price, a.status AS assignment_status,
+                               a.assigned_at, a.arrived_at, a.completed_at,
+                               EXTRACT(EPOCH FROM (a.completed_at - a.arrived_at))::bigint / 60 AS duration_minutes,
+                               rv.overall_rating AS rating
+                        FROM booking.guard_requests gr
+                        INNER JOIN booking.assignments a ON a.request_id = gr.id
+                        INNER JOIN auth.users u ON u.id = gr.customer_id
+                        LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
+                        LEFT JOIN reviews.guard_reviews rv ON rv.assignment_id = a.id
+                        WHERE a.guard_id = $1
+                          AND a.status IN (
+                              'assigned'::assignment_status,
+                              'en_route'::assignment_status,
+                              'arrived'::assignment_status
+                          )
+                        ORDER BY a.assigned_at DESC
+                        LIMIT $2 OFFSET $3
+                        "#,
+                    )
+                    .bind(guard_id)
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(db)
+                }
                 Some(s) => {
                     sqlx::query_as::<_, WorkHistoryRow>(
                         r#"
