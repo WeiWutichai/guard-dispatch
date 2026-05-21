@@ -185,9 +185,15 @@ class BookingProvider extends ChangeNotifier {
   }) async {
     try {
       await _service.updateAssignmentStatus(assignmentId, status, lat: lat, lng: lng);
-      // Refresh jobs and active job after status update
-      await fetchJobs();
-      await fetchActiveJob();
+      // Refresh jobs, active job, and dashboard in parallel after status
+      // transition (en_route → arrived → pending_completion). Same family
+      // of bug as BUG-003 — without fetchDashboard() the busy badge and
+      // tile counts stay stale until pull-to-refresh.
+      await Future.wait([
+        fetchJobs(),
+        fetchActiveJob(),
+        fetchDashboard(),
+      ]);
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -421,8 +427,15 @@ class BookingProvider extends ChangeNotifier {
     _error = null;
     try {
       await _service.acceptDeclineAssignment(assignmentId, true);
-      await fetchJobs();
-      await fetchActiveJob();
+      // Refresh dashboard, jobs list, and active job in parallel so the
+      // home tab's "งานใหม่ N รายการ" tile reflects the new state.
+      // Without fetchDashboard() the tile reads stale pending_acceptance_count
+      // until the user pulls-to-refresh — see BUG-003.
+      await Future.wait([
+        fetchJobs(),
+        fetchActiveJob(),
+        fetchDashboard(),
+      ]);
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -434,7 +447,13 @@ class BookingProvider extends ChangeNotifier {
     _error = null;
     try {
       await _service.acceptDeclineAssignment(assignmentId, false);
-      await fetchJobs();
+      // Refresh dashboard + jobs in parallel so the home tab tile updates.
+      // No fetchActiveJob() — decline doesn't create an active job.
+      // See BUG-003 for full context.
+      await Future.wait([
+        fetchJobs(),
+        fetchDashboard(),
+      ]);
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -448,8 +467,13 @@ class BookingProvider extends ChangeNotifier {
     _error = null;
     try {
       await _service.cancelUnpaidAssignment(assignmentId);
-      await fetchJobs();
-      await fetchActiveJob();
+      // Refresh in parallel after cancellation. Same BUG-003 family —
+      // dashboard tile counts must reflect that this job is gone.
+      await Future.wait([
+        fetchJobs(),
+        fetchActiveJob(),
+        fetchDashboard(),
+      ]);
     } catch (e) {
       _error = e.toString();
       notifyListeners();
@@ -525,6 +549,14 @@ class BookingProvider extends ChangeNotifier {
       final result = await _service.startJob(assignmentId, lat: lat, lng: lng);
       _activeJob = result;
       notifyListeners();
+      // Also refresh jobs and dashboard so home tab tile reflects the
+      // started job. Same BUG-003 family. _activeJob inline update above
+      // gives instant feedback for the detail screen — these refresh
+      // the dependent tiles afterward.
+      await Future.wait([
+        fetchJobs(),
+        fetchDashboard(),
+      ]);
       return result;
     } catch (e) {
       _error = e.toString();
