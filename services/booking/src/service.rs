@@ -393,12 +393,24 @@ pub async fn list_requests(
 // =============================================================================
 
 pub async fn get_request(db: &PgPool, request_id: Uuid) -> Result<GuardRequestResponse, AppError> {
+    // BUG-013: populate `customer_name` via JOIN so the guard-side FCM-tap
+    // fallback path (push_notification_bootstrap → getRequest +
+    // getAssignments + _composeGuardJobMap) renders the real customer name
+    // instead of the "-" placeholder. Mirrors the JOIN pattern in
+    // `get_guard_jobs` (~line 983-984). Customer's display name lives in
+    // `auth.customer_profiles` for users who registered as customer, falls
+    // back to `auth.users.full_name` for guards who haven't registered a
+    // customer profile (dual-role accounts).
     let row = sqlx::query_as::<_, GuardRequestRow>(
         r#"
-        SELECT gr.id, gr.customer_id, gr.location_lat, gr.location_lng, gr.address,
+        SELECT gr.id, gr.customer_id,
+               COALESCE(cp.full_name, u.full_name) AS customer_name,
+               gr.location_lat, gr.location_lng, gr.address,
                gr.description, gr.offered_price, gr.special_instructions, gr.status,
                gr.urgency, gr.booked_hours, gr.guard_count, la.assignment_status, gr.created_at, gr.updated_at
         FROM booking.guard_requests gr
+        INNER JOIN auth.users u ON u.id = gr.customer_id
+        LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
         LEFT JOIN LATERAL (
             SELECT a.status AS assignment_status
             FROM booking.assignments a

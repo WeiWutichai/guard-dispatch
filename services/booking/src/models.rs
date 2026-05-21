@@ -154,6 +154,11 @@ pub struct SubmitReviewResponse {
 pub struct GuardRequestResponse {
     pub id: Uuid,
     pub customer_id: Uuid,
+    /// Populated by `get_request` only (BUG-013). Other queries that decode
+    /// into `GuardRequestRow` skip the JOIN and the row's
+    /// `customer_name` defaults to `None`, yielding `"-"` here so the
+    /// frontend's placeholder logic still renders something.
+    pub customer_name: String,
     pub location_lat: f64,
     pub location_lng: f64,
     pub address: String,
@@ -578,6 +583,12 @@ pub struct ActiveJobResponse {
 pub struct GuardRequestRow {
     pub id: Uuid,
     pub customer_id: Uuid,
+    /// `#[sqlx(default)]` keeps the existing 10 queries (which don't JOIN
+    /// auth.users / customer_profiles) compatible — they decode to `None`.
+    /// Only `get_request` populates it via COALESCE(cp.full_name, u.full_name).
+    /// See BUG-013.
+    #[sqlx(default)]
+    pub customer_name: Option<String>,
     pub location_lat: f64,
     pub location_lng: f64,
     pub address: String,
@@ -599,6 +610,7 @@ impl From<GuardRequestRow> for GuardRequestResponse {
         Self {
             id: row.id,
             customer_id: row.customer_id,
+            customer_name: row.customer_name.unwrap_or_else(|| "-".to_string()),
             location_lat: row.location_lat,
             location_lng: row.location_lng,
             address: row.address,

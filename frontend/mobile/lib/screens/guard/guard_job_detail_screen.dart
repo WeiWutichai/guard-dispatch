@@ -45,6 +45,12 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
   // Progress reports
   List<Map<String, dynamic>> _progressReports = [];
 
+  // BUG-014 cancellation watchdog. Set to true the first time our
+  // assignment shows up in BookingProvider's lists, so that a later
+  // disappearance is interpreted as a customer cancellation (rather than
+  // a transient "fetch hasn't populated yet" state).
+  bool _sawJobInList = false;
+
   @override
   void initState() {
     super.initState();
@@ -52,6 +58,54 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
     _startPaymentPollingIfNeeded();
     _connectAssignmentWs();
     _fetchProgressReports();
+    // Listen for cross-side cancellation. BookingProvider refreshes on
+    // FCM arrival (Task 26); we just need to check after each refresh
+    // whether our specific assignment was cancelled out from under us.
+    // See BUG-014.
+    context.read<BookingProvider>().addListener(_checkCancellation);
+  }
+
+  /// BUG-014. When the customer cancels a request the assignment row
+  /// changes to `cancelled`, which falls outside both filters that
+  /// `BookingProvider.fetchJobs()` populates (`currentJobs` keeps active
+  /// statuses; `completedJobs` keeps only `'completed'`). Therefore the
+  /// signal that the customer cancelled is: the assignment is no longer
+  /// in EITHER list. We additionally require having seen the job at
+  /// least once (`_sawJobInList`) so the FCM-tap fallback path — where
+  /// the screen mounts before fetchJobs() has populated the cache —
+  /// doesn't false-positive on its first listener call.
+  void _checkCancellation() {
+    if (!mounted) return;
+    final assignmentId = _job['assignment_id'] as String?;
+    if (assignmentId == null) return;
+    // Already cancelled locally — nothing to do.
+    if (_job['assignment_status'] == 'cancelled') return;
+
+    final provider = context.read<BookingProvider>();
+    // Skip while a fetch is in flight; we'll re-fire when it completes.
+    if (provider.isLoading) return;
+
+    final inCurrent = provider.currentJobs
+        .any((j) => j['assignment_id'] == assignmentId);
+    final inCompleted = provider.completedJobs
+        .any((j) => j['assignment_id'] == assignmentId);
+
+    if (inCurrent || inCompleted) {
+      _sawJobInList = true;
+      return;
+    }
+    if (!_sawJobInList) return;
+
+    setState(() => _job['assignment_status'] = 'cancelled');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('งานนี้ถูกยกเลิกโดยลูกค้า'),
+        duration: Duration(milliseconds: 1500),
+      ),
+    );
+    Future.delayed(const Duration(milliseconds: 1600), () {
+      if (mounted) Navigator.pop(context);
+    });
   }
 
   Future<void> _fetchProgressReports() async {
@@ -71,6 +125,8 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
     _paymentTimer?.cancel();
     _wsSub?.cancel();
     _wsChannel?.sink.close();
+    // Stop watching BookingProvider — pair to addListener in initState.
+    context.read<BookingProvider>().removeListener(_checkCancellation);
     super.dispose();
   }
 
