@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/booking_provider.dart';
 import '../providers/chat_provider.dart';
+import '../providers/notification_provider.dart';
 import '../screens/chat_list_screen.dart';
 import '../screens/chat_screen.dart';
 import '../screens/guard/guard_job_detail_screen.dart';
@@ -99,6 +100,17 @@ Future<void> initPushNotifications() async {
       final notification = message.notification;
       if (notification == null) return;
 
+      // Capture provider references BEFORE _localNotifs.show() to avoid
+      // the use_build_context_synchronously lint — show() returns a
+      // Future that the analyzer treats as an async gap, even though we
+      // don't await it. Both calls are fire-and-forget so the visible
+      // order (banner first, fetch second) is unchanged from the user's
+      // perspective.
+      final ctx = appNavigatorKey.currentContext;
+      final auth = ctx?.read<AuthProvider>();
+      final booking = ctx?.read<BookingProvider>();
+      final notif = ctx?.read<NotificationProvider>();
+
       _localNotifs.show(
         notification.hashCode,
         notification.title,
@@ -121,6 +133,27 @@ Future<void> initPushNotifications() async {
         // JSON-encode the FCM data map so the tap handler can decode it back.
         payload: message.data.isEmpty ? null : jsonEncode(message.data),
       );
+
+      // Refresh providers so home tab tiles + notification badge reflect
+      // the new state without requiring pull-to-refresh. Blanket refresh
+      // is intentional — every FCM payload we send affects at least one
+      // of these (dashboard counts, jobs list, unread count, customer
+      // requests). API endpoints are fast (~50ms) and we only fire when
+      // a notification actually arrives, not on a timer. See BUG-012.
+      //
+      // `_routeFromPayload` (tap path) is unchanged: each destination
+      // screen still fetches its own state in initState.
+      if (auth != null && booking != null && notif != null) {
+        if (auth.role == 'guard') {
+          booking.fetchDashboard();
+          booking.fetchJobs();
+          booking.fetchActiveJob();
+          notif.fetchUnreadCount(role: 'guard');
+        } else if (auth.role == 'customer') {
+          booking.fetchMyRequests();
+          notif.fetchUnreadCount(role: 'customer');
+        }
+      }
     });
 
     // Tap on a system push while the app is backgrounded → route by payload.
