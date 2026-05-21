@@ -469,19 +469,41 @@ pub async fn cancel_request(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Also cancel any active assignments
-    sqlx::query(
+    // Also cancel any active assignments and capture the guards whose
+    // assignment was just cancelled so we can notify them after commit.
+    let cancelled_guard_ids: Vec<Uuid> = sqlx::query_scalar(
         r#"
         UPDATE booking.assignments
         SET status = 'cancelled'::assignment_status
         WHERE request_id = $1 AND status NOT IN ('completed', 'cancelled')
+        RETURNING guard_id
         "#,
     )
     .bind(request_id)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
 
     tx.commit().await?;
+
+    // Notify each guard whose assignment was just cancelled (BUG-011).
+    // Frontend (push_notification_bootstrap.dart) routes on request_id +
+    // target_role=guard → opens GuardJobDetailScreen with the freshly-
+    // cancelled status visible. spawn_notification is fire-and-forget so
+    // the HTTP response is not blocked on push delivery.
+    for guard_id in cancelled_guard_ids {
+        spawn_notification(
+            db.clone(),
+            guard_id,
+            "งานถูกยกเลิก".to_string(),
+            format!("ลูกค้าได้ยกเลิกงานที่ {}", row.address),
+            "booking_cancelled",
+            Some(serde_json::json!({
+                "kind": "booking_cancelled",
+                "request_id": request_id.to_string(),
+                "target_role": "guard",
+            })),
+        );
+    }
 
     Ok(GuardRequestResponse::from(row))
 }
