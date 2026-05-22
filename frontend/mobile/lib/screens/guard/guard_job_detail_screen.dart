@@ -63,6 +63,10 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
     // whether our specific assignment was cancelled out from under us.
     // See BUG-014.
     context.read<BookingProvider>().addListener(_checkCancellation);
+    // BUG-015 Issue B. Sibling listener: pull fresh assignment_status
+    // from provider into _job so the action button stops showing a
+    // stale label after a successful status transition.
+    context.read<BookingProvider>().addListener(_syncStatusFromProvider);
   }
 
   /// BUG-014. When the customer cancels a request the assignment row
@@ -108,6 +112,46 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
     });
   }
 
+  // BUG-015 Issue B. _buildStatusActionButton derives its label + action
+  // from `_job['assignment_status']`, but a successful
+  // updateAssignmentStatus() call only refreshes BookingProvider —
+  // _job stays stale, so the button keeps showing the previous-state
+  // label (e.g. "เริ่มเดินทาง" after en_route already fired). Mirror
+  // the cancellation listener pattern: after each provider refresh,
+  // re-read the assignment status from currentJobs and sync into _job.
+  void _syncStatusFromProvider() {
+    if (!mounted) return;
+    final assignmentId = _job['assignment_id'] as String?;
+    if (assignmentId == null) return;
+    final provider = context.read<BookingProvider>();
+    if (provider.isLoading) return;
+
+    final fresh = provider.currentJobs.firstWhere(
+      (j) => j['assignment_id'] == assignmentId,
+      orElse: () => <String, dynamic>{},
+    );
+    final freshStatus = fresh['assignment_status'] as String?;
+    if (freshStatus == null) return;
+    if (freshStatus == _job['assignment_status']) return;
+
+    setState(() {
+      _job['assignment_status'] = freshStatus;
+      // Pull along any timestamp/place fields populated by the same
+      // backend response — the button branches read started_at to
+      // promote 'arrived' → 'started', and downstream UI needs the
+      // en_route / arrived / started coordinates + places.
+      for (final key in const [
+        'en_route_at', 'arrived_at', 'started_at',
+        'completed_at', 'completion_requested_at',
+        'en_route_lat', 'en_route_lng', 'en_route_place',
+        'arrived_lat', 'arrived_lng', 'arrived_place',
+        'started_lat', 'started_lng', 'started_place',
+      ]) {
+        if (fresh[key] != null) _job[key] = fresh[key];
+      }
+    });
+  }
+
   Future<void> _fetchProgressReports() async {
     final assignmentId = _job['assignment_id'] as String?;
     if (assignmentId == null) return;
@@ -127,6 +171,7 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
     _wsChannel?.sink.close();
     // Stop watching BookingProvider — pair to addListener in initState.
     context.read<BookingProvider>().removeListener(_checkCancellation);
+    context.read<BookingProvider>().removeListener(_syncStatusFromProvider);
     super.dispose();
   }
 
@@ -1770,6 +1815,48 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
     }
   }
 
+  // BUG-015 Issue A. Guard rail against accidental status changes.
+  // The status-action button sits in a prominent position right after
+  // accept, and a stray tap currently fires a real PUT
+  // /assignments/{id}/status with no UX confirmation. Wrap each
+  // state-changing branch (en_route, started) with a yes/no dialog
+  // so the guard has to confirm before the network call.
+  Future<bool> _confirmStatusChange({
+    required String title,
+    required String body,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          title,
+          style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          body,
+          style: GoogleFonts.inter(fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('ยกเลิก'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('ยืนยัน'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   Widget _buildStatusActionButton(BuildContext context, bool isThai) {
     final assignmentId = _job['assignment_id'] as String? ?? '';
     final rawStatus = _job['assignment_status'] as String? ?? 'assigned';
@@ -1838,6 +1925,13 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
               );
             }
           } else if (status == 'arrived') {
+            // BUG-015 Issue A — confirm before kicking off the job.
+            final confirmed = await _confirmStatusChange(
+              title: 'ยืนยันเริ่มงาน',
+              body: 'คุณพร้อมเริ่มงานแล้วใช่หรือไม่?',
+            );
+            if (!confirmed) return;
+            if (!context.mounted) return;
             try {
               // Capture GPS at job start
               double? startLat, startLng;
@@ -1882,6 +1976,17 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
               );
             }
           } else if (status == 'accepted' || status == 'assigned') {
+            // BUG-015 Issue A — confirm before firing 'en_route'.
+            // PM reported accidental taps changing status without
+            // user intent; status transitions are one-way (backend
+            // rejects en_route → en_route with 400) so a stray tap
+            // is unrecoverable from inside this screen.
+            final confirmed = await _confirmStatusChange(
+              title: 'ยืนยันการเริ่มเดินทาง',
+              body: 'คุณต้องการเริ่มเดินทางไปที่หมายตอนนี้หรือไม่?',
+            );
+            if (!confirmed) return;
+            if (!context.mounted) return;
             // Start Route → capture GPS + update status + navigate to map
             final customerLat = (_job['location_lat'] as num?)?.toDouble();
             final customerLng = (_job['location_lng'] as num?)?.toDouble();
