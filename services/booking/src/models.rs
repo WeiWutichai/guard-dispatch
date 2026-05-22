@@ -538,6 +538,14 @@ pub struct ActiveJobResponse {
     pub customer_id: Uuid,
     pub customer_name: String,
     pub address: String,
+    // BUG-015 Issue B. Customer's destination coordinates so the guard
+    // navigation screen has a target — NOT NULL in booking.guard_requests
+    // (migration 002), so non-Optional here. Previously absent, which
+    // silent-failed the "ดูแผนที่นำทาง" button when the home tab's busy
+    // badge sourced _job from /guard/active-job (this struct) instead of
+    // /guard/jobs (GuardJobResponse, which has them).
+    pub location_lat: f64,
+    pub location_lng: f64,
     pub booked_hours: i32,
     pub started_at: Option<DateTime<Utc>>,
     pub remaining_seconds: Option<i64>,

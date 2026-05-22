@@ -2275,13 +2275,15 @@ pub async fn start_job(
         customer_id: Uuid,
         customer_name: Option<String>,
         address: String,
+        location_lat: f64,
+        location_lng: f64,
         booked_hours: Option<i32>,
         offered_price: Option<rust_decimal::Decimal>,
     }
 
     let info = sqlx::query_as::<_, RequestInfo>(
         r#"
-        SELECT gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours, gr.offered_price
+        SELECT gr.customer_id, COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.location_lat, gr.location_lng, gr.booked_hours, gr.offered_price
         FROM booking.guard_requests gr
         INNER JOIN auth.users u ON u.id = gr.customer_id
         LEFT JOIN auth.customer_profiles cp ON cp.user_id = gr.customer_id
@@ -2303,6 +2305,8 @@ pub async fn start_job(
         customer_id: info.customer_id,
         customer_name: info.customer_name.unwrap_or_else(|| "-".to_string()),
         address: info.address,
+        location_lat: info.location_lat,
+        location_lng: info.location_lng,
         booked_hours,
         started_at: Some(now),
         remaining_seconds: Some(remaining_seconds),
@@ -2341,6 +2345,8 @@ pub async fn get_active_job(
         customer_id: Uuid,
         customer_name: Option<String>,
         address: String,
+        location_lat: f64,
+        location_lng: f64,
         booked_hours: Option<i32>,
         started_at: Option<chrono::DateTime<Utc>>,
         completion_requested_at: Option<chrono::DateTime<Utc>>,
@@ -2365,7 +2371,7 @@ pub async fn get_active_job(
     let row = sqlx::query_as::<_, ActiveJobRow>(
         r#"
         SELECT a.id AS assignment_id, gr.id AS request_id, gr.customer_id,
-               COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.booked_hours,
+               COALESCE(cp.full_name, u.full_name) AS customer_name, gr.address, gr.location_lat, gr.location_lng, gr.booked_hours,
                a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price,
                a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_at, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
                a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place
@@ -2398,6 +2404,8 @@ pub async fn get_active_job(
                 customer_id: r.customer_id,
                 customer_name: r.customer_name.unwrap_or_else(|| "-".to_string()),
                 address: r.address,
+                location_lat: r.location_lat,
+                location_lng: r.location_lng,
                 booked_hours,
                 started_at: r.started_at,
                 remaining_seconds,
@@ -2456,6 +2464,8 @@ pub async fn get_customer_active_job(
         request_id: Uuid,
         guard_name: Option<String>,
         address: String,
+        location_lat: f64,
+        location_lng: f64,
         booked_hours: Option<i32>,
         started_at: Option<chrono::DateTime<Utc>>,
         completion_requested_at: Option<chrono::DateTime<Utc>>,
@@ -2480,7 +2490,7 @@ pub async fn get_customer_active_job(
     let row = sqlx::query_as::<_, ActiveJobRow>(
         r#"
         SELECT a.id AS assignment_id, gr.id AS request_id,
-               u.full_name AS guard_name, gr.address, gr.booked_hours,
+               u.full_name AS guard_name, gr.address, gr.location_lat, gr.location_lng, gr.booked_hours,
                a.started_at, a.completion_requested_at, a.status AS assignment_status, gr.offered_price,
                a.en_route_at, a.en_route_lat, a.en_route_lng, a.arrived_at, a.arrived_lat, a.arrived_lng, a.en_route_place, a.arrived_place,
                a.started_lat, a.started_lng, a.started_place, a.completion_lat, a.completion_lng, a.completion_place
@@ -2512,6 +2522,8 @@ pub async fn get_customer_active_job(
                 customer_id: user_id,
                 customer_name: r.guard_name.unwrap_or_else(|| "-".to_string()),
                 address: r.address,
+                location_lat: r.location_lat,
+                location_lng: r.location_lng,
                 booked_hours,
                 started_at: r.started_at,
                 remaining_seconds,
