@@ -120,6 +120,11 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
             CameraFit.bounds(
               bounds: bounds,
               padding: const EdgeInsets.all(60),
+              // BUG-017. Cap auto-fit so when guard+customer are close
+              // (e.g. same building) the camera doesn't collapse onto
+              // building-rooftop tiles with no road context. 16 keeps
+              // street-level detail; user can still zoom in via +/-.
+              maxZoom: 16,
             ),
           );
         }
@@ -456,6 +461,10 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                         CameraFit.bounds(
                           bounds: bounds,
                           padding: const EdgeInsets.all(60),
+                          // BUG-017. Same cap as the auto-fit path so
+                          // manual recenter behaves consistently when
+                          // guard is close to customer.
+                          maxZoom: 16,
                         ),
                       );
                     },
