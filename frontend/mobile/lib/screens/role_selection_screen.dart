@@ -96,10 +96,34 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
         }
         return;
       }
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => dashboard),
-      );
+      // BUG-023. Mirror the customer branch above for the guard tile.
+      // Previously this path was an unconditional pushReplacement to
+      // the dashboard widget the caller hard-coded as
+      // GuardDashboardScreen, so an authenticated customer tapping
+      // the guard tile reached the guard UI. Gate on the authoritative
+      // role from /auth/me (auth.role) instead. Backend already
+      // refuses guard-only API calls from a customer JWT; this closes
+      // the UI gate so the user never gets onto the guard screens.
+      if (role == 'guard') {
+        if (auth.role == 'guard') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => dashboard),
+          );
+          return;
+        }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'บัญชีนี้ยังไม่ได้ลงทะเบียนเป็นเจ้าหน้าที่ '
+                'กรุณาลงทะเบียนเป็นเจ้าหน้าที่ก่อน'),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
       return;
     }
 
