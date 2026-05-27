@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
+import '../../providers/booking_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
 import 'tabs/guard_home_tab.dart';
@@ -27,9 +29,26 @@ class _GuardDashboardScreenState extends State<GuardDashboardScreen> {
   ];
 
   void _switchTab(int index) {
+    if (index == _currentIndex) return;
     setState(() {
       _currentIndex = index;
     });
+
+    // BUG-022. IndexedStack keeps every child mounted, so each tab's
+    // initState fires exactly once at dashboard mount. When data
+    // changes server-side while another tab is active (e.g. new
+    // pending_acceptance arrives via FCM while user is on home tab),
+    // the receiving tab's cached list stays stale on switch-in.
+    // Refresh the provider's relevant slice on switch so the tab
+    // the user lands on reflects current state.
+    //
+    // Fire-and-forget — notifyListeners() inside the fetchers drives
+    // the tab's rebuild when data arrives.
+    if (index == 1) {
+      context.read<BookingProvider>().fetchJobs();
+    } else if (index == 0) {
+      context.read<BookingProvider>().fetchDashboard();
+    }
   }
 
   @override
@@ -54,11 +73,10 @@ class _GuardDashboardScreenState extends State<GuardDashboardScreen> {
         ),
         child: BottomNavigationBar(
           currentIndex: _currentIndex,
-          onTap: (index) {
-            setState(() {
-              _currentIndex = index;
-            });
-          },
+          // BUG-022. Route through _switchTab so bottom-bar taps get
+          // the same refresh-on-switch behavior as the home-tile
+          // "ดูงานใหม่" button (which already calls _switchTab).
+          onTap: _switchTab,
           type: BottomNavigationBarType.fixed,
           backgroundColor: Colors.white,
           selectedItemColor: AppColors.primary,
