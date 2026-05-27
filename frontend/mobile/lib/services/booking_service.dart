@@ -278,6 +278,12 @@ class BookingService {
     final response = await _apiClient.dio.post(
       '/booking/requests/$requestId/assign',
       data: {'guard_id': guardId},
+      // BUG-020. Booking confirmation does a locked transaction +
+      // FCM spawn under poor mobile signal can push receive past
+      // the default 15s. Other endpoints keep default; this is a
+      // write that commits state regardless of client timeout, so
+      // failing fast does more harm than good.
+      options: Options(receiveTimeout: const Duration(seconds: 30)),
     );
     return response.data['data'] as Map<String, dynamic>;
   }
