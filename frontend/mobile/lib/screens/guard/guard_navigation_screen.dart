@@ -154,6 +154,12 @@ class _GuardNavigationScreenState extends State<GuardNavigationScreen> {
       CameraFit.bounds(
         bounds: bounds,
         padding: const EdgeInsets.all(60),
+        // BUG-019. Mirror of Task 31's customer-tracking fix. When
+        // guard + customer are physically close (test devices in
+        // the same building, distance ≈ 0 km) the bounds are tiny
+        // and fitCamera collapses to building-rooftop tiles with no
+        // road context. 16 keeps street-level detail.
+        maxZoom: 16,
       ),
     );
   }

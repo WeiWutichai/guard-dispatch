@@ -763,59 +763,69 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                     ),
                     // En route time + location badge
                     if (_enRouteAt != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.directions_car_rounded,
-                                    size: 14, color: AppColors.primary),
-                                const SizedBox(width: 4),
-                                Text(
-                                  _formatCheckinTime(_enRouteAt),
-                                  style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.primary,
+                      // BUG-018. Wrap in Flexible so the badge can
+                      // shrink below its intrinsic width when the
+                      // place string is long; without this the badge
+                      // pushes the sibling Expanded child below its
+                      // min content width and the guard name wraps
+                      // character-by-character. Flexible (not
+                      // Expanded) — badge keeps its natural width
+                      // when there is room.
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.directions_car_rounded,
+                                      size: 14, color: AppColors.primary),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    _formatCheckinTime(_enRouteAt),
+                                    style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (_enRoutePlace != null || (_enRouteLat != null && _enRouteLng != null))
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.pin_drop_outlined,
+                                          size: 10,
+                                          color: AppColors.textSecondary
+                                              .withValues(alpha: 0.7)),
+                                      const SizedBox(width: 2),
+                                      Flexible(
+                                        child: Text(
+                                          _enRoutePlace ?? '${_enRouteLat!.toStringAsFixed(5)}, ${_enRouteLng!.toStringAsFixed(5)}',
+                                          style: GoogleFonts.inter(
+                                            fontSize: 10,
+                                            color: AppColors.textSecondary
+                                                .withValues(alpha: 0.7),
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
-                            ),
-                            if (_enRoutePlace != null || (_enRouteLat != null && _enRouteLng != null))
-                              Padding(
-                                padding: const EdgeInsets.only(top: 2),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.pin_drop_outlined,
-                                        size: 10,
-                                        color: AppColors.textSecondary
-                                            .withValues(alpha: 0.7)),
-                                    const SizedBox(width: 2),
-                                    Flexible(
-                                      child: Text(
-                                        _enRoutePlace ?? '${_enRouteLat!.toStringAsFixed(5)}, ${_enRouteLng!.toStringAsFixed(5)}',
-                                        style: GoogleFonts.inter(
-                                          fontSize: 10,
-                                          color: AppColors.textSecondary
-                                              .withValues(alpha: 0.7),
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                   ],
