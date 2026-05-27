@@ -215,12 +215,42 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
             });
           }
 
+          // BUG-021 Fix 1. Handle status progression past 'arrived'
+          // BEFORE the arrived checks. Without these branches, a
+          // customer who entered the tracking screen after the guard
+          // already requested completion (or after the job was
+          // completed by admin / edge race) stayed parked here
+          // forever because the only branches that cancel the timers
+          // were gated on 'arrived'. Order: completed first (terminal
+          // exit), then pending_completion (jump to active-job screen
+          // for approval UI), then the existing 'arrived' branches.
+          if (status == 'completed') {
+            // Job already finished — pop back to home stack instead
+            // of leaving the customer on a tracking screen for a job
+            // that's no longer trackable.
+            _locationTimer?.cancel();
+            _statusTimer?.cancel();
+            if (!mounted) return;
+            Navigator.of(context).popUntil((route) => route.isFirst);
+            return;
+          }
+          if (status == 'pending_completion') {
+            // Guard requested completion. Skip the arrived dialog
+            // and jump straight to CustomerActiveJobScreen, which
+            // owns the approve/reject UI + progress-report list.
+            _locationTimer?.cancel();
+            _statusTimer?.cancel();
+            if (!mounted) return;
+            _navigateToActiveJob(passthroughData: a);
+            break;
+          }
+
           if (status == 'arrived' && startedAt != null) {
             // Guard arrived AND started working → countdown screen
             _locationTimer?.cancel();
             _statusTimer?.cancel();
             if (!mounted) return;
-            _navigateToActiveJob();
+            _navigateToActiveJob(passthroughData: a);
             break;
           } else if (status == 'arrived') {
             // Guard arrived but hasn't started yet
@@ -239,15 +269,30 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
     }
   }
 
-  Future<void> _navigateToActiveJob() async {
-    // Fetch active job info from backend for started_at + booked_hours
+  Future<void> _navigateToActiveJob({Map<String, dynamic>? passthroughData}) async {
+    // BUG-021 Fix 2. The poll cycle that triggers navigation already
+    // has the assignment row in hand (status + started_at). We still
+    // call getCustomerActiveJob() to pick up the joined REQUEST
+    // fields (booked_hours, address) that aren't on the assignment
+    // row — but its result is no longer load-bearing for the
+    // countdown. If that supplementary call returns null (silenced
+    // catch in booking_service.dart#getCustomerActiveJob), we
+    // degrade gracefully on display-only fields instead of losing
+    // started_at and rendering a broken CustomerActiveJobScreen.
+    // Rationale: option (a) from Task 34 — AssignmentResponse
+    // doesn't expose booked_hours/address, and CustomerTrackingScreen
+    // has no widget-time bookedHours param, so the supplement call
+    // stays; only its role changes from primary to fallback.
     final data = await context
         .read<BookingProvider>()
         .getCustomerActiveJob(widget.requestId);
     if (!mounted) return;
 
     final bookedHours = (data?['booked_hours'] as num?)?.toInt() ?? 6;
-    final startedAt = data?['started_at'] as String?;
+    // Prefer passthrough started_at (authoritative — captured in the
+    // same poll that decided to navigate). Fall back to supplement.
+    final startedAt = (passthroughData?['started_at'] as String?)
+        ?? (data?['started_at'] as String?);
     final address = data?['address'] as String?;
 
     // Calculate remaining from startedAt locally (same reference as guard)
@@ -353,13 +398,37 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
       for (final a in assignments) {
         final guardId = a['guard_id']?.toString();
         if (guardId == widget.guardId) {
+          final status = a['status'] as String?;
           final startedAt = a['started_at'] as String?;
+
+          // BUG-021 Fix 1. Mirror of _pollStatus's terminal handling
+          // — if status has moved past 'arrived' while the arrived
+          // dialog is open, dismiss the dialog and route to the
+          // correct destination instead of polling forever for a
+          // started_at that already happened (or never will, in the
+          // completed case).
+          if (status == 'completed') {
+            _statusTimer?.cancel();
+            if (!mounted) return;
+            Navigator.of(context, rootNavigator: true).pop();
+            if (!mounted) return;
+            Navigator.of(context).popUntil((route) => route.isFirst);
+            return;
+          }
+          if (status == 'pending_completion') {
+            _statusTimer?.cancel();
+            if (!mounted) return;
+            Navigator.of(context, rootNavigator: true).pop();
+            _navigateToActiveJob(passthroughData: a);
+            return;
+          }
+
           if (startedAt != null) {
             _statusTimer?.cancel();
             if (!mounted) return;
             // Close arrived dialog first
             Navigator.of(context, rootNavigator: true).pop();
-            _navigateToActiveJob();
+            _navigateToActiveJob(passthroughData: a);
             return;
           }
         }
