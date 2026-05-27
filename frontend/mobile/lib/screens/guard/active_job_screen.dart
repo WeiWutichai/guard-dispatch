@@ -229,7 +229,18 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
 
   Future<void> _resyncTimer() async {
     final data = await context.read<BookingProvider>().fetchActiveJobData();
-    if (!mounted || data == null) return;
+    if (!mounted) return;
+    if (data == null) {
+      // BUG-016. Backend /guard/active-job filters out 'completed' and
+      // 'cancelled' assignments (service.rs:get_active_job WHERE
+      // clause), so a null response from a screen that was opened
+      // for an active job is the terminal signal. The inline
+      // `status == 'completed'` checks below only run when data is
+      // non-null and are kept as defense in depth for transient WS
+      // ordering, but the polling safety net needs this null path.
+      _handleNullResultAsTerminal();
+      return;
+    }
 
     // Connect WebSocket once we have request_id
     final reqId = data['request_id'] as String?;
@@ -321,7 +332,16 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
 
   Future<void> _pollStatus() async {
     final data = await context.read<BookingProvider>().fetchActiveJobData();
-    if (!mounted || data == null) return;
+    if (!mounted) return;
+    if (data == null) {
+      // BUG-016. Same terminal-signal interpretation as in
+      // _resyncTimer — see comment there. _pollStatus runs every
+      // 3 seconds while _isPendingCompletion is true, so this is
+      // the path that actually fires when the customer approves
+      // and the assignment drops out of the active set.
+      _handleNullResultAsTerminal();
+      return;
+    }
 
     final status = data['assignment_status'] as String?;
     if (status == 'completed') {
@@ -353,6 +373,40 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
           backgroundColor: Colors.amber.shade700,
         ),
       );
+    }
+  }
+
+  // BUG-016. Shared terminal-state handler invoked when polling
+  // (_resyncTimer or _pollStatus) gets a null from
+  // fetchActiveJobData(), which means the assignment has left the
+  // active set on the backend — either completed (customer approved
+  // via /assignments/:id/review-completion) or cancelled.
+  //
+  // Distinguish the two by _isPendingCompletion: we only flip that
+  // flag when WE pressed "request completion", so a null result
+  // while it's true is the customer's approval; otherwise the
+  // customer cancelled out from under us.
+  void _handleNullResultAsTerminal() {
+    _timer?.cancel();
+    _syncTimer?.cancel();
+    _statusTimer?.cancel();
+    if (!mounted) return;
+    final isThai = LanguageProvider.of(context).isThai;
+    if (_isPendingCompletion) {
+      _showSuccessAndPop(isThai);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai
+              ? 'งานนี้ถูกยกเลิก'
+              : 'This job was cancelled'),
+          duration: const Duration(milliseconds: 1500),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      Future.delayed(const Duration(milliseconds: 1600), () {
+        if (mounted) Navigator.pop(context);
+      });
     }
   }
 
