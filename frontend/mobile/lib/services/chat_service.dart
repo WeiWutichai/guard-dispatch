@@ -161,15 +161,20 @@ class ChatService {
   // REST: Attachments (image/video upload)
   // ===========================================================================
 
-  /// POST /chat/attachments — upload image or video file
+  /// POST /chat/attachments — upload image or video file.
+  /// Returns the created chat message (OutgoingChatMessage shape) so the
+  /// caller can render it on the sender's side immediately. [senderRole] is
+  /// the uploader's acting role ("guard"/"customer") — drives bubble alignment.
   Future<Map<String, dynamic>> uploadAttachment(
     String conversationId,
     File file,
-    String mimeType,
-  ) async {
+    String mimeType, {
+    String? senderRole,
+  }) async {
     final fileName = file.path.split('/').last;
     final formData = FormData.fromMap({
       'conversation_id': conversationId,
+      if (senderRole != null) 'sender_role': senderRole,
       'file': await MultipartFile.fromFile(
         file.path,
         filename: fileName,

@@ -188,6 +188,7 @@ class _ChatScreenState extends State<ChatScreen> {
       widget.conversationId,
       File(xFile.path),
       mime,
+      senderRole: widget.actingRole,
     );
     _scrollToBottom();
   }
@@ -204,6 +205,7 @@ class _ChatScreenState extends State<ChatScreen> {
       widget.conversationId,
       File(xFile.path),
       mime,
+      senderRole: widget.actingRole,
     );
     _scrollToBottom();
   }

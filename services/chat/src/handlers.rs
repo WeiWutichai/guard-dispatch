@@ -16,6 +16,9 @@ use shared::models::ApiResponse;
 pub struct AttachmentUploadForm {
     /// UUID of the conversation
     pub conversation_id: String,
+    /// Acting role of the uploader ("guard" / "customer") — drives bubble
+    /// alignment on the receiving clients. Optional.
+    pub sender_role: Option<String>,
     /// Image or video file (JPEG/PNG/WEBP max 10MB, MP4/MOV max 50MB)
     #[schema(format = "binary")]
     pub file: Vec<u8>,
@@ -24,7 +27,7 @@ pub struct AttachmentUploadForm {
 use crate::models::{
     AdminConversationsPage, AdminListConversationsQuery, AttachmentResponse, ConversationResponse,
     CreateConversationRequest, EnrichedConversationResponse, IncomingChatMessage,
-    ListConversationsQuery, ListMessagesQuery, MessageResponse,
+    ListConversationsQuery, ListMessagesQuery, MessageResponse, OutgoingChatMessage,
 };
 use crate::state::AppState;
 
@@ -394,7 +397,7 @@ pub async fn mark_read(
     security(("bearer" = [])),
     request_body(content = AttachmentUploadForm, content_type = "multipart/form-data"),
     responses(
-        (status = 200, description = "Attachment uploaded", body = AttachmentResponse),
+        (status = 200, description = "Attachment uploaded — returns the created chat message", body = OutgoingChatMessage),
         (status = 400, description = "Invalid file or missing fields", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Not a participant", body = ErrorBody),
@@ -404,11 +407,12 @@ pub async fn upload_attachment(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
     mut multipart: Multipart,
-) -> Result<Json<ApiResponse<AttachmentResponse>>, AppError> {
+) -> Result<Json<ApiResponse<OutgoingChatMessage>>, AppError> {
     let mut conversation_id: Option<Uuid> = None;
     let mut file_data: Option<Vec<u8>> = None;
     let mut mime_type: Option<String> = None;
     let mut original_filename: Option<String> = None;
+    let mut sender_role: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -438,6 +442,17 @@ pub async fn upload_attachment(
                         .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
                         .to_vec(),
                 );
+            }
+            "sender_role" => {
+                // Acting role of the uploader ("guard" / "customer"). Mirrors
+                // the WS text path so image/video bubbles align on the correct
+                // side. Optional + non-validated to match `IncomingChatMessage`.
+                sender_role = field
+                    .text()
+                    .await
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
             }
             _ => {}
         }
@@ -498,12 +513,13 @@ pub async fn upload_attachment(
         conversation_id,
         content: original_filename,
         message_type: Some(message_type),
-        sender_role: None,
+        sender_role,
     };
     let row = crate::service::insert_message(&state.db, user.user_id, &msg).await?;
 
-    // Save attachment metadata
-    let attachment = crate::service::save_attachment(
+    // Save attachment metadata (side-effecting INSERT; the returned row isn't
+    // needed — the client renders from the OutgoingChatMessage below).
+    crate::service::save_attachment(
         &state.db,
         row.id,
         user.user_id,
@@ -528,7 +544,11 @@ pub async fn upload_attachment(
     };
     crate::service::publish_chat_message(&state.redis_pubsub, &outgoing).await;
 
-    Ok(Json(ApiResponse::success(attachment)))
+    // Return the full message (not just the attachment row). The WS subscriber
+    // suppresses the uploader's own broadcast (sender_id match) — unlike text,
+    // attachments get no direct WS echo — so the client inserts this reply
+    // locally to display the image/video instantly on the sender's side.
+    Ok(Json(ApiResponse::success(outgoing)))
 }
 
 #[utoipa::path(

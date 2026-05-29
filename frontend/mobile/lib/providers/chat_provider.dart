@@ -94,17 +94,34 @@ class ChatProvider extends ChangeNotifier {
   bool _isUploading = false;
   bool get isUploading => _isUploading;
 
-  /// Upload image or video attachment. The server creates the message and
-  /// broadcasts via WebSocket, so the message auto-appears in the list.
+  /// Upload image or video attachment. The server suppresses the uploader's
+  /// own WebSocket broadcast (sender_id match) and — unlike text — attachments
+  /// get no direct WS echo, so we insert the returned message locally to show
+  /// it on the sender's side immediately. [senderRole] is the uploader's acting
+  /// role ("guard"/"customer"), passed through so bubbles align correctly.
   Future<void> uploadAttachment(
     String conversationId,
     File file,
-    String mimeType,
-  ) async {
+    String mimeType, {
+    String? senderRole,
+  }) async {
     _isUploading = true;
     notifyListeners();
     try {
-      await _service.uploadAttachment(conversationId, file, mimeType);
+      final msg = await _service.uploadAttachment(
+        conversationId,
+        file,
+        mimeType,
+        senderRole: senderRole,
+      );
+      // Only insert into the active conversation; dedup by id mirrors the WS
+      // listener guard in case a broadcast ever races in.
+      final id = msg['id'] as String?;
+      if (id != null &&
+          conversationId == _activeConversationId &&
+          !_messages.any((m) => m['id'] == id)) {
+        _messages.add(msg);
+      }
     } catch (e) {
       debugPrint('[ChatProvider] uploadAttachment error: $e');
     }
