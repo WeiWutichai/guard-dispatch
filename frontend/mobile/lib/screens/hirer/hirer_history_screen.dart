@@ -597,7 +597,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
         final price = req['offered_price'];
         final totalAmount = (price is num ? price.toDouble() : double.tryParse(price?.toString() ?? '') ?? 0);
         final bookedHours = (req['booked_hours'] as num?)?.toInt() ?? 6;
-        final assignmentId = assignment['id']?.toString() ?? '';
+        final guardCount = (req['guard_count'] as num?)?.toInt() ?? 1;
 
         Navigator.push(
           context,
@@ -609,7 +609,7 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
               baseFee: 0,
               tip: 0,
               bookedHours: bookedHours,
-              guardCount: 1,
+              guardCount: guardCount,
               guardName: guardName,
               guardId: guardId,
               customerLat: customerLat,

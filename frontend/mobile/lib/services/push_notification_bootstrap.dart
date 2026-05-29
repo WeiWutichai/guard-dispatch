@@ -304,7 +304,7 @@ void _routeFromPayload(Map<String, dynamic> data) {
               baseFee: 0,
               tip: 0,
               bookedHours: bookedHours,
-              guardCount: 1,
+              guardCount: (request['guard_count'] as num?)?.toInt() ?? 1,
               guardName: guardName,
               guardId: guardId,
               customerLat: customerLat,
