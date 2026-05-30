@@ -39,10 +39,10 @@ class ChatService {
     String requestId,
     List<String> participantIds,
   ) async {
-    final response = await _apiClient.dio.post('/chat/conversations', data: {
-      'request_id': requestId,
-      'participant_ids': participantIds,
-    });
+    final response = await _apiClient.dio.post(
+      '/chat/conversations',
+      data: {'request_id': requestId, 'participant_ids': participantIds},
+    );
     return response.data['data'] as Map<String, dynamic>;
   }
 
@@ -61,7 +61,10 @@ class ChatService {
     }
 
     // Create new conversation
-    final created = await createConversation(requestId, [myUserId, otherUserId]);
+    final created = await createConversation(requestId, [
+      myUserId,
+      otherUserId,
+    ]);
     return created['id'] as String;
   }
 
@@ -96,7 +99,9 @@ class ChatService {
 
   /// Connect to /ws/chat for real-time messaging.
   /// [onMessage] is called with each incoming OutgoingChatMessage from server.
-  Future<void> connectChat(void Function(Map<String, dynamic>) onMessage) async {
+  Future<void> connectChat(
+    void Function(Map<String, dynamic>) onMessage,
+  ) async {
     final token = await AuthService.getAccessToken();
     if (token == null) return;
 
@@ -142,7 +147,11 @@ class ChatService {
   }
 
   /// Send a text message via the WebSocket connection.
-  void sendChatMessage(String conversationId, String content, {String? senderRole}) {
+  void sendChatMessage(
+    String conversationId,
+    String content, {
+    String? senderRole,
+  }) {
     if (!_isConnected || _channel == null) return;
 
     final payload = jsonEncode({
@@ -181,16 +190,32 @@ class ChatService {
         contentType: DioMediaType.parse(mimeType),
       ),
     });
+    // Without these overrides the request inherits the global 15s
+    // receiveTimeout (and an unset sendTimeout), so a slow upload throws on the
+    // client while the server still finishes + broadcasts — the receiver sees
+    // the media but the sender's optimistic insert never runs. Override
+    // per-request, mirroring the BUG-020 booking fix:
+    //  - sendTimeout (15min) bounds the request-body upload — the binding limit
+    //    for large files: ~200MB on a ~2 Mbps mobile uplink is ~13 min.
+    //  - receiveTimeout (5min) bounds the wait for the server's response, i.e.
+    //    the post-upload pipeline (S3 PUT + presign + INSERTs + publish).
+    //  - connectTimeout stays at the global 10s for fast-fail on a dead radio.
     final response = await _apiClient.dio.post(
       '/chat/attachments',
       data: formData,
+      options: Options(
+        sendTimeout: const Duration(minutes: 15),
+        receiveTimeout: const Duration(minutes: 5),
+      ),
     );
     return response.data['data'] as Map<String, dynamic>;
   }
 
   /// GET /chat/attachments/{id} — get fresh signed URL
   Future<Map<String, dynamic>> getAttachmentUrl(String attachmentId) async {
-    final response = await _apiClient.dio.get('/chat/attachments/$attachmentId');
+    final response = await _apiClient.dio.get(
+      '/chat/attachments/$attachmentId',
+    );
     return response.data['data'] as Map<String, dynamic>;
   }
 

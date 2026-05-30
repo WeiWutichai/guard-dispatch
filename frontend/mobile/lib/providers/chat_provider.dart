@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../services/chat_service.dart';
 
@@ -82,7 +83,11 @@ class ChatProvider extends ChangeNotifier {
   }
 
   /// Send a text message via WebSocket with sender_role.
-  void sendMessage(String conversationId, String content, {String? senderRole}) {
+  void sendMessage(
+    String conversationId,
+    String content, {
+    String? senderRole,
+  }) {
     if (content.trim().isEmpty) return;
     _service.sendChatMessage(conversationId, content, senderRole: senderRole);
   }
@@ -94,19 +99,36 @@ class ChatProvider extends ChangeNotifier {
   bool _isUploading = false;
   bool get isUploading => _isUploading;
 
+  String? _uploadError;
+  String? get uploadError => _uploadError;
+
+  /// True when the last upload failure was a timeout (large file / slow link)
+  /// rather than a hard rejection — lets the UI show a "still too slow, retry on
+  /// a better connection" hint instead of a generic failure.
+  bool _lastUploadTimedOut = false;
+  bool get lastUploadTimedOut => _lastUploadTimedOut;
+
   /// Upload image or video attachment. The server suppresses the uploader's
   /// own WebSocket broadcast (sender_id match) and — unlike text — attachments
   /// get no direct WS echo, so we insert the returned message locally to show
   /// it on the sender's side immediately. [senderRole] is the uploader's acting
   /// role ("guard"/"customer"), passed through so bubbles align correctly.
-  Future<void> uploadAttachment(
+  ///
+  /// Returns `true` on success. On failure (e.g. an upload that exceeds the
+  /// per-request timeout) the optimistic insert never runs, so the caller must
+  /// surface the error — videos are large and silently dropping them looks like
+  /// "the sender never sees their own video".
+  Future<bool> uploadAttachment(
     String conversationId,
     File file,
     String mimeType, {
     String? senderRole,
   }) async {
     _isUploading = true;
+    _uploadError = null;
+    _lastUploadTimedOut = false;
     notifyListeners();
+    var ok = false;
     try {
       final msg = await _service.uploadAttachment(
         conversationId,
@@ -122,11 +144,19 @@ class ChatProvider extends ChangeNotifier {
           !_messages.any((m) => m['id'] == id)) {
         _messages.add(msg);
       }
+      ok = true;
     } catch (e) {
       debugPrint('[ChatProvider] uploadAttachment error: $e');
+      _uploadError = e.toString();
+      _lastUploadTimedOut =
+          e is DioException &&
+          (e.type == DioExceptionType.sendTimeout ||
+              e.type == DioExceptionType.receiveTimeout ||
+              e.type == DioExceptionType.connectionTimeout);
     }
     _isUploading = false;
     notifyListeners();
+    return ok;
   }
 
   /// Mark conversation as read for the given role.

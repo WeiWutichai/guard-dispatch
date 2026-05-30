@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
 import '../theme/colors.dart';
 import '../providers/chat_provider.dart';
+import '../services/api_client.dart';
 import '../services/language_service.dart';
 import '../l10n/app_strings.dart';
 import 'call_screen.dart';
@@ -18,6 +20,7 @@ class ChatScreen extends StatefulWidget {
   final String userRole;
   final String? actingRole;
   final bool readOnly;
+
   /// Counterpart's user id — needed so the call button can dial the right
   /// person via `POST /booking/calls/initiate`. Optional only because old
   /// callers may not provide it; the call button should be hidden when null.
@@ -184,12 +187,14 @@ class _ChatScreenState extends State<ChatScreen> {
     if (xFile == null || !mounted) return;
 
     final mime = _getMimeType(xFile.path);
-    await context.read<ChatProvider>().uploadAttachment(
+    final ok = await context.read<ChatProvider>().uploadAttachment(
       widget.conversationId,
       File(xFile.path),
       mime,
       senderRole: widget.actingRole,
     );
+    if (!mounted) return;
+    if (!ok) _showUploadError();
     _scrollToBottom();
   }
 
@@ -201,13 +206,33 @@ class _ChatScreenState extends State<ChatScreen> {
     if (xFile == null || !mounted) return;
 
     final mime = _getMimeType(xFile.path);
-    await context.read<ChatProvider>().uploadAttachment(
+    final ok = await context.read<ChatProvider>().uploadAttachment(
       widget.conversationId,
       File(xFile.path),
       mime,
       senderRole: widget.actingRole,
     );
+    if (!mounted) return;
+    if (!ok) _showUploadError();
     _scrollToBottom();
+  }
+
+  void _showUploadError() {
+    final isThai = LanguageProvider.of(context).isThai;
+    // Distinguish a timeout (file too large / connection too slow — the server
+    // may still be ingesting, so re-sending risks a duplicate) from a hard
+    // failure, so the user gets actionable guidance instead of blind retry.
+    final timedOut = context.read<ChatProvider>().lastUploadTimedOut;
+    final message = timedOut
+        ? (isThai
+              ? 'ไฟล์ใหญ่หรือสัญญาณช้า ส่งไม่สำเร็จ ลองใหม่เมื่อสัญญาณดีขึ้น'
+              : 'File too large or connection too slow. Try again on a better connection.')
+        : (isThai
+              ? 'ส่งไฟล์ไม่สำเร็จ กรุณาลองใหม่'
+              : 'Failed to send file. Please try again.');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
   }
 
   String _getMimeType(String path) {
@@ -385,15 +410,20 @@ class _ChatScreenState extends State<ChatScreen> {
         final msg = messages[index];
         final senderRole = msg['sender_role'] as String?;
         // Use sender_role to determine sides: if sender_role matches my acting role → right (me)
-        final isMe = widget.actingRole != null && senderRole == widget.actingRole;
+        final isMe =
+            widget.actingRole != null && senderRole == widget.actingRole;
         final content = msg['content'] as String? ?? '';
         final createdAt = msg['created_at'] as String?;
         final time = _formatMessageTime(createdAt);
-        final isLastInGroup = index == messages.length - 1 ||
+        final isLastInGroup =
+            index == messages.length - 1 ||
             (messages[index + 1]['sender_role'] as String?) != senderRole;
 
         final messageType = msg['message_type'] as String? ?? 'text';
-        final fileUrl = msg['file_url'] as String?;
+        // Rewrite internal MinIO host (localhost/10.0.2.2/minio) → reachable
+        // device host so images + video load on Android emulator/physical
+        // devices. Staging/R2 (non-internal) URLs pass through unchanged.
+        final fileUrl = ApiClient.rewriteMediaHost(msg['file_url'] as String?);
         final fileMimeType = msg['file_mime_type'] as String?;
 
         if (messageType == 'image' && fileUrl != null) {
@@ -446,8 +476,9 @@ class _ChatScreenState extends State<ChatScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        mainAxisAlignment:
-            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isMe
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isMe) ...[
@@ -455,7 +486,9 @@ class _ChatScreenState extends State<ChatScreen> {
               radius: 14,
               backgroundColor: AppColors.primary.withValues(alpha: 0.1),
               child: Text(
-                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                widget.userName.isNotEmpty
+                    ? widget.userName[0].toUpperCase()
+                    : '?',
                 style: GoogleFonts.inter(
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
@@ -470,8 +503,7 @@ class _ChatScreenState extends State<ChatScreen> {
               constraints: BoxConstraints(
                 maxWidth: MediaQuery.of(context).size.width * 0.7,
               ),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: isMe ? AppColors.primary : Colors.white,
                 borderRadius: BorderRadius.only(
@@ -524,8 +556,9 @@ class _ChatScreenState extends State<ChatScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        mainAxisAlignment:
-            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isMe
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isMe) ...[
@@ -533,7 +566,9 @@ class _ChatScreenState extends State<ChatScreen> {
               radius: 14,
               backgroundColor: AppColors.primary.withValues(alpha: 0.1),
               child: Text(
-                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                widget.userName.isNotEmpty
+                    ? widget.userName[0].toUpperCase()
+                    : '?',
                 style: GoogleFonts.inter(
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
@@ -599,8 +634,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           height: 180,
                           color: Colors.grey[200],
                           child: const Center(
-                            child: Icon(Icons.broken_image_rounded,
-                                color: Colors.grey, size: 40),
+                            child: Icon(
+                              Icons.broken_image_rounded,
+                              color: Colors.grey,
+                              size: 40,
+                            ),
                           ),
                         ),
                       ),
@@ -631,8 +669,9 @@ class _ChatScreenState extends State<ChatScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        mainAxisAlignment:
-            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isMe
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isMe) ...[
@@ -640,7 +679,9 @@ class _ChatScreenState extends State<ChatScreen> {
               radius: 14,
               backgroundColor: AppColors.primary.withValues(alpha: 0.1),
               child: Text(
-                widget.userName.isNotEmpty ? widget.userName[0].toUpperCase() : '?',
+                widget.userName.isNotEmpty
+                    ? widget.userName[0].toUpperCase()
+                    : '?',
                 style: GoogleFonts.inter(
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
@@ -651,87 +692,94 @@ class _ChatScreenState extends State<ChatScreen> {
             const SizedBox(width: 8),
           ],
           Flexible(
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.65,
-              ),
-              decoration: BoxDecoration(
-                color: isMe ? AppColors.primary : Colors.white,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isMe ? 16 : 4),
-                  bottomRight: Radius.circular(isMe ? 4 : 16),
+            child: GestureDetector(
+              onTap: () => _openFullscreenVideo(fileUrl),
+              child: Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width * 0.65,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 4,
-                    offset: const Offset(0, 1),
+                decoration: BoxDecoration(
+                  color: isMe ? AppColors.primary : Colors.white,
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(16),
+                    topRight: const Radius.circular(16),
+                    bottomLeft: Radius.circular(isMe ? 16 : 4),
+                    bottomRight: Radius.circular(isMe ? 4 : 16),
                   ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // Video thumbnail placeholder with play icon
-                  ClipRRect(
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
                     ),
-                    child: Container(
-                      height: 180,
-                      width: double.infinity,
-                      color: Colors.black87,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.3),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.play_arrow_rounded,
-                            color: Colors.white,
-                            size: 40,
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // Video thumbnail placeholder with play icon
+                    ClipRRect(
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(16),
+                        topRight: Radius.circular(16),
+                      ),
+                      child: Container(
+                        height: 180,
+                        width: double.infinity,
+                        color: Colors.black87,
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.3),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.play_arrow_rounded,
+                              color: Colors.white,
+                              size: 40,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.videocam_rounded,
-                          size: 14,
-                          color: isMe
-                              ? Colors.white.withValues(alpha: 0.7)
-                              : AppColors.textSecondary,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            caption.isNotEmpty ? caption : (LanguageProvider.of(context).isThai ? 'วิดีโอ' : 'Video'),
-                            style: GoogleFonts.inter(
-                              fontSize: 12,
-                              color: isMe
-                                  ? Colors.white.withValues(alpha: 0.9)
-                                  : AppColors.textPrimary,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.videocam_rounded,
+                            size: 14,
+                            color: isMe
+                                ? Colors.white.withValues(alpha: 0.7)
+                                : AppColors.textSecondary,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              caption.isNotEmpty
+                                  ? caption
+                                  : (LanguageProvider.of(context).isThai
+                                        ? 'วิดีโอ'
+                                        : 'Video'),
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color: isMe
+                                    ? Colors.white.withValues(alpha: 0.9)
+                                    : AppColors.textPrimary,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
-                    child: _buildTimeRow(time, isMe, showReadStatus),
-                  ),
-                ],
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+                      child: _buildTimeRow(time, isMe, showReadStatus),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -771,6 +819,16 @@ class _ChatScreenState extends State<ChatScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => _FullscreenImageScreen(imageUrl: imageUrl),
+      ),
+    );
+  }
+
+  void _openFullscreenVideo(String videoUrl) {
+    // videoUrl is already host-rewritten at the parse site in _buildMessageList.
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _FullscreenVideoScreen(videoUrl: videoUrl),
       ),
     );
   }
@@ -903,8 +961,11 @@ class _FullscreenImageScreen extends StatelessWidget {
                   child: CircularProgressIndicator(color: Colors.white),
                 ),
                 errorWidget: (_, e2, e3) => const Center(
-                  child: Icon(Icons.broken_image_rounded,
-                      color: Colors.white54, size: 64),
+                  child: Icon(
+                    Icons.broken_image_rounded,
+                    color: Colors.white54,
+                    size: 64,
+                  ),
                 ),
               ),
             ),
@@ -918,9 +979,155 @@ class _FullscreenImageScreen extends StatelessWidget {
               icon: const Icon(Icons.close_rounded),
               color: Colors.white,
               iconSize: 28,
-              style: IconButton.styleFrom(
-                backgroundColor: Colors.black45,
+              style: IconButton.styleFrom(backgroundColor: Colors.black45),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Fullscreen Video Player
+// =============================================================================
+
+class _FullscreenVideoScreen extends StatefulWidget {
+  final String videoUrl;
+
+  const _FullscreenVideoScreen({required this.videoUrl});
+
+  @override
+  State<_FullscreenVideoScreen> createState() => _FullscreenVideoScreenState();
+}
+
+class _FullscreenVideoScreenState extends State<_FullscreenVideoScreen> {
+  VideoPlayerController? _controller;
+  // True on init failure OR a post-init playback error (see _onControllerUpdate).
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    final controller = VideoPlayerController.networkUrl(
+      Uri.parse(widget.videoUrl),
+    );
+    _controller = controller;
+    // Surface post-init playback errors (mid-stream network drop, codec
+    // failure) — these flip value.hasError without throwing, so without this
+    // listener the user would stare at a frozen frame + play icon forever.
+    controller.addListener(_onControllerUpdate);
+    try {
+      await controller.initialize();
+      if (!mounted) {
+        _controller = null;
+        controller.dispose();
+        return;
+      }
+      setState(() {});
+      await controller.play();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _failed = true);
+    }
+  }
+
+  void _onControllerUpdate() {
+    if (!mounted || _failed) return;
+    if (_controller?.value.hasError ?? false) {
+      setState(() => _failed = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onControllerUpdate);
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    final ready = controller != null && controller.value.isInitialized;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Center(
+            child: _failed
+                ? const Icon(
+                    Icons.broken_image_rounded,
+                    color: Colors.white54,
+                    size: 64,
+                  )
+                : ready
+                // VideoPlayerValue.aspectRatio already clamps degenerate sizes
+                // to 1.0, so no manual zero-guard is needed.
+                ? AspectRatio(
+                    aspectRatio: controller.value.aspectRatio,
+                    child: VideoPlayer(controller),
+                  )
+                : const CircularProgressIndicator(color: Colors.white),
+          ),
+          // Tap anywhere to toggle play/pause; show a play icon while paused.
+          if (ready && !_failed)
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () {
+                  controller.value.isPlaying
+                      ? controller.pause()
+                      : controller.play();
+                },
+                child: ValueListenableBuilder<VideoPlayerValue>(
+                  valueListenable: controller,
+                  builder: (_, value, _) => AnimatedOpacity(
+                    opacity: value.isPlaying ? 0.0 : 1.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Container(
+                      color: Colors.black26,
+                      child: const Center(
+                        child: Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 72,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
+            ),
+          // Scrubbable progress bar pinned to the bottom.
+          if (ready && !_failed)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: VideoProgressIndicator(
+                controller,
+                allowScrubbing: true,
+                colors: VideoProgressColors(
+                  playedColor: AppColors.primary,
+                  bufferedColor: Colors.white38,
+                  backgroundColor: Colors.white24,
+                ),
+              ),
+            ),
+          // Close button (mirrors _FullscreenImageScreen)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            left: 8,
+            child: IconButton(
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close_rounded),
+              color: Colors.white,
+              iconSize: 28,
+              style: IconButton.styleFrom(backgroundColor: Colors.black45),
             ),
           ),
         ],
