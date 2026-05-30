@@ -6,6 +6,7 @@ mod state;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post, put};
 use axum::Router;
@@ -274,9 +275,17 @@ async fn main() -> anyhow::Result<()> {
             put(handlers::review_completion),
         )
         .route("/assignments/{id}/review", post(handlers::submit_review))
+        // Progress-report uploads carry image (10MB) + video (200MB). Axum's
+        // default request-body limit is 2MB, which would silently 400 any video
+        // report (same class of bug as chat BUG-027). Raise to 205MB on this
+        // route only — matches nginx /booking/assignments/ (205m) and sits 5MB
+        // above the app-level cap so oversize files get a clean "File too large"
+        // error. The GET arm has no body, so the limit is harmless to it.
         .route(
             "/assignments/{id}/progress-reports",
-            post(handlers::submit_progress_report).get(handlers::list_progress_reports),
+            post(handlers::submit_progress_report)
+                .get(handlers::list_progress_reports)
+                .layer(DefaultBodyLimit::max(205 * 1024 * 1024)),
         )
         // WebSocket — real-time assignment status updates
         .route("/ws/assignments", get(handlers::ws_assignment_status))
