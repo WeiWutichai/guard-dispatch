@@ -6,6 +6,7 @@ mod state;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
@@ -145,7 +146,19 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::put(handlers::mark_read),
         )
         // REST — Attachments (image upload + signed URL)
-        .route("/attachments", post(handlers::upload_attachment))
+        // Axum's default request-body limit is 2MB, which silently 400s any
+        // video upload — images stayed under it (so they worked) while videos
+        // failed with a generic, non-timeout error. Raise the limit on THIS
+        // route only: 205MB matches nginx /chat/ (205m) and sits 5MB above
+        // s3::MAX_VIDEO_SIZE (200MB), so a genuinely oversize file reaches the
+        // handler and gets the clean "File too large" BadRequest from
+        // validate_upload() instead. Every other (small JSON) route keeps the
+        // protective 2MB default. Mirrors auth-service's upload route.
+        .route(
+            "/attachments",
+            post(handlers::upload_attachment)
+                .layer(DefaultBodyLimit::max(205 * 1024 * 1024)),
+        )
         .route("/attachments/{id}", get(handlers::get_signed_url))
         .route(
             "/admin/conversations",
