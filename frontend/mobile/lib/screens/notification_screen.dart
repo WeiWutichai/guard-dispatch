@@ -254,16 +254,32 @@ class _NotificationScreenState extends State<NotificationScreen> {
             builder: (_) => const ChatListScreen(actingRole: 'customer'),
           ),
         );
+      // Map each type to the matching HirerHistoryScreen tab instead of always
+      // landing on ALL (tab 0). Tab 1 = รอดำเนินการ/Pending whose filter bucket
+      // is ['pending','assigned','in_progress'] — the in-progress jobs the user
+      // expects when tapping a live-job notification.
       case 'booking_created':
       case 'guard_assigned':
       case 'guard_en_route':
       case 'guard_arrived':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const HirerHistoryScreen(initialTab: 1),
+          ),
+        );
       case 'booking_completed':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const HirerHistoryScreen(initialTab: 2),
+          ),
+        );
       case 'booking_cancelled':
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => const HirerHistoryScreen(),
+            builder: (_) => const HirerHistoryScreen(initialTab: 3),
           ),
         );
       default:
@@ -283,8 +299,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
             builder: (_) => const ChatListScreen(actingRole: 'guard'),
           ),
         );
+      // Live-job + status-change types deep-link to the matching job detail.
+      // guard_en_route/guard_arrived/booking_cancelled previously hit
+      // `default` and the tap did nothing.
       case 'guard_assigned':
       case 'booking_created':
+      case 'guard_en_route':
+      case 'guard_arrived':
+      case 'booking_cancelled':
         // Try to find the matching job and navigate to detail
         final requestId = payload['request_id'] as String?;
         if (requestId == null) return;

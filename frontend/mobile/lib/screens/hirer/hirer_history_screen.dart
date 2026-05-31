@@ -12,18 +12,26 @@ import 'customer_completed_job_screen.dart';
 import 'guard_searching_screen.dart';
 
 class HirerHistoryScreen extends StatefulWidget {
-  const HirerHistoryScreen({super.key});
+  /// Tab to open on: 0=ทั้งหมด/All, 1=รอดำเนินการ/Pending(in-progress),
+  /// 2=เสร็จสิ้น/Completed, 3=ยกเลิก/Cancelled. Lets a notification tap deep-link
+  /// straight to the matching filter instead of always landing on ALL.
+  final int initialTab;
+
+  const HirerHistoryScreen({super.key, this.initialTab = 0});
 
   @override
   State<HirerHistoryScreen> createState() => _HirerHistoryScreenState();
 }
 
 class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
-  int _selectedTabIndex = 0;
+  late int _selectedTabIndex;
 
   @override
   void initState() {
     super.initState();
+    // Clamp to valid tab range (0..3) in case a caller passes a bad index.
+    _selectedTabIndex =
+        (widget.initialTab >= 0 && widget.initialTab <= 3) ? widget.initialTab : 0;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<BookingProvider>().fetchMyRequests();
     });
