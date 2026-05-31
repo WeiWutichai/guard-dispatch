@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/api_client.dart';
@@ -8,7 +10,12 @@ import 'call_screen.dart';
 /// Ringing screen shown when an FCM `incoming_call` payload arrives. User
 /// taps Accept → navigates to `CallScreen` with the call id; Reject →
 /// service call to `/calls/{id}/reject` then pops.
-class IncomingCallScreen extends StatelessWidget {
+///
+/// During the ringing phase there is NO signalling WebSocket connected, so the
+/// screen polls the call status (every 2s) to detect the caller hanging up /
+/// cancelling before we accept — otherwise the callee would sit ringing until
+/// the 45s server-side timeout (BUG-042).
+class IncomingCallScreen extends StatefulWidget {
   final String callId;
   final String callerId;
   final String callType;
@@ -23,8 +30,77 @@ class IncomingCallScreen extends StatelessWidget {
   });
 
   @override
+  State<IncomingCallScreen> createState() => _IncomingCallScreenState();
+}
+
+class _IncomingCallScreenState extends State<IncomingCallScreen> {
+  Timer? _statusPoll;
+  bool _closed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _statusPoll = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _checkCallerStillCalling(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _statusPoll?.cancel();
+    super.dispose();
+  }
+
+  /// Poll the call record; if the caller has hung up / cancelled (any terminal
+  /// status) before we accept, close this ringing screen.
+  Future<void> _checkCallerStillCalling() async {
+    final call = await CallService(ApiClient()).getCall(widget.callId);
+    final status = call?['status'] as String?;
+    if (status == null) return; // network blip — keep ringing
+    const stillActive = {'initiated', 'ringing', 'accepted', 'connected'};
+    if (!stillActive.contains(status)) {
+      // ended / rejected / missed / failed → the caller is gone.
+      _closeRinging();
+    }
+  }
+
+  void _closeRinging() {
+    if (_closed || !mounted) return;
+    _closed = true;
+    _statusPoll?.cancel();
+    Navigator.of(context).pop();
+  }
+
+  void _reject() {
+    // Pop FIRST, with pop() not maybePop(): this screen is wrapped in
+    // PopScope(canPop: false) (to block the OS back-gesture), which makes
+    // maybePop() a silent no-op. pop() bypasses PopScope.canPop. reject() is
+    // best-effort; the server transitions the call out of pending regardless.
+    if (_closed) return;
+    _closed = true;
+    _statusPoll?.cancel();
+    final callId = widget.callId;
+    Navigator.of(context).pop();
+    CallService(ApiClient()).reject(callId);
+  }
+
+  void _accept() {
+    _statusPoll?.cancel();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => CallScreen(
+          userName: widget.callerName ?? 'ผู้โทร',
+          incomingCallId: widget.callId,
+          callType: widget.callType,
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final name = callerName ?? 'ไม่ทราบชื่อ';
+    final name = widget.callerName ?? 'ไม่ทราบชื่อ';
     return PopScope(
       canPop: false,
       child: Scaffold(
@@ -46,7 +122,7 @@ class IncomingCallScreen extends StatelessWidget {
               children: [
                 const Spacer(flex: 2),
                 Text(
-                  callType == 'video' ? 'สายวิดีโอเข้า' : 'สายเรียกเข้า',
+                  widget.callType == 'video' ? 'สายวิดีโอเข้า' : 'สายเรียกเข้า',
                   style: GoogleFonts.inter(
                     fontSize: 16,
                     color: Colors.white.withValues(alpha: 0.85),
@@ -76,13 +152,13 @@ class IncomingCallScreen extends StatelessWidget {
                       icon: Icons.call_end_rounded,
                       background: Colors.red,
                       label: 'ปฏิเสธ',
-                      onTap: () => _reject(context),
+                      onTap: _reject,
                     ),
                     _CircleAction(
                       icon: Icons.call_rounded,
                       background: Colors.green,
                       label: 'รับสาย',
-                      onTap: () => _accept(context),
+                      onTap: _accept,
                     ),
                   ],
                 ),
@@ -90,30 +166,6 @@ class IncomingCallScreen extends StatelessWidget {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  void _reject(BuildContext context) {
-    // Pop FIRST, with pop() not maybePop(): this screen is wrapped in
-    // PopScope(canPop: false) (to block the OS back-gesture), which makes
-    // maybePop() a silent no-op — that left the rejecter stuck on the ringing
-    // screen. pop() bypasses PopScope.canPop. Popping before the await also
-    // means a slow/hung reject request can't freeze the teardown. reject()
-    // is best-effort (it swallows its own errors); the server transitions the
-    // call out of pending regardless.
-    Navigator.of(context).pop();
-    CallService(ApiClient()).reject(callId);
-  }
-
-  void _accept(BuildContext context) {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => CallScreen(
-          userName: callerName ?? 'ผู้โทร',
-          incomingCallId: callId,
-          callType: callType,
         ),
       ),
     );

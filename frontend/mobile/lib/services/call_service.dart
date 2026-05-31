@@ -131,6 +131,20 @@ class CallService {
     } catch (_) {}
   }
 
+  /// Fetch the current call record. The ringing screen polls this to detect the
+  /// caller hanging up / cancelling before the callee accepts — during ringing
+  /// no signalling WebSocket is connected, so there's no live status otherwise.
+  /// Returns null on any error (the caller should keep ringing on a blip).
+  Future<Map<String, dynamic>?> getCall(String callId) async {
+    try {
+      final resp = await _apiClient.dio.get('/booking/calls/$callId');
+      final raw = resp.data is Map ? (resp.data as Map)['data'] : null;
+      return raw is Map<String, dynamic> ? raw : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Enable or disable the outbound microphone track. Called from the UI
   /// when the user toggles mute.
   void setMuted(bool muted) {
