@@ -427,6 +427,14 @@ class _ChatScreenState extends State<ChatScreen> {
         final fileUrl = ApiClient.rewriteMediaHost(msg['file_url'] as String?);
         final fileMimeType = msg['file_mime_type'] as String?;
 
+        // BUG-038: call-log entries arrive as 'system' messages (sender_role
+        // NULL) whose content is a human string from the booking service
+        // (📞 สนทนา m:ss / 📞 สายที่ไม่ได้รับ / 📞 ปฏิเสธสาย). Render them as a
+        // centered call-log row, not a left/right chat bubble.
+        if (messageType == 'system') {
+          return _buildSystemCallBubble(content, time);
+        }
+
         if (messageType == 'image' && fileUrl != null) {
           return _buildImageBubble(
             fileUrl: fileUrl,
@@ -466,6 +474,48 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       return '';
     }
+  }
+
+  /// Centered call-log row for 'system' messages (BUG-038). The message
+  /// timestamp is the call time; `content` already carries the duration /
+  /// missed / rejected text from the backend, so this just renders it.
+  Widget _buildSystemCallBubble(String content, String time) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.phone, size: 15, color: Colors.grey.shade600),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  content.isEmpty ? '📞 สาย' : content,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (time.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Text(
+                  time,
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildMessageBubble({
