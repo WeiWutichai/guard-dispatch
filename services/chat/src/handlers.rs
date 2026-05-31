@@ -482,6 +482,34 @@ pub async fn upload_attachment(
     // Validate file (checks MIME + magic bytes + size — images 10MB, videos 50MB)
     crate::s3::validate_upload(&mime, data.len(), &data)?;
 
+    // Transcode chat videos to a playable <=720p mp4. Phone cameras produce 4K
+    // H.264 High-profile clips that the target devices can't decode/play (the
+    // confirmed root cause); downscale to <=720p H.264 main/yuv420p + faststart.
+    // Images skip this entirely. validate_upload already ran on the ORIGINAL
+    // bytes (200MB cap + magic-byte gate) so we never feed ffmpeg an oversized /
+    // hostile blob. FAIL-CLOSED: any transcode error returns via `?` — we never
+    // store the unplayable original. Shadowing `data`/`mime` keeps every line
+    // below (ext, file_key, data_len, upload_file, message_type) working as-is.
+    let (data, mime) = if crate::s3::is_video_mime(&mime) {
+        // Bound concurrent encodes (acquire BEFORE writing temp input so queued
+        // requests don't pile disk writes). Permit drops at end of scope.
+        let _permit = state
+            .transcode_sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::Internal("transcode: semaphore closed".to_string()))?;
+
+        tracing::info!(original_bytes = data.len(), %mime, "transcoding chat video");
+        let transcoded = crate::transcode::transcode_video_to_720p_mp4(&data).await?;
+        tracing::info!(transcoded_bytes = transcoded.len(), "chat video transcode done");
+
+        // Output is always mp4, even if the input was .mov/quicktime.
+        (transcoded, "video/mp4".to_string())
+    } else {
+        (data, mime)
+    };
+
     let ext = crate::s3::mime_to_extension(&mime);
 
     // file_key format: chat/{conversation_id}/{uuid}.{ext} (per CLAUDE.md)

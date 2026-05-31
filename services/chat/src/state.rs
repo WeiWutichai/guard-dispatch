@@ -27,6 +27,10 @@ pub struct AppState {
     pub s3_bucket: String,
     pub s3_endpoint: String,
     pub s3_public_url: String,
+    /// Bounds concurrent ffmpeg video transcodes so several simultaneous 4K
+    /// uploads can't saturate cores / OOM the box (each holds the original +
+    /// transcoded bytes in memory). Permits hardcoded to 2.
+    pub transcode_sem: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 impl HasJwtSecret for AppState {

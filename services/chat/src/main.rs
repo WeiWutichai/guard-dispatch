@@ -3,6 +3,7 @@ mod models;
 mod s3;
 mod service;
 mod state;
+mod transcode;
 
 use std::sync::Arc;
 
@@ -129,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
         s3_bucket: s3_config.bucket.clone(),
         s3_endpoint: s3_config.endpoint.clone(),
         s3_public_url,
+        transcode_sem: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
     });
 
     let app = Router::new()

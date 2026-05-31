@@ -35,7 +35,10 @@ RUN find services/shared/src services/chat/src -name '*.rs' | xargs touch && car
 # Runtime
 FROM debian:trixie-slim AS runtime
 
-RUN apt-get update && apt-get install -y ca-certificates binutils && rm -rf /var/lib/apt/lists/* \
+# ffmpeg: chat videos are transcoded server-side to <=720p H.264 (4K phone
+# clips are otherwise undecodable on target devices). --no-install-recommends
+# avoids the X11/GTK/SDL recommends chain (keeps the image ~80-150MB smaller).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates binutils ffmpeg && rm -rf /var/lib/apt/lists/* \
   && groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
 
 WORKDIR /app
