@@ -32,7 +32,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   final _relationshipController = TextEditingController();
 
   bool _pushNotif = true;
-  bool _smsNotif = false;
   bool _jobAlerts = true;
   bool _initialized = false;
   bool _guardInfoSynced = false;
@@ -863,8 +862,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       icon: Icons.notifications_outlined,
       children: [
         _buildToggleRow(strings.pushNotif, strings.pushNotifDesc, _pushNotif, (v) => setState(() => _pushNotif = v)),
-        const Divider(height: 24),
-        _buildToggleRow(strings.smsNotif, strings.smsNotifDesc, _smsNotif, (v) => setState(() => _smsNotif = v)),
         const Divider(height: 24),
         _buildToggleRow(strings.jobAlerts, strings.jobAlertsDesc, _jobAlerts, (v) => setState(() => _jobAlerts = v)),
       ],

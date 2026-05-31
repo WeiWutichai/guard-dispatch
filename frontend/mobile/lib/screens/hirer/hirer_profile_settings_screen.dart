@@ -24,7 +24,6 @@ class _HirerProfileSettingsScreenState
   final _addressController = TextEditingController();
 
   bool _pushNotif = true;
-  bool _smsNotif = false;
   bool _bookingAlerts = true;
 
   // Guard info controllers (for dual-role users)
@@ -533,13 +532,6 @@ class _HirerProfileSettingsScreenState
           strings.pushNotifDesc,
           _pushNotif,
           (v) => setState(() => _pushNotif = v),
-        ),
-        const Divider(height: 24),
-        _buildToggleRow(
-          strings.smsNotif,
-          strings.smsNotifDesc,
-          _smsNotif,
-          (v) => setState(() => _smsNotif = v),
         ),
         const Divider(height: 24),
         _buildToggleRow(
