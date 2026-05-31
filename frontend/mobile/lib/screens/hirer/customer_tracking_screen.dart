@@ -934,12 +934,17 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                 ),
               );
             },
-            icon: const Icon(Icons.call_rounded, size: 18),
-            label: Text(isThai ? 'โทร' : 'Call'),
+            // Unified with the guard call/chat row (phone icon, 50pt height,
+            // 14 radius). Label is context-explicit: customer calls the guard.
+            icon: const Icon(Icons.phone_rounded, size: 20),
+            label: Text(isThai ? 'โทรหาเจ้าหน้าที่' : 'Call Guard'),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.primary,
               side: const BorderSide(color: AppColors.primary),
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              minimumSize: const Size(0, 50),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
             ),
           ),
         ),
@@ -947,12 +952,15 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
         Expanded(
           child: ElevatedButton.icon(
             onPressed: _openChatWithGuard,
-            icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+            icon: const Icon(Icons.chat_rounded, size: 20),
             label: Text(isThai ? 'แชท' : 'Chat'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              minimumSize: const Size(0, 50),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
             ),
           ),
         ),
