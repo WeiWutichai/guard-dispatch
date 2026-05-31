@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:provider/provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/booking_provider.dart';
@@ -22,6 +23,11 @@ import 'theme/colors.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize media_kit (libmpv) — required before any Player is created.
+  // Used for chat video playback (software decode; bypasses broken device
+  // hardware decoders — see chat_screen.dart _FullscreenVideoScreen).
+  MediaKit.ensureInitialized();
 
   // Initialize Firebase (required for FCM push notifications)
   await Firebase.initializeApp();

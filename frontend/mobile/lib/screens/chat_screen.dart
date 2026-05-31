@@ -4,8 +4,9 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
-import 'package:video_player/video_player.dart';
 import '../theme/colors.dart';
 import '../providers/chat_provider.dart';
 import '../services/api_client.dart';
@@ -1002,58 +1003,35 @@ class _FullscreenVideoScreen extends StatefulWidget {
 }
 
 class _FullscreenVideoScreenState extends State<_FullscreenVideoScreen> {
-  VideoPlayerController? _controller;
-  // True on init failure OR a post-init playback error (see _onControllerUpdate).
+  // media_kit (libmpv) instead of video_player/ExoPlayer: some devices'
+  // hardware H.264 decoder fails to start (Huawei ELE-L29:
+  // "OMX.hisi.video.decoder.avc start failed" even for a 720p H.264 Main clip
+  // that plays on other phones). libmpv software-decodes, so it works where
+  // the platform MediaCodec path dies. media_kit's Video widget ships its own
+  // controls (play/pause tap + seek bar), so we don't rebuild them by hand.
+  late final Player _player = Player();
+  late final VideoController _controller = VideoController(_player);
   bool _failed = false;
 
   @override
   void initState() {
     super.initState();
-    _initialize();
-  }
-
-  Future<void> _initialize() async {
-    final controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.videoUrl),
-    );
-    _controller = controller;
-    // Surface post-init playback errors (mid-stream network drop, codec
-    // failure) — these flip value.hasError without throwing, so without this
-    // listener the user would stare at a frozen frame + play icon forever.
-    controller.addListener(_onControllerUpdate);
-    try {
-      await controller.initialize();
-      if (!mounted) {
-        _controller = null;
-        controller.dispose();
-        return;
-      }
-      setState(() {});
-      await controller.play();
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _failed = true);
-    }
-  }
-
-  void _onControllerUpdate() {
-    if (!mounted || _failed) return;
-    if (_controller?.value.hasError ?? false) {
-      setState(() => _failed = true);
-    }
+    // libmpv surfaces decode/IO failures on the error stream rather than
+    // throwing, so listen instead of try/catch.
+    _player.stream.error.listen((_) {
+      if (mounted) setState(() => _failed = true);
+    });
+    _player.open(Media(widget.videoUrl));
   }
 
   @override
   void dispose() {
-    _controller?.removeListener(_onControllerUpdate);
-    _controller?.dispose();
+    _player.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final controller = _controller;
-    final ready = controller != null && controller.value.isInitialized;
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -1065,59 +1043,11 @@ class _FullscreenVideoScreenState extends State<_FullscreenVideoScreen> {
                     color: Colors.white54,
                     size: 64,
                   )
-                : ready
-                // VideoPlayerValue.aspectRatio already clamps degenerate sizes
-                // to 1.0, so no manual zero-guard is needed.
-                ? AspectRatio(
-                    aspectRatio: controller.value.aspectRatio,
-                    child: VideoPlayer(controller),
-                  )
-                : const CircularProgressIndicator(color: Colors.white),
-          ),
-          // Tap anywhere to toggle play/pause; show a play icon while paused.
-          if (ready && !_failed)
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: () {
-                  controller.value.isPlaying
-                      ? controller.pause()
-                      : controller.play();
-                },
-                child: ValueListenableBuilder<VideoPlayerValue>(
-                  valueListenable: controller,
-                  builder: (_, value, _) => AnimatedOpacity(
-                    opacity: value.isPlaying ? 0.0 : 1.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: Container(
-                      color: Colors.black26,
-                      child: const Center(
-                        child: Icon(
-                          Icons.play_arrow_rounded,
-                          color: Colors.white,
-                          size: 72,
-                        ),
-                      ),
-                    ),
+                : Video(
+                    controller: _controller,
+                    controls: AdaptiveVideoControls,
                   ),
-                ),
-              ),
-            ),
-          // Scrubbable progress bar pinned to the bottom.
-          if (ready && !_failed)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: VideoProgressIndicator(
-                controller,
-                allowScrubbing: true,
-                colors: VideoProgressColors(
-                  playedColor: AppColors.primary,
-                  bufferedColor: Colors.white38,
-                  backgroundColor: Colors.white24,
-                ),
-              ),
-            ),
+          ),
           // Close button (mirrors _FullscreenImageScreen)
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
