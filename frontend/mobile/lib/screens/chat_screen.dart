@@ -492,10 +492,10 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.phone, size: 15, color: Colors.grey.shade600),
-              const SizedBox(width: 6),
               Flexible(
                 child: Text(
+                  // content already carries a 📞 emoji from the backend, so we
+                  // don't add a separate phone Icon (was showing "📞 📞 …").
                   content.isEmpty ? '📞 สาย' : content,
                   style: TextStyle(
                     fontSize: 12.5,
