@@ -4907,6 +4907,62 @@ pub async fn accept_call(
     Ok(row.into())
 }
 
+/// Best-effort: write a `system` chat message into the call's conversation so
+/// the finished call shows up in the chat thread (BUG-038). The message
+/// timestamp is the call time; the body carries the duration (or the
+/// missed/rejected state). Resolves the conversation from the call's
+/// `conversation_id`, falling back to the assignment → request → conversation
+/// chain (call buttons pass `assignment_id` but not always `conversation_id`).
+/// A no-op when no conversation can be resolved — and it NEVER errors out the
+/// call teardown (failures are logged and swallowed).
+async fn log_call_to_chat(
+    db: &PgPool,
+    conversation_id: Option<Uuid>,
+    assignment_id: Option<Uuid>,
+    caller_id: Uuid,
+    status: &str,
+    duration_seconds: Option<i32>,
+) {
+    let body = match status {
+        "ended" => {
+            let secs = duration_seconds.unwrap_or(0).max(0);
+            format!("📞 สนทนา {}:{:02}", secs / 60, secs % 60)
+        }
+        "missed" => "📞 สายที่ไม่ได้รับ".to_string(),
+        "rejected" => "📞 ปฏิเสธสาย".to_string(),
+        _ => "📞 สาย".to_string(),
+    };
+
+    // `sender_role` is left NULL on purpose: the mobile chat renders any
+    // `system` message as a centered call-log row (no left/right alignment).
+    let result = sqlx::query(
+        r#"
+        INSERT INTO chat.messages (conversation_id, sender_id, content, message_type, sender_role)
+        SELECT cv.id, $2, $3, 'system'::message_type, NULL
+        FROM chat.conversations cv
+        WHERE cv.id = COALESCE(
+            $1::uuid,
+            (SELECT cv2.id
+             FROM chat.conversations cv2
+             JOIN booking.assignments a ON a.request_id = cv2.request_id
+             WHERE a.id = $4
+             LIMIT 1)
+        )
+        LIMIT 1
+        "#,
+    )
+    .bind(conversation_id)
+    .bind(caller_id)
+    .bind(&body)
+    .bind(assignment_id)
+    .execute(db)
+    .await;
+
+    if let Err(e) = result {
+        tracing::warn!("log_call_to_chat failed (call still ended ok): {e}");
+    }
+}
+
 pub async fn reject_call(
     db: &PgPool,
     call_id: Uuid,
@@ -4942,6 +4998,17 @@ pub async fn reject_call(
             "target_role": "any",
         })),
     );
+
+    // BUG-038: record the rejected call in the chat thread.
+    log_call_to_chat(
+        db,
+        row.conversation_id,
+        row.assignment_id,
+        row.caller_id,
+        "rejected",
+        None,
+    )
+    .await;
 
     Ok(row.into())
 }
@@ -4981,6 +5048,22 @@ pub async fn end_call(
     .fetch_optional(db)
     .await?
     .ok_or_else(|| AppError::BadRequest("Call not found or already ended".to_string()))?;
+
+    // BUG-038: record the finished call in the chat thread. end_call sets the
+    // status to either Missed (never answered) or Ended (hung up after answer).
+    let status_str = match row.status {
+        crate::models::CallStatus::Missed => "missed",
+        _ => "ended",
+    };
+    log_call_to_chat(
+        db,
+        row.conversation_id,
+        row.assignment_id,
+        row.caller_id,
+        status_str,
+        row.duration_seconds,
+    )
+    .await;
 
     Ok(row.into())
 }
