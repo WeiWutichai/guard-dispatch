@@ -87,6 +87,9 @@ pub struct EnrichedConversationResponse {
     pub last_message_at: Option<DateTime<Utc>>,
     pub participant_name: Option<String>,
     pub participant_avatar: Option<String>,
+    /// Counterpart user id — lets the client start a call/chat with the other
+    /// party. Null until the assignment/guard is resolved.
+    pub participant_id: Option<Uuid>,
     pub unread_count: Option<i64>,
     pub request_status: Option<String>,
 }
@@ -147,6 +150,7 @@ pub struct EnrichedConversationRow {
     pub last_message_at: Option<DateTime<Utc>>,
     pub participant_name: Option<String>,
     pub participant_avatar: Option<String>,
+    pub participant_id: Option<Uuid>,
     pub unread_count: Option<i64>,
     pub request_status: Option<String>,
 }
@@ -161,6 +165,7 @@ impl From<EnrichedConversationRow> for EnrichedConversationResponse {
             last_message_at: row.last_message_at,
             participant_name: row.participant_name,
             participant_avatar: row.participant_avatar,
+            participant_id: row.participant_id,
             unread_count: row.unread_count,
             request_status: row.request_status,
         }

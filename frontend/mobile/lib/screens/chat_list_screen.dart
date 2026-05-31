@@ -187,6 +187,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
     required String? avatarUrl,
     required int unreadCount,
     required bool isThai,
+    String? participantId,
     bool readOnly = false,
   }) {
     final hasUnread = unreadCount > 0;
@@ -201,8 +202,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
               conversationId: conversationId,
               requestId: '',
               userName: name,
-              userRole: isThai ? 'ลูกค้า' : 'Client',
+              // Counterpart of the acting role: a customer chats a guard, a
+              // guard chats a customer. (Was hardcoded 'Client'.)
+              userRole: role == 'customer'
+                  ? (isThai ? 'เจ้าหน้าที่' : 'Guard')
+                  : (isThai ? 'ลูกค้า' : 'Client'),
               actingRole: role,
+              // Counterpart user id (from list_conversations.participant_id) —
+              // un-hides the in-chat call button (gated on userId != null).
+              userId: participantId,
               readOnly: readOnly,
             ),
           ),

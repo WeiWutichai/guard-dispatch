@@ -214,6 +214,17 @@ pub async fn list_conversations(
                 ELSE
                     u_cust.avatar_url
             END AS participant_avatar,
+            -- Counterpart user id so the client can call/chat them
+            -- (ChatScreen gates its call button on userId != null). Mirrors
+            -- participant_name: acting-customer sees the guard, acting-guard
+            -- sees the customer.
+            CASE
+                WHEN $2 THEN
+                    (SELECT a2.guard_id FROM booking.assignments a2
+                     WHERE a2.request_id = c.request_id LIMIT 1)
+                ELSE
+                    gr.customer_id
+            END AS participant_id,
             (SELECT COUNT(*) FROM chat.messages m2
              WHERE m2.conversation_id = c.id
                AND m2.sender_role IS DISTINCT FROM $3
