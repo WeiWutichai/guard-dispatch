@@ -97,7 +97,9 @@ pub async fn transcode_video_to_720p_mp4(input: &[u8]) -> Result<Vec<u8>, AppErr
         .stderr(std::process::Stdio::piped());
 
     let child = cmd.spawn().map_err(|e| {
-        AppError::Internal(format!("transcode: ffmpeg spawn failed (ffmpeg installed?): {e}"))
+        AppError::Internal(format!(
+            "transcode: ffmpeg spawn failed (ffmpeg installed?): {e}"
+        ))
     })?;
 
     // The Child lives INSIDE this future; on timeout the future is dropped here,
@@ -113,7 +115,9 @@ pub async fn transcode_video_to_720p_mp4(input: &[u8]) -> Result<Vec<u8>, AppErr
             return Err(AppError::Internal("transcode: ffmpeg timed out".into()));
         }
         Ok(Err(e)) => {
-            return Err(AppError::Internal(format!("transcode: ffmpeg io error: {e}")));
+            return Err(AppError::Internal(format!(
+                "transcode: ffmpeg io error: {e}"
+            )));
         }
         Ok(Ok(out)) => out,
     };
@@ -135,7 +139,9 @@ pub async fn transcode_video_to_720p_mp4(input: &[u8]) -> Result<Vec<u8>, AppErr
         .map_err(|e| AppError::Internal(format!("transcode: read temp output failed: {e}")))?;
 
     if bytes.is_empty() {
-        return Err(AppError::Internal("transcode: ffmpeg produced empty output".into()));
+        return Err(AppError::Internal(
+            "transcode: ffmpeg produced empty output".into(),
+        ));
     }
 
     // in_file / out_file drop here -> both temp files unlinked.

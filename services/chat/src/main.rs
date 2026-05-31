@@ -158,8 +158,7 @@ async fn main() -> anyhow::Result<()> {
         // protective 2MB default. Mirrors auth-service's upload route.
         .route(
             "/attachments",
-            post(handlers::upload_attachment)
-                .layer(DefaultBodyLimit::max(205 * 1024 * 1024)),
+            post(handlers::upload_attachment).layer(DefaultBodyLimit::max(205 * 1024 * 1024)),
         )
         .route("/attachments/{id}", get(handlers::get_signed_url))
         .route(

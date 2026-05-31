@@ -502,7 +502,10 @@ pub async fn upload_attachment(
 
         tracing::info!(original_bytes = data.len(), %mime, "transcoding chat video");
         let transcoded = crate::transcode::transcode_video_to_720p_mp4(&data).await?;
-        tracing::info!(transcoded_bytes = transcoded.len(), "chat video transcode done");
+        tracing::info!(
+            transcoded_bytes = transcoded.len(),
+            "chat video transcode done"
+        );
 
         // Output is always mp4, even if the input was .mov/quicktime.
         (transcoded, "video/mp4".to_string())
