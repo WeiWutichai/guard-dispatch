@@ -821,12 +821,19 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                                 ),
                               ),
                               const SizedBox(width: 6),
-                              Text(
-                                strings.guardEnRoute,
-                                style: GoogleFonts.inter(
-                                  fontSize: 13,
-                                  color: AppColors.primary,
-                                  fontWeight: FontWeight.w500,
+                              // Flexible + ellipsis so the status text shrinks
+                              // instead of overflowing this Row on the right
+                              // when width is tight after rotation (BUG-045:
+                              // "overflowed by 7.1px on the right").
+                              Flexible(
+                                child: Text(
+                                  strings.guardEnRoute,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    color: AppColors.primary,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ],
