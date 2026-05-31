@@ -1426,7 +1426,8 @@ pub async fn reject_call(
     user: AuthUser,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
-    let resp = crate::service::reject_call(&state.db, id, user.user_id).await?;
+    let resp =
+        crate::service::reject_call(&state.db, &state.redis_pubsub_conn, id, user.user_id).await?;
     publish_call_event(&state.redis_pubsub_conn, id, "rejected");
     Ok(Json(ApiResponse::success(resp)))
 }
@@ -1446,7 +1447,14 @@ pub async fn end_call(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<EndCallDto>,
 ) -> Result<Json<ApiResponse<CallResponse>>, AppError> {
-    let resp = crate::service::end_call(&state.db, id, user.user_id, &req.reason).await?;
+    let resp = crate::service::end_call(
+        &state.db,
+        &state.redis_pubsub_conn,
+        id,
+        user.user_id,
+        &req.reason,
+    )
+    .await?;
     publish_call_event(&state.redis_pubsub_conn, id, "ended");
     Ok(Json(ApiResponse::success(resp)))
 }

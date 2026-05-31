@@ -4917,6 +4917,7 @@ pub async fn accept_call(
 /// call teardown (failures are logged and swallowed).
 async fn log_call_to_chat(
     db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
     conversation_id: Option<Uuid>,
     assignment_id: Option<Uuid>,
     caller_id: Uuid,
@@ -4935,7 +4936,8 @@ async fn log_call_to_chat(
 
     // `sender_role` is left NULL on purpose: the mobile chat renders any
     // `system` message as a centered call-log row (no left/right alignment).
-    let result = sqlx::query(
+    // RETURNING the row so we can live-push it to chat WS subscribers below.
+    let inserted = sqlx::query_as::<_, (Uuid, Uuid, chrono::DateTime<chrono::Utc>)>(
         r#"
         INSERT INTO chat.messages (conversation_id, sender_id, content, message_type, sender_role)
         SELECT cv.id, $2, $3, 'system'::message_type, NULL
@@ -4949,22 +4951,55 @@ async fn log_call_to_chat(
              LIMIT 1)
         )
         LIMIT 1
+        RETURNING id, conversation_id, created_at
         "#,
     )
     .bind(conversation_id)
     .bind(caller_id)
     .bind(&body)
     .bind(assignment_id)
-    .execute(db)
+    .fetch_optional(db)
     .await;
 
-    if let Err(e) = result {
-        tracing::warn!("log_call_to_chat failed (call still ended ok): {e}");
+    let (msg_id, conv_id, created_at) = match inserted {
+        Ok(Some(row)) => row,
+        Ok(None) => return, // no conversation resolved → nothing to log/publish
+        Err(e) => {
+            tracing::warn!("log_call_to_chat insert failed (call still ended ok): {e}");
+            return;
+        }
+    };
+
+    // Live-push to chat WS subscribers using the SAME channel + payload shape as
+    // chat-service's publish_chat_message ("chat:{conversation_id}" +
+    // OutgoingChatMessage JSON) so the OTHER party sees the call entry without
+    // leaving + re-opening the chat. `redis` is the REDIS_PUBSUB_URL instance
+    // that chat's WS subscribes on. Best-effort: the row is already saved, so a
+    // publish failure only delays visibility until the next open. (The caller's
+    // own WS echo is suppressed by chat-service, so the caller relies on the
+    // chat screen refreshing when it returns from the call screen.)
+    let payload = serde_json::json!({
+        "id": msg_id,
+        "conversation_id": conv_id,
+        "sender_id": caller_id,
+        "content": body,
+        "message_type": "system",
+        "sender_role": null,
+        "created_at": created_at,
+    })
+    .to_string();
+    let channel = format!("chat:{conv_id}");
+    let mut conn = redis.clone();
+    use redis::AsyncCommands;
+    let published: Result<(), redis::RedisError> = conn.publish(channel, payload).await;
+    if let Err(e) = published {
+        tracing::warn!("log_call_to_chat publish failed (message saved): {e}");
     }
 }
 
 pub async fn reject_call(
     db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
     call_id: Uuid,
     user_id: Uuid,
 ) -> Result<crate::models::CallResponse, AppError> {
@@ -5002,6 +5037,7 @@ pub async fn reject_call(
     // BUG-038: record the rejected call in the chat thread.
     log_call_to_chat(
         db,
+        redis,
         row.conversation_id,
         row.assignment_id,
         row.caller_id,
@@ -5015,6 +5051,7 @@ pub async fn reject_call(
 
 pub async fn end_call(
     db: &PgPool,
+    redis: &redis::aio::MultiplexedConnection,
     call_id: Uuid,
     user_id: Uuid,
     reason: &str,
@@ -5057,6 +5094,7 @@ pub async fn end_call(
     };
     log_call_to_chat(
         db,
+        redis,
         row.conversation_id,
         row.assignment_id,
         row.caller_id,
