@@ -95,6 +95,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
             avatarUrl: conv['participant_avatar'] as String?,
             unreadCount: unread,
             isThai: isThai,
+            // Counterpart user id from list_conversations — un-hides the
+            // in-chat call button (ChatScreen gates it on userId != null).
+            participantId: conv['participant_id'] as String?,
             readOnly: isCompleted,
           );
         },
