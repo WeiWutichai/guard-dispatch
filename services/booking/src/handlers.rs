@@ -1546,13 +1546,23 @@ pub fn publish_call_event(
     use redis::AsyncCommands;
     let mut conn = redis_conn.clone();
     let channel = format!("call_sig:{call_id}");
+    let buffer_key = format!("call_sig_buf:{call_id}");
     let payload = serde_json::json!({
         "type": "status",
         "status": kind,
     })
     .to_string();
     tokio::spawn(async move {
-        let _: Result<(), redis::RedisError> = conn.publish(channel, payload).await;
+        // Deliver live to any peer currently subscribed.
+        let _: Result<(), redis::RedisError> = conn.publish(&channel, &payload).await;
+        // Also mirror the terminal status into the replay buffer (same buffer +
+        // 60s TTL as offer/ICE frames). Status frames were previously published
+        // only live, so a hang-up sent BEFORE the callee's signalling WS
+        // subscribed was lost — the callee then sat on the call screen until the
+        // 45s watchdog. With it buffered, the replay on subscribe tears the
+        // callee's screen down even when it connects a beat late.
+        let _: Result<(), redis::RedisError> = conn.rpush(&buffer_key, &payload).await;
+        let _: Result<(), redis::RedisError> = conn.expire(&buffer_key, 60).await;
     });
 }
 
