@@ -46,6 +46,13 @@ class _CallScreenState extends State<CallScreen> {
   Duration _duration = Duration.zero;
   Timer? _timer;
   String? _errorMessage;
+  // BUG-035: the caller could stay frozen on the calling/ringing screen when
+  // the callee's hangup/reject teardown frame was dropped (unbuffered Redis
+  // pub/sub, published before the caller subscribed). This watchdog force-ends
+  // a call that never connects so the caller is never stuck. `_ended` guards
+  // the teardown so the watchdog/error/remote-end paths can't double-pop.
+  Timer? _ringingWatchdog;
+  bool _ended = false;
 
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
@@ -60,6 +67,11 @@ class _CallScreenState extends State<CallScreen> {
       ..onError = _handleError
       ..onRemoteStream = _handleRemoteStream;
     _bootstrap();
+    // Safety net: if the call never reaches 'connected' within 45s, end it so a
+    // dropped teardown signal can't leave the caller frozen on this screen.
+    _ringingWatchdog = Timer(const Duration(seconds: 45), () {
+      if (mounted && _state != 'connected') _handleEnded();
+    });
   }
 
   Future<void> _bootstrap() async {
@@ -129,6 +141,7 @@ class _CallScreenState extends State<CallScreen> {
 
   void _handleConnected() {
     if (!mounted) return;
+    _ringingWatchdog?.cancel();
     setState(() => _state = 'connected');
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -138,7 +151,9 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _handleEnded() {
-    if (!mounted) return;
+    if (!mounted || _ended) return;
+    _ended = true;
+    _ringingWatchdog?.cancel();
     _timer?.cancel();
     setState(() => _state = 'ended');
     Future.delayed(const Duration(milliseconds: 900), () {
@@ -148,9 +163,18 @@ class _CallScreenState extends State<CallScreen> {
 
   void _handleError(String err) {
     if (!mounted) return;
+    _ringingWatchdog?.cancel();
     setState(() {
       _state = 'ended';
       _errorMessage = err;
+    });
+    // Auto-pop on terminal error too (signalling_closed / peer_failed) — longer
+    // than the clean-end delay so the user can read the message. Without this
+    // the caller stayed on a frozen error screen.
+    if (_ended) return;
+    _ended = true;
+    Future.delayed(const Duration(milliseconds: 1800), () {
+      if (mounted) Navigator.of(context).maybePop();
     });
   }
 
@@ -163,6 +187,7 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    _ringingWatchdog?.cancel();
     _timer?.cancel();
     _remoteRenderer.dispose();
     _localRenderer.dispose();

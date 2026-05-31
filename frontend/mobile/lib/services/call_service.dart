@@ -320,7 +320,9 @@ class CallService {
 
     if (type == 'status') {
       final status = msg['status'] as String?;
-      if (status == 'ended' || status == 'rejected') {
+      // 'missed' added (BUG-035): the backend ringing-timeout sweep emits
+      // status=missed; without it the caller never tore down on that path.
+      if (status == 'ended' || status == 'rejected' || status == 'missed') {
         await _cleanup();
         onEnded?.call();
       }
