@@ -95,10 +95,16 @@ class IncomingCallScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _reject(BuildContext context) async {
-    final service = CallService(ApiClient());
-    await service.reject(callId);
-    if (context.mounted) Navigator.of(context).maybePop();
+  void _reject(BuildContext context) {
+    // Pop FIRST, with pop() not maybePop(): this screen is wrapped in
+    // PopScope(canPop: false) (to block the OS back-gesture), which makes
+    // maybePop() a silent no-op — that left the rejecter stuck on the ringing
+    // screen. pop() bypasses PopScope.canPop. Popping before the await also
+    // means a slow/hung reject request can't freeze the teardown. reject()
+    // is best-effort (it swallows its own errors); the server transitions the
+    // call out of pending regardless.
+    Navigator.of(context).pop();
+    CallService(ApiClient()).reject(callId);
   }
 
   void _accept(BuildContext context) {
