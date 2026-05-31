@@ -88,6 +88,48 @@ fn spawn_chat_notification(
     });
 }
 
+/// Notify every OTHER participant of a conversation (in-app log + FCM push),
+/// fire-and-forget. Shared by the WS text path (`send_message`) and the REST
+/// attachment path (`upload_attachment`) so the two can't drift — the
+/// attachment path historically forgot this (same omission class as BUG-025).
+/// `preview` is the notification body; pass message text, or a label like
+/// "ส่งรูปภาพ"/"ส่งวิดีโอ" for attachments (empty → "📎 ไฟล์แนบ" inside
+/// spawn_chat_notification).
+pub(crate) async fn notify_other_participants(
+    db: &PgPool,
+    conversation_id: Uuid,
+    sender_id: Uuid,
+    preview: String,
+) {
+    let recipients: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM chat.conversation_participants WHERE conversation_id = $1 AND user_id != $2",
+    )
+    .bind(conversation_id)
+    .bind(sender_id)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    let sender_name: String =
+        sqlx::query_scalar("SELECT COALESCE(full_name, 'User') FROM auth.users WHERE id = $1")
+            .bind(sender_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "User".to_string());
+
+    for recipient_id in recipients {
+        spawn_chat_notification(
+            db.clone(),
+            recipient_id,
+            sender_name.clone(),
+            preview.clone(),
+            conversation_id,
+        );
+    }
+}
+
 // =============================================================================
 // Create Conversation
 // =============================================================================
@@ -239,35 +281,15 @@ pub async fn send_message(
     let outgoing = OutgoingChatMessage::from(row);
     publish_chat_message(redis_pubsub, &outgoing).await;
 
-    // Notify other participants (fire-and-forget)
-    let recipients: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT user_id FROM chat.conversation_participants WHERE conversation_id = $1 AND user_id != $2",
+    // Notify other participants (fire-and-forget) — shared helper, also used by
+    // the REST attachment path so the two can't diverge.
+    notify_other_participants(
+        db,
+        msg.conversation_id,
+        sender_id,
+        msg.content.clone().unwrap_or_default(),
     )
-    .bind(msg.conversation_id)
-    .bind(sender_id)
-    .fetch_all(db)
-    .await
-    .unwrap_or_default();
-
-    // Get sender name for notification title
-    let sender_name: String =
-        sqlx::query_scalar("SELECT COALESCE(full_name, 'User') FROM auth.users WHERE id = $1")
-            .bind(sender_id)
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "User".to_string());
-
-    for recipient_id in recipients {
-        spawn_chat_notification(
-            db.clone(),
-            recipient_id,
-            sender_name.clone(),
-            msg.content.clone().unwrap_or_default(),
-            msg.conversation_id,
-        );
-    }
+    .await;
 
     Ok(outgoing)
 }

@@ -558,6 +558,13 @@ pub async fn upload_attachment(
     )
     .await?;
 
+    // Notification preview label — computed BEFORE `mime` is moved into outgoing.
+    let notify_preview = if crate::s3::is_video_mime(&mime) {
+        "ส่งวิดีโอ".to_string() // sent a video
+    } else {
+        "ส่งรูปภาพ".to_string() // sent a photo
+    };
+
     // Publish to Redis with file_url included so receiving clients can display media
     let outgoing = crate::models::OutgoingChatMessage {
         id: row.id,
@@ -571,6 +578,19 @@ pub async fn upload_attachment(
         file_mime_type: Some(mime),
     };
     crate::service::publish_chat_message(&state.redis_pubsub, &outgoing).await;
+
+    // Notify the other participant(s) — the WS text path does this via
+    // send_message, but the attachment path historically did NOT, so images/
+    // videos produced no in-app notification and no FCM push (BUG-025 omission
+    // class). Mirror the text path with the shared helper. Fire-and-forget so
+    // it never fails the upload.
+    crate::service::notify_other_participants(
+        &state.db,
+        conversation_id,
+        user.user_id,
+        notify_preview,
+    )
+    .await;
 
     // Return the full message (not just the attachment row). The WS subscriber
     // suppresses the uploader's own broadcast (sender_id match) — unlike text,
