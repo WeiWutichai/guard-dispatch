@@ -321,6 +321,9 @@ class _ChatScreenState extends State<ChatScreen> {
           if (!widget.readOnly && widget.userId != null)
             IconButton(
               onPressed: () {
+                // Capture the provider before the async gap (push) so we don't
+                // use BuildContext across it.
+                final chatProvider = context.read<ChatProvider>();
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -330,7 +333,15 @@ class _ChatScreenState extends State<ChatScreen> {
                       conversationId: widget.conversationId,
                     ),
                   ),
-                );
+                ).then((_) {
+                  // After a call ends, refresh so the server-logged call entry
+                  // (system message) shows immediately. The caller's own WS echo
+                  // is suppressed by chat-service, so the caller can't rely on
+                  // the live push the callee gets — re-fetch on return instead.
+                  if (mounted) {
+                    chatProvider.fetchMessages(widget.conversationId);
+                  }
+                });
               },
               icon: const Icon(Icons.call_outlined),
               color: AppColors.textSecondary,
