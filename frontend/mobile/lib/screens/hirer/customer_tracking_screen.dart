@@ -8,8 +8,12 @@ import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/chat_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
+import '../call_screen.dart';
+import '../chat_screen.dart';
 import 'customer_active_job_screen.dart';
 
 /// Customer tracking screen — shows guard's real-time location on map
@@ -899,11 +903,101 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                       ),
                   ],
                 ),
+                const SizedBox(height: 14),
+                _buildCallChatRow(context),
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// Call + chat buttons so the customer can reach the guard from the tracking
+  /// screen (the guard side has these in guard_job_detail; the customer side
+  /// was missing them). widget.guardId is required + non-empty so the call
+  /// recipient is always valid.
+  Widget _buildCallChatRow(BuildContext context) {
+    final isThai = LanguageProvider.of(context).isThai;
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CallScreen(
+                    userName: widget.guardName,
+                    calleeId: widget.guardId,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.call_rounded, size: 18),
+            label: Text(isThai ? 'โทร' : 'Call'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: const BorderSide(color: AppColors.primary),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: ElevatedButton.icon(
+            onPressed: _openChatWithGuard,
+            icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+            label: Text(isThai ? 'แชท' : 'Chat'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openChatWithGuard() async {
+    final isThai = LanguageProvider.of(context).isThai;
+    final myId = context.read<AuthProvider>().userId;
+    if (myId == null || widget.requestId.isEmpty || widget.guardId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'ไม่สามารถเปิดแชทได้' : 'Cannot open chat'),
+        ),
+      );
+      return;
+    }
+    try {
+      final convId = await context.read<ChatProvider>().getOrCreateConversation(
+            widget.requestId,
+            myId,
+            widget.guardId,
+          );
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversationId: convId,
+            requestId: widget.requestId,
+            userName: widget.guardName,
+            userRole: isThai ? 'เจ้าหน้าที่' : 'Guard',
+            actingRole: 'customer',
+            userId: widget.guardId,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'ไม่สามารถเปิดแชทได้' : 'Cannot open chat'),
+        ),
+      );
+    }
   }
 }
