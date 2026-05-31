@@ -762,9 +762,20 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
   }
 
   Future<void> _openChat(BuildContext context, bool isThai) async {
-    final requestId = _job['id'] as String? ?? '';
-    final customerId = _job['customer_id'] as String? ?? '';
-    final customerName = _job['customer_name'] as String? ?? '-';
+    // Resolve ids from the PRISTINE widget.job first, then the mutable _job.
+    // _syncStatusFromProvider overwrites _job with active-job rows that can lack
+    // customer_id / id, so reading only _job made the empty-id guard below fire
+    // and the chat silently no-op'd — while the call button (which reads pristine
+    // widget.job['customer_id']) kept working. Mirror that source here.
+    String pick(String key) =>
+        (widget.job[key] as String?) ?? (_job[key] as String?) ?? '';
+
+    final requestId =
+        pick('request_id').isNotEmpty ? pick('request_id') : pick('id');
+    final customerId = pick('customer_id');
+    final customerName = pick('customer_name').isNotEmpty
+        ? pick('customer_name')
+        : '-';
     final authProvider = context.read<AuthProvider>();
     final chatProvider = context.read<ChatProvider>();
     var myUserId = authProvider.userId;
