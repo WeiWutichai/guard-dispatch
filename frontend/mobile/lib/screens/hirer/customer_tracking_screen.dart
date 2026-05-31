@@ -8,12 +8,8 @@ import 'package:latlong2/latlong.dart' show LatLng;
 import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
-import '../../providers/auth_provider.dart';
-import '../../providers/chat_provider.dart';
 import '../../services/language_service.dart';
 import '../../l10n/app_strings.dart';
-import '../call_screen.dart';
-import '../chat_screen.dart';
 import 'customer_active_job_screen.dart';
 
 /// Customer tracking screen — shows guard's real-time location on map
