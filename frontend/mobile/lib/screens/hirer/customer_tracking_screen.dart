@@ -929,7 +929,7 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
     return Row(
       children: [
         Expanded(
-          child: OutlinedButton.icon(
+          child: OutlinedButton(
             onPressed: () {
               Navigator.push(
                 context,
@@ -941,10 +941,6 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
                 ),
               );
             },
-            // Unified with the guard call/chat row (phone icon, 50pt height,
-            // 14 radius). Label is context-explicit: customer calls the guard.
-            icon: const Icon(Icons.phone_rounded, size: 20),
-            label: Text(isThai ? 'โทรหาเจ้าหน้าที่' : 'Call Guard'),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.primary,
               side: const BorderSide(color: AppColors.primary),
@@ -952,6 +948,22 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
               ),
+            ),
+            // FittedBox so the long "โทรหาเจ้าหน้าที่" label scales down to fit the
+            // half-width button on one line instead of wrapping (BUG-048).
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.phone_rounded, size: 20),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(isThai ? 'โทรหาเจ้าหน้าที่' : 'Call Guard'),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

@@ -711,13 +711,18 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
                           const Icon(Icons.rate_review_outlined, size: 16),
                           const SizedBox(width: 6),
                           Flexible(
-                            child: Text(
-                              isThai ? 'ดูรีวิว' : 'Reviews',
-                              style: GoogleFonts.inter(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
+                            // FittedBox so "ดูรีวิว" scales down to fit this
+                            // narrow (flex-1) button instead of clipping to
+                            // "ดู…" (BUG-048).
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                isThai ? 'ดูรีวิว' : 'Reviews',
+                                style: GoogleFonts.inter(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
