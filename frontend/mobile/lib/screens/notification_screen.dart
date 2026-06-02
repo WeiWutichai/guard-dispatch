@@ -307,15 +307,28 @@ class _NotificationScreenState extends State<NotificationScreen> {
       case 'guard_en_route':
       case 'guard_arrived':
       case 'booking_cancelled':
-        // Try to find the matching job and navigate to detail
+        // Deep-link to the matching job detail so a freshly-assigned
+        // (pending_acceptance) job opens where the guard can accept/decline.
+        // GuardJobResponse exposes the guard_requests row id as `id` (NOT
+        // `request_id`) plus `assignment_id`; the notification payload carries
+        // `request_id` + `assignment_id`. Match on EITHER — the old code keyed
+        // on j['request_id'] which is always null, so every match failed and
+        // the tap silently did nothing ("กดไม่ได้").
         final requestId = payload['request_id'] as String?;
-        if (requestId == null) return;
+        final assignmentId = payload['assignment_id'] as String?;
+        if (requestId == null && assignmentId == null) {
+          _showJobUnavailable();
+          return;
+        }
         try {
           final booking = context.read<BookingProvider>();
           final allJobs = await booking.fetchJobsAndReturn();
           if (!mounted) return;
           final match = allJobs.where((j) {
-            return j['request_id']?.toString() == requestId;
+            final jobReq = j['id']?.toString();
+            final jobAsg = j['assignment_id']?.toString();
+            return (requestId != null && jobReq == requestId) ||
+                (assignmentId != null && jobAsg == assignmentId);
           });
           if (match.isNotEmpty) {
             Navigator.push(
@@ -324,8 +337,12 @@ class _NotificationScreenState extends State<NotificationScreen> {
                 builder: (_) => GuardJobDetailScreen(job: match.first),
               ),
             );
+          } else {
+            _showJobUnavailable();
           }
-        } catch (_) {}
+        } catch (_) {
+          if (mounted) _showJobUnavailable();
+        }
       case 'booking_completed':
         Navigator.push(
           context,
@@ -343,6 +360,20 @@ class _NotificationScreenState extends State<NotificationScreen> {
       default:
         break;
     }
+  }
+
+  void _showJobUnavailable() {
+    if (!mounted) return;
+    final isThai = LanguageProvider.of(context).isThai;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isThai
+              ? 'ไม่พบรายละเอียดงานนี้แล้ว'
+              : 'This job is no longer available',
+        ),
+      ),
+    );
   }
 
   ({IconData icon, Color color}) _getNotificationStyle(String type) {
