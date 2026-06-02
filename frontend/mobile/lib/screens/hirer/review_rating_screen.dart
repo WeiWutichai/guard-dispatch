@@ -382,55 +382,27 @@ class _ReviewRatingScreenState extends State<ReviewRatingScreen> {
   }
 
   Widget _buildRatingDisplay(String label, double rating) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // Overall score is the auto-computed average of the categories — show it as
+    // a number only (no stars), per request (BUG-047). Always shows the value
+    // (0.0 until categories are rated) so the row isn't bare.
+    return Row(
       children: [
-        Row(
-          children: [
-            Text(
-              label,
-              style: GoogleFonts.inter(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
-              ),
-            ),
-            if (rating > 0) ...[
-              const SizedBox(width: 8),
-              Text(
-                rating.toStringAsFixed(1),
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.amber.shade700,
-                ),
-              ),
-            ],
-          ],
+        Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+          ),
         ),
-        const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(5, (index) {
-            // Support half-star display for fractional averages
-            final fillLevel = rating - index;
-            IconData icon;
-            if (fillLevel >= 1) {
-              icon = Icons.star_rounded;
-            } else if (fillLevel >= 0.3) {
-              icon = Icons.star_half_rounded;
-            } else {
-              icon = Icons.star_outline_rounded;
-            }
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4.0),
-              child: Icon(
-                icon,
-                size: 40,
-                color: fillLevel > 0 ? Colors.amber : AppColors.disabled,
-              ),
-            );
-          }),
+        const SizedBox(width: 8),
+        Text(
+          rating.toStringAsFixed(1),
+          style: GoogleFonts.inter(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: Colors.amber.shade700,
+          ),
         ),
       ],
     );
