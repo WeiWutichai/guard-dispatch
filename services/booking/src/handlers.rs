@@ -959,7 +959,31 @@ pub async fn available_guards(
             ));
         }
     }
-    let guards = crate::service::list_available_guards(&state.db, query).await?;
+    let mut guards = crate::service::list_available_guards(&state.db, query).await?;
+    // auth.users.avatar_url stores a bare S3 key; presign each guard's avatar
+    // (like auth's get_profile does) so the client gets a loadable URL instead
+    // of a key -> person-icon fallback (BUG-046). Rewrite the internal MinIO
+    // host to the public one for dev; the mobile client further rewrites it to
+    // a device-reachable host. Best-effort per guard.
+    let rewrite_host = state.s3_endpoint != state.s3_public_url;
+    for guard in &mut guards {
+        let Some(key) = guard.avatar_url.clone() else {
+            continue;
+        };
+        if key.is_empty() || key.starts_with("http") {
+            continue;
+        }
+        match crate::s3::get_signed_url(&state.s3_client, &state.s3_bucket, &key).await {
+            Ok(mut url) => {
+                if rewrite_host {
+                    url = url.replacen(&state.s3_endpoint, &state.s3_public_url, 1);
+                }
+                guard.avatar_url = Some(url);
+            }
+            // Drop on failure so the client shows a clean person-icon, not a key.
+            Err(_) => guard.avatar_url = None,
+        }
+    }
     Ok(Json(ApiResponse::success(guards)))
 }
 
