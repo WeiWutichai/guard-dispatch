@@ -307,41 +307,62 @@ class _NotificationScreenState extends State<NotificationScreen> {
       case 'guard_en_route':
       case 'guard_arrived':
       case 'booking_cancelled':
-        // Deep-link to the matching job detail so a freshly-assigned
-        // (pending_acceptance) job opens where the guard can accept/decline.
-        // GuardJobResponse exposes the guard_requests row id as `id` (NOT
-        // `request_id`) plus `assignment_id`; the notification payload carries
-        // `request_id` + `assignment_id`. Match on EITHER — the old code keyed
-        // on j['request_id'] which is always null, so every match failed and
-        // the tap silently did nothing ("กดไม่ได้").
-        final requestId = payload['request_id'] as String?;
-        final assignmentId = payload['assignment_id'] as String?;
-        if (requestId == null && assignmentId == null) {
-          _showJobUnavailable();
-          return;
-        }
-        try {
+        {
+          // Deep-link to the matching job detail so a freshly-assigned
+          // (pending_acceptance) job opens where the guard can accept/decline.
+          // GuardJobResponse exposes the guard_requests row id as `id` (NOT
+          // `request_id`) plus `assignment_id`; the notification payload carries
+          // `request_id` + `assignment_id`. Match on EITHER.
+          final requestId = payload['request_id'] as String?;
+          final assignmentId = payload['assignment_id'] as String?;
+          if (requestId == null && assignmentId == null) {
+            _showJobUnavailable();
+            return;
+          }
+
           final booking = context.read<BookingProvider>();
-          final allJobs = await booking.fetchJobsAndReturn();
-          if (!mounted) return;
-          final match = allJobs.where((j) {
+          bool matches(Map<String, dynamic> j) {
             final jobReq = j['id']?.toString();
             final jobAsg = j['assignment_id']?.toString();
             return (requestId != null && jobReq == requestId) ||
                 (assignmentId != null && jobAsg == assignmentId);
-          });
-          if (match.isNotEmpty) {
+          }
+
+          // Cache-first: the guard dashboard + jobs tab already load
+          // currentJobs into memory, so in the common case we can open the
+          // detail screen INSTANTLY with no network round-trip (the old code
+          // always awaited fetchJobsAndReturn() first → the tap felt slow).
+          // Refresh the cache in the background for the next open.
+          final cached = booking.currentJobs.where(matches);
+          if (cached.isNotEmpty) {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => GuardJobDetailScreen(job: match.first),
+                builder: (_) => GuardJobDetailScreen(job: cached.first),
               ),
             );
-          } else {
-            _showJobUnavailable();
+            booking.fetchJobs(); // fire-and-forget refresh
+            return;
           }
-        } catch (_) {
-          if (mounted) _showJobUnavailable();
+
+          // Cache miss → fall back to a fresh fetch, then navigate.
+          try {
+            final allJobs = await booking.fetchJobsAndReturn();
+            if (!mounted) return;
+            final match = allJobs.where(matches);
+            if (match.isNotEmpty) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => GuardJobDetailScreen(job: match.first),
+                ),
+              );
+            } else {
+              _showJobUnavailable();
+            }
+          } catch (_) {
+            if (mounted) _showJobUnavailable();
+          }
         }
       case 'booking_completed':
         Navigator.push(
