@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
@@ -23,6 +26,7 @@ class _HirerProfileSettingsScreenState
   final _companyController = TextEditingController();
   final _addressController = TextEditingController();
 
+  bool _uploadingAvatar = false;
   bool _pushNotif = true;
   bool _bookingAlerts = true;
 
@@ -203,11 +207,30 @@ class _HirerProfileSettingsScreenState
                   ),
                 ),
               ),
+              if (_uploadingAvatar)
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.black.withValues(alpha: 0.4),
+                    ),
+                    child: const Center(
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 12),
           TextButton(
-            onPressed: () {},
+            onPressed: _uploadingAvatar ? null : _pickAndUploadAvatar,
             child: Text(
               strings.changePhoto,
               style: GoogleFonts.inter(
@@ -219,6 +242,45 @@ class _HirerProfileSettingsScreenState
         ],
       ),
     );
+  }
+
+  /// Pick a photo from the gallery and upload it as the customer's avatar.
+  /// Same flow as the guard profile screen — POST /auth/profile/avatar (any
+  /// JWT), which updates auth.users.avatar_url; the provider host-rewrites the
+  /// returned URL. The "เปลี่ยนรูปภาพ" button was previously a no-op (BUG-050).
+  Future<void> _pickAndUploadAvatar() async {
+    final isThai = LanguageProvider.of(context).isThai;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+      maxWidth: 1024,
+      maxHeight: 1024,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _uploadingAvatar = true);
+    try {
+      await context.read<AuthProvider>().uploadAvatar(File(picked.path));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'อัปโหลดรูปโปรไฟล์สำเร็จ' : 'Avatar updated'),
+          backgroundColor: AppColors.primary,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isThai ? 'อัปโหลดรูปไม่สำเร็จ' : 'Upload failed'),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
   }
 
   Widget _buildPersonalInfoSection(HirerProfileSettingsStrings strings) {
