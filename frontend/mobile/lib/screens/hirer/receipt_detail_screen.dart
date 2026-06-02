@@ -224,6 +224,12 @@ class _ReceiptDetailScreenState extends State<ReceiptDetailScreen> {
         ? '-'
         : '${NumberFormat("#,##0.##").format(v)} ${s.hoursUnit}';
 
+    // Prices are stored VAT-exclusive; the receipt/invoice adds 7% on top.
+    // Keep this in lock-step with ReceiptPdf so the on-screen card and the
+    // downloaded PDF always show the same grand total.
+    final vat = (net * 0.07 * 100).round() / 100;
+    final grandTotal = ((net + vat) * 100).round() / 100;
+
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -250,9 +256,13 @@ class _ReceiptDetailScreenState extends State<ReceiptDetailScreen> {
             _money(s.tipAmount, money(tip)),
           ],
           const Divider(height: 24),
+          _money(s.subtotalAmount, money(net)),
+          const SizedBox(height: 8),
+          _money(s.vat7, money(vat)),
+          const SizedBox(height: 10),
           _money(
-            s.netAmount,
-            money(net),
+            s.grandTotal,
+            money(grandTotal),
             bold: true,
             color: AppColors.primary,
           ),

@@ -1900,6 +1900,9 @@ class ReceiptsStrings {
   final String refundNote;
   final String tipAmount;
   final String netAmount;
+  final String subtotalAmount;
+  final String vat7;
+  final String grandTotal;
   final String downloadPdf;
   final String sharingPdf;
   final String pdfError;
@@ -1930,6 +1933,9 @@ class ReceiptsStrings {
           : 'Refund is processed by admin separately.',
       tipAmount = isThai ? 'ทิป' : 'Tip',
       netAmount = isThai ? 'รวมสุทธิ' : 'Net total',
+      subtotalAmount = isThai ? 'รวมเป็นเงิน' : 'Subtotal',
+      vat7 = isThai ? 'ภาษีมูลค่าเพิ่ม 7%' : 'VAT 7%',
+      grandTotal = isThai ? 'จำนวนเงินรวมทั้งสิ้น' : 'Grand total',
       downloadPdf = isThai ? 'ดาวน์โหลด PDF' : 'Download PDF',
       sharingPdf = isThai ? 'กำลังเตรียมไฟล์...' : 'Preparing file...',
       pdfError = isThai ? 'สร้าง PDF ไม่สำเร็จ' : 'Failed to generate PDF';

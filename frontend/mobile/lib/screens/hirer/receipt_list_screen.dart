@@ -188,6 +188,9 @@ class _ReceiptCard extends StatelessWidget {
     final guard = (receipt['guard_name'] ?? '-').toString();
     final address = (receipt['service_address'] ?? '-').toString();
     final net = _num(receipt['net_amount']) ?? 0;
+    // Prices are VAT-exclusive; show the VAT-inclusive grand total so the list
+    // matches the receipt detail + PDF.
+    final grandTotal = (net * 1.07 * 100).round() / 100;
     final paidAt = _date(receipt['paid_at']) ?? _date(receipt['completed_at']);
 
     return Material(
@@ -259,7 +262,7 @@ class _ReceiptCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '฿${NumberFormat("#,##0.00").format(net)}',
+                    '฿${NumberFormat("#,##0.00").format(grandTotal)}',
                     style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
