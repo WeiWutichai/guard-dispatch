@@ -12,6 +12,7 @@ import {
 import { useRouter, usePathname } from "next/navigation";
 import {
   authApi,
+  hasLoggedInCookie,
   type UserResponse,
 } from "@/lib/api";
 
@@ -43,6 +44,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Skip on login page to avoid 401 → redirect → reload loop
   useEffect(() => {
     if (pathname === "/login") {
+      setIsLoading(false);
+      return;
+    }
+    // No `logged_in` marker cookie → the user is definitely not signed in.
+    // Resolve immediately instead of waiting on a GET /auth/me round-trip
+    // (which would 401) so the redirect-to-login fires without a window in
+    // which the dashboard shell could flash on screen.
+    if (!hasLoggedInCookie()) {
+      setUser(null);
       setIsLoading(false);
       return;
     }
