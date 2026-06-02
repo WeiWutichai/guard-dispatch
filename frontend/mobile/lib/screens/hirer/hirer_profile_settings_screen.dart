@@ -250,8 +250,10 @@ class _HirerProfileSettingsScreenState
   /// returned URL. The "เปลี่ยนรูปภาพ" button was previously a no-op (BUG-050).
   Future<void> _pickAndUploadAvatar() async {
     final isThai = LanguageProvider.of(context).isThai;
+    final source = await _showImageSourcePicker();
+    if (source == null || !mounted) return;
     final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
+      source: source,
       imageQuality: 85,
       maxWidth: 1024,
       maxHeight: 1024,
@@ -281,6 +283,57 @@ class _HirerProfileSettingsScreenState
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
     }
+  }
+
+  /// Bottom sheet to choose camera vs gallery for the avatar photo (BUG-051).
+  Future<ImageSource?> _showImageSourcePicker() {
+    final isThai = LanguageProvider.of(context).isThai;
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _buildImageSourceOption(ctx, Icons.camera_alt_rounded,
+                isThai ? 'ถ่ายรูป' : 'Take Photo', ImageSource.camera),
+            _buildImageSourceOption(ctx, Icons.photo_library_rounded,
+                isThai ? 'เลือกจากแกลเลอรี' : 'Choose from Gallery',
+                ImageSource.gallery),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImageSourceOption(
+      BuildContext ctx, IconData icon, String label, ImageSource source) {
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: AppColors.primary, size: 24),
+      ),
+      title: Text(label,
+          style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w500)),
+      onTap: () => Navigator.pop(ctx, source),
+    );
   }
 
   Widget _buildPersonalInfoSection(HirerProfileSettingsStrings strings) {
