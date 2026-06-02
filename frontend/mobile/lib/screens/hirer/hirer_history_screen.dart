@@ -628,16 +628,24 @@ class _HirerHistoryScreenState extends State<HirerHistoryScreen> {
         return;
       }
 
-      // If guard has started working (arrived/pending_completion + started_at set), show countdown
-      if ((assignmentStatus == 'arrived' || assignmentStatus == 'pending_completion') && startedAt != null) {
+      // Guard reached the site → show the job screen (NOT the en-route tracking
+      // map), even before the guard taps "เริ่มงาน". When started_at is null the
+      // screen shows a "ถึงแล้ว — รอเริ่มงาน" state and polls until the guard
+      // starts, then begins the countdown (BUG-049).
+      if (assignmentStatus == 'arrived' || assignmentStatus == 'pending_completion') {
         final bookedHours = (req['booked_hours'] as num?)?.toInt() ?? 6;
         final address = req['address'] as String?;
 
-        // Calculate remaining from startedAt locally (same reference as guard)
-        final startTime = DateTime.parse(startedAt);
-        final elapsed = DateTime.now().toUtc().difference(startTime).inSeconds;
+        // Calculate remaining from startedAt locally (same reference as guard);
+        // not started yet → full booked duration as the initial estimate.
         final total = bookedHours * 3600;
-        final remainingSeconds = (total - elapsed).clamp(0, total);
+        int remainingSeconds = total;
+        if (startedAt != null) {
+          final startTime = DateTime.parse(startedAt);
+          final elapsed =
+              DateTime.now().toUtc().difference(startTime).inSeconds;
+          remainingSeconds = (total - elapsed).clamp(0, total);
+        }
 
         Navigator.push(
           context,

@@ -110,29 +110,47 @@ Future<void> initPushNotifications() async {
       final auth = ctx?.read<AuthProvider>();
       final booking = ctx?.read<BookingProvider>();
       final notif = ctx?.read<NotificationProvider>();
+      final chat = ctx?.read<ChatProvider>();
 
-      _localNotifs.show(
-        notification.hashCode,
-        notification.title,
-        notification.body,
-        NotificationDetails(
-          android: AndroidNotificationDetails(
-            _defaultChannel.id,
-            _defaultChannel.name,
-            channelDescription: _defaultChannel.description,
-            importance: Importance.high,
-            priority: Priority.high,
-            icon: '@mipmap/ic_launcher',
+      // BUG-024. Skip the foreground banner when the message belongs
+      // to the conversation the user is currently viewing — otherwise
+      // it overlays the same chat they're reading. ChatScreen's
+      // initState/dispose drives ChatProvider.activeConversationId, so
+      // checking it here matches "user is on this conversation"
+      // exactly. Provider refresh below still runs so unread count +
+      // in-app list stay accurate. Null-safe: if ctx is null (pre-
+      // mount) or either field is missing, we fall through and show
+      // the banner as before.
+      final kind = message.data['kind'] as String?;
+      final convId = message.data['conversation_id'] as String?;
+      final suppressBanner = kind == 'chat_message' &&
+          convId != null &&
+          chat?.activeConversationId == convId;
+
+      if (!suppressBanner) {
+        _localNotifs.show(
+          notification.hashCode,
+          notification.title,
+          notification.body,
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              _defaultChannel.id,
+              _defaultChannel.name,
+              channelDescription: _defaultChannel.description,
+              importance: Importance.high,
+              priority: Priority.high,
+              icon: '@mipmap/ic_launcher',
+            ),
+            iOS: const DarwinNotificationDetails(
+              presentAlert: true,
+              presentBadge: true,
+              presentSound: true,
+            ),
           ),
-          iOS: const DarwinNotificationDetails(
-            presentAlert: true,
-            presentBadge: true,
-            presentSound: true,
-          ),
-        ),
-        // JSON-encode the FCM data map so the tap handler can decode it back.
-        payload: message.data.isEmpty ? null : jsonEncode(message.data),
-      );
+          // JSON-encode the FCM data map so the tap handler can decode it back.
+          payload: message.data.isEmpty ? null : jsonEncode(message.data),
+        );
+      }
 
       // Refresh providers so home tab tiles + notification badge reflect
       // the new state without requiring pull-to-refresh. Blanket refresh
@@ -314,14 +332,20 @@ void _routeFromPayload(Map<String, dynamic> data) {
           return;
         }
 
-        if ((status == 'arrived' || status == 'pending_completion') &&
-            startedAt != null) {
+        // Guard reached the site → job screen (not en-route tracking), even
+        // before "เริ่มงาน". started_at null → "ถึงแล้ว — รอเริ่มงาน" state, full
+        // duration as initial estimate; the screen polls + starts the countdown
+        // once the guard starts (BUG-049).
+        if (status == 'arrived' || status == 'pending_completion') {
           final address = request['address'] as String?;
-          final startTime = DateTime.parse(startedAt);
-          final elapsed =
-              DateTime.now().toUtc().difference(startTime).inSeconds;
           final total = bookedHours * 3600;
-          final remainingSeconds = (total - elapsed).clamp(0, total);
+          int remainingSeconds = total;
+          if (startedAt != null) {
+            final startTime = DateTime.parse(startedAt);
+            final elapsed =
+                DateTime.now().toUtc().difference(startTime).inSeconds;
+            remainingSeconds = (total - elapsed).clamp(0, total);
+          }
           nav.push(MaterialPageRoute(
             builder: (_) => CustomerActiveJobScreen(
               requestId: requestId,

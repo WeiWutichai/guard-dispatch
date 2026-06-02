@@ -877,9 +877,13 @@ class _CustomerActiveJobScreenState extends State<CustomerActiveJobScreen> {
                           child: Text(
                             _isPendingCompletion
                                 ? strings.pendingReview
-                                : isTimeUp
-                                    ? strings.timeUpMsg
-                                    : strings.guardWorking,
+                                : _serverStartedAt == null
+                                    ? (isThai
+                                        ? 'เจ้าหน้าที่ถึงแล้ว — รอเริ่มงาน'
+                                        : 'Guard arrived — waiting to start')
+                                    : isTimeUp
+                                        ? strings.timeUpMsg
+                                        : strings.guardWorking,
                             style: GoogleFonts.inter(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
