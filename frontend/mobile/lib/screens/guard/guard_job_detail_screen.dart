@@ -270,6 +270,11 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
         (rawAssignmentStatus == 'arrived' && startedAt != null)
             ? 'started'
             : rawAssignmentStatus;
+    // Cancelled / completed / declined → the job is over; contacting the
+    // customer (call/chat) is no longer allowed.
+    final jobEnded = rawAssignmentStatus == 'cancelled' ||
+        rawAssignmentStatus == 'completed' ||
+        rawAssignmentStatus == 'declined';
     final bookedHours = (job['booked_hours'] as num?)?.toInt();
     final price = job['offered_price'];
     final urgency = job['urgency'] as String? ?? 'medium';
@@ -687,8 +692,13 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
             ),
           ),
 
-          // Bottom call/chat bar
-          Container(
+          // Bottom call/chat bar — once the job has ended (cancelled /
+          // completed / declined) the buttons are replaced by a disabled
+          // banner: contacting the customer is no longer allowed.
+          if (jobEnded)
+            _buildEndedContactBanner(isThai)
+          else
+            Container(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
             decoration: BoxDecoration(
               color: Colors.white,
@@ -757,6 +767,50 @@ class _GuardJobDetailScreenState extends State<GuardJobDetailScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Replaces the call/chat action bar when the job is no longer active.
+  Widget _buildEndedContactBanner(bool isThai) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 32),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.lock_outline_rounded,
+                size: 18, color: AppColors.textSecondary),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                isThai
+                    ? 'งานสิ้นสุดแล้ว ไม่สามารถติดต่อได้'
+                    : 'Job ended — contact is disabled',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

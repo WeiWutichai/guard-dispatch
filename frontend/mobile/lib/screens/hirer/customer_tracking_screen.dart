@@ -238,6 +238,16 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
             Navigator.of(context).popUntil((route) => route.isFirst);
             return;
           }
+          if (status == 'cancelled' || status == 'declined') {
+            // Job cancelled/declined while tracking — leave the screen (and
+            // its call/chat buttons) instead of stranding the customer on a
+            // job they can no longer contact a guard about.
+            _locationTimer?.cancel();
+            _statusTimer?.cancel();
+            if (!mounted) return;
+            _showCancelledAndExit();
+            return;
+          }
           if (status == 'pending_completion') {
             // Guard requested completion. Skip the arrived dialog
             // and jump straight to CustomerActiveJobScreen, which
@@ -419,6 +429,14 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
             Navigator.of(context).popUntil((route) => route.isFirst);
             return;
           }
+          if (status == 'cancelled' || status == 'declined') {
+            _statusTimer?.cancel();
+            if (!mounted) return;
+            Navigator.of(context, rootNavigator: true).pop(); // close dialog
+            if (!mounted) return;
+            _showCancelledAndExit();
+            return;
+          }
           if (status == 'pending_completion') {
             _statusTimer?.cancel();
             if (!mounted) return;
@@ -440,6 +458,21 @@ class _CustomerTrackingScreenState extends State<CustomerTrackingScreen> {
     } catch (_) {
       // Silently retry
     }
+  }
+
+  /// Pop back to the home stack and tell the customer the job was cancelled.
+  /// Capture the messenger BEFORE popping so the SnackBar shows on the root
+  /// ScaffoldMessenger (this screen's is gone after popUntil).
+  void _showCancelledAndExit() {
+    final isThai = LanguageProvider.of(context).isThai;
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(isThai ? 'งานนี้ถูกยกเลิกแล้ว' : 'This job was cancelled'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   String _formatCheckinTime(String? isoString) {
