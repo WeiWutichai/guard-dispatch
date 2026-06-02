@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../theme/colors.dart';
 import '../../providers/booking_provider.dart';
+import '../../services/api_client.dart';
 import '../../services/language_service.dart';
 import 'guard_detail_screen.dart';
 import 'waiting_for_guard_screen.dart';
@@ -449,10 +450,16 @@ class _GuardSearchingScreenState extends State<GuardSearchingScreen>
                           width: 2,
                         ),
                       ),
-                      child: guard['avatar_url'] != null
+                      // Rewrite the presigned MinIO host to a device-reachable
+                      // one (localhost/minio:9000 don't resolve on the phone),
+                      // else Image.network 404s -> person-icon (BUG-046).
+                      child: ApiClient.rewriteMediaHost(
+                                  guard['avatar_url'] as String?) !=
+                              null
                           ? ClipOval(
                               child: Image.network(
-                                guard['avatar_url'],
+                                ApiClient.rewriteMediaHost(
+                                    guard['avatar_url'] as String?)!,
                                 fit: BoxFit.cover,
                                 width: 56,
                                 height: 56,
