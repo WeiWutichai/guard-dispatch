@@ -10,19 +10,18 @@ import '../utils/thai_baht_text.dart';
 /// Seller / company details printed on the tax-invoice header + bank-transfer
 /// note.
 ///
-/// ⚠️ PLACEHOLDER VALUES — replace with the real registered company info (or
-/// wire to `--dart-define` / remote config) before issuing legally-binding tax
-/// invoices. Keeping it in one const block makes that a one-file edit.
+/// Name / tax ID / address are the registered company values. Phone / email /
+/// bank are still PLACEHOLDERS — update them here (one-file edit) once provided.
 class ReceiptCompany {
-  static const String name = 'บริษัท พี-การ์ด จำกัด (สำนักงานใหญ่)';
-  static const String nameEn = 'P-Guard Co., Ltd. (Head Office)';
+  static const String name = 'บริษัท ซีเคียว คอนเนคติ้ง จำกัด';
+  static const String nameEn = 'Secure Connecting Co., Ltd.';
   static const String address =
-      '123 อาคารพี-การ์ด ชั้น 5 ถนนสุขุมวิท แขวงคลองเตย เขตคลองเตย กรุงเทพมหานคร 10110';
-  static const String taxId = '0-0000-00000-00-0';
+      '52 ซอยรามคำแหง 164 ถนนรามคำแหง แขวงมีนบุรี เขตมีนบุรี กรุงเทพมหานคร 10510';
+  static const String taxId = '0105569044883';
   static const String phone = '02-000-0000';
   static const String email = 'billing@pguard.example';
   static const String bankName = 'ธนาคารกสิกรไทย';
-  static const String bankAccountName = 'บริษัท พี-การ์ด จำกัด';
+  static const String bankAccountName = 'บริษัท ซีเคียว คอนเนคติ้ง จำกัด';
   static const String bankAccountNo = '000-0-00000-0';
 }
 
