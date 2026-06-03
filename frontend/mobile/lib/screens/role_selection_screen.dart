@@ -83,12 +83,15 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
             MaterialPageRoute(builder: (_) => const RegistrationPendingScreen(role: 'customer')),
           );
         } else {
-          // No customer profile yet → show registration form
+          // No customer profile yet → show registration form.
+          // Use the resolved `phone` (widget.phone → auth.phone → stored →
+          // verified) as a fallback so we never hand the form an empty phone,
+          // which would make its updateRole() call 400 on validate_thai_phone.
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
               builder: (_) => CustomerRegistrationScreen(
-                phone: auth.phone ?? '',
+                phone: auth.phone ?? phone ?? '',
                 profileToken: null,
               ),
             ),

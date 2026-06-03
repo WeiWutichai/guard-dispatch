@@ -51,6 +51,8 @@ class _CustomerRegistrationScreenState
   Future<void> _onSubmit() async {
     if (!_formKey.currentState!.validate()) return;
 
+    final isThai = LanguageProvider.of(context).isThai;
+
     setState(() {
       _isSubmitting = true;
       _errorMessage = null;
@@ -59,6 +61,15 @@ class _CustomerRegistrationScreenState
     try {
       final authProvider = context.read<AuthProvider>();
       final isAlreadyAuthenticated = authProvider.isAuthenticated;
+
+      // Resolve a usable phone. widget.phone can arrive empty (e.g. auth.phone
+      // was null at navigation time and the caller passed ''), and updateRole()
+      // with an empty phone fails the backend's validate_thai_phone() with a
+      // 400. Fall back to the live profile, then the stored phone.
+      var phone = widget.phone.trim();
+      if (phone.isEmpty) {
+        phone = authProvider.phone ?? (await AuthService.getStoredPhone()) ?? '';
+      }
 
       // Use profile token from widget, or request a fresh one via updateRole.
       // Authenticated users (approved guard adding customer profile) can get a
@@ -69,12 +80,12 @@ class _CustomerRegistrationScreenState
         if (isAlreadyAuthenticated) {
           // Authenticated user — get fresh profile_token via updateRole
           try {
-            profileToken = await authProvider.updateRole(widget.phone, 'customer');
+            profileToken = await authProvider.updateRole(phone, 'customer');
           } catch (e) {
             if (!mounted) return;
             setState(() {
               _isSubmitting = false;
-              _errorMessage = '$e';
+              _errorMessage = _friendlyError(e, isThai);
             });
             return;
           }
@@ -103,7 +114,7 @@ class _CustomerRegistrationScreenState
       // Previously this was skipped for authenticated users, causing the
       // pending screen to fall back to the guard profile cache.
       await AuthService.savePendingProfile({
-        'phone': widget.phone,
+        'phone': phone,
         'role': 'customer',
         'full_name': _fullNameController.text.trim(),
         'contact_phone': _contactPhoneController.text.trim(),
@@ -135,7 +146,6 @@ class _CustomerRegistrationScreenState
 
       if (!mounted) return;
 
-      final isThai = LanguageProvider.of(context).isThai;
       final strings = CustomerRegistrationStrings(isThai: isThai);
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -164,19 +174,34 @@ class _CustomerRegistrationScreenState
         (route) => false,
       );
     } on DioException catch (e) {
-      final message = e.response?.data?['error']?['message'] as String?;
       setState(() {
-        _errorMessage = message ?? 'Failed to submit application';
+        _errorMessage = _friendlyError(e, isThai);
       });
     } catch (e) {
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = _friendlyError(e, isThai);
       });
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
       }
     }
+  }
+
+  /// Surface the backend's real error message (ApiResponse `error.message`)
+  /// instead of a raw DioException dump, falling back to a friendly line.
+  String _friendlyError(Object e, bool isThai) {
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map) {
+        final err = data['error'];
+        final msg = (err is Map ? err['message'] : null) ?? data['message'];
+        if (msg is String && msg.trim().isNotEmpty) return msg;
+      }
+    }
+    return isThai
+        ? 'ส่งใบสมัครไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+        : 'Failed to submit application. Please try again.';
   }
 
   @override
